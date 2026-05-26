@@ -106,6 +106,35 @@ export function TaskBars({ layout, dragPreview }: Props) {
                 pointerEvents="none"
               />
             )}
+            {/* Connector handles (visible when selected) */}
+            {selected && (
+              <>
+                <circle
+                  data-pp-kind="connector"
+                  data-pp-id={t.id}
+                  data-pp-sub="start"
+                  cx={x}
+                  cy={y + h / 2}
+                  r={5}
+                  fill="var(--color-accent)"
+                  stroke="white"
+                  strokeWidth={1.5}
+                  style={{ cursor: 'crosshair' }}
+                />
+                <circle
+                  data-pp-kind="connector"
+                  data-pp-id={t.id}
+                  data-pp-sub="end"
+                  cx={x + width}
+                  cy={y + h / 2}
+                  r={5}
+                  fill="var(--color-accent)"
+                  stroke="white"
+                  strokeWidth={1.5}
+                  style={{ cursor: 'crosshair' }}
+                />
+              </>
+            )}
             {/* Inline editor / Label */}
             {editingTaskId === t.id ? (
               <InlineLabel

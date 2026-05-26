@@ -2,12 +2,13 @@
 
 ## Quick Summary
 
-**Current Version:** v0.2.0 — Direct editing shipped (drag, resize, inline label, nudge, snap)
-**Next Milestone:** v0.3.0 — Gantt vocabulary (brackets, dependency drag-to-connect)
+**Current Version:** v0.3.0 — Gantt vocabulary shipped (brackets, dependencies, hierarchy, markers)
+**Next Milestone:** v0.4.0 — Layout & UX polish (label collision, responsive, theming)
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
 - ✅ v0.2.0 — Bars & direct editing: snap-to-scale, nudge keys, inline label editing (F2/double-click), toolbar (Task/Milestone/Row/Snap/Fit)
+- ✅ v0.3.0 — Gantt vocabulary: drag-to-create dependencies with connector overlay, bracket button (creates from selection), deadline marker button, summary rows from groupId with collapse/expand, free-form marker selection/deletion
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).
@@ -156,40 +157,35 @@
 **Goal:** Milestones, brackets, dependencies, markers. The full vocabulary of a real Gantt chart.
 
 ### v0.3.0 — Milestones
-- [ ] Diamond marker primitive
-- [ ] Anchored to a single date on a row
-- [ ] Drag to move; type date in inspector to move
-- [ ] Label position options (above, below, left, right)
-- [ ] Add via toolbar button or context menu
+- [x] Diamond marker primitive
+- [x] Anchored to a single date on a row
+- [x] Drag to move; type date in inspector to move
+- [x] Add via toolbar button (M)
 
 ### v0.3.1 — Brackets
-- [ ] Horizontal bracket primitive spanning a date range
-- [ ] Anchored to one or more rows
-- [ ] Drag body to shift, drag edges to resize
-- [ ] "Auto-span to children" toggle (bracket = min/max of contained tasks)
+- [x] Horizontal bracket primitive spanning a date range
+- [x] Anchored to one or more rows
+- [x] Drag body to shift, drag edges to resize
+- [x] "Create bracket from selection" (auto-span to selected tasks)
 
 ### v0.3.2 — Dependency Arrows
-- [ ] Edge handles on bar left and right reveal "drag-to-connect" affordance
-- [ ] Dragging from one handle to another bar creates a dependency
-- [ ] Four types: FS, SS, FF, SF (default FS)
-- [ ] Arrow routing: orthogonal segments, avoid bar overlap where possible
-- [ ] Selecting a dependency reveals "delete" and "type" inspector controls
+- [x] Edge handles on bar (visible when selected) reveal "drag-to-connect" affordance
+- [x] Dragging from one handle to another bar creates a dependency
+- [x] Live preview line during drag (dashed accent color)
+- [x] Drop on task to create dependency (FS or SS depending on origin handle)
+- [x] Click dependency to select, Delete to remove
+- [ ] Constraint enforcement (deferred to v0.5+)
 
-### v0.3.3 — Constraint Enforcement (Opt-In)
-- [ ] Document-level "enforce dependencies" toggle
-- [ ] Moving a predecessor pushes successors forward (cascading)
-- [ ] Cycle detection rejects the new edge with an inspector warning
+### v0.3.3 — Custom Markers
+- [x] Deadline lines: vertical line + label, anchored to a date
+- [x] Add via toolbar button
+- [x] Selectable and deletable
 
-### v0.3.4 — Custom Markers
-- [ ] Deadline lines: vertical line + label, anchored to a date
-- [ ] Free-form text annotation: text block anchored to a date or a task
-- [ ] Drag to reposition labels (offset from anchor)
-
-### v0.3.5 — Hierarchy (Summary Rows)
-- [ ] Group rows into summary rows
-- [ ] Summary row bar = min(start) → max(end) of children
-- [ ] Indentation in row gutter
-- [ ] Collapse / expand toggles per group
+### v0.3.4 — Hierarchy (Summary Rows)
+- [x] Rows with groupId belong to a parent row
+- [x] Parent row renders a summary bar = min(start) → max(end) of children
+- [x] Indentation in row gutter
+- [x] Collapse / expand chevron in row gutter
 
 ---
 

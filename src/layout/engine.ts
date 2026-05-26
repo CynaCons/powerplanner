@@ -1,9 +1,20 @@
-import type { GanttDocument, Task, Milestone, Bracket, Dependency } from '../types/document';
+import type { GanttDocument, Task, Milestone, Bracket, Dependency, Row } from '../types/document';
 import { dateToX, xToDate } from './timeAxis';
 
 export const ROW_HEIGHT = 36;
 export const BAR_HEIGHT = 22;
 export const MILESTONE_SIZE = 14;
+
+export interface SummaryBar {
+  rowId: string;
+  rowLabel: string;
+  start: string;
+  end: string;
+  x: number;
+  y: number;
+  width: number;
+  rowIndex: number;
+}
 
 export interface LaidOutTask {
   task: Task;
@@ -44,9 +55,11 @@ export interface LayoutResult {
   milestones: LaidOutMilestone[];
   brackets: LaidOutBracket[];
   dependencies: LaidOutDependency[];
+  summaries: SummaryBar[];
   rowHeights: number[];
   chartHeight: number;
   rowOffsets: number[];
+  visibleRows: Row[];
 }
 
 interface LayoutInput {
@@ -57,15 +70,18 @@ interface LayoutInput {
 }
 
 export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap = false }: LayoutInput): LayoutResult {
+  // Determine which rows are visible (collapse children of collapsed groups)
+  const collapsedGroups = new Set(doc.rows.filter((r) => r.collapsed).map((r) => r.id));
+  const visibleRows = doc.rows.filter((r) => !r.groupId || !collapsedGroups.has(r.groupId));
   const rowIndex = new Map<string, number>();
-  doc.rows.forEach((r, i) => rowIndex.set(r.id, i));
+  visibleRows.forEach((r, i) => rowIndex.set(r.id, i));
 
   // Determine sub-rows per row (auto-stacking when bars overlap)
-  const subRowsPerRow: number[] = doc.rows.map(() => 1);
+  const subRowsPerRow: number[] = visibleRows.map(() => 1);
   const taskSubRow = new Map<string, number>();
 
   if (!allowOverlap) {
-    for (const row of doc.rows) {
+    for (const row of visibleRows) {
       const tasks = doc.tasks.filter((t) => t.rowId === row.id).sort((a, b) => a.start.localeCompare(b.start));
       const tracks: string[] = []; // each track = ISO end date currently occupying
       for (const t of tasks) {
@@ -92,29 +108,58 @@ export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap = false 
   const rowHeights = subRowsPerRow.map((n) => Math.max(ROW_HEIGHT, n * ROW_HEIGHT));
   const rowOffsets: number[] = [];
   let acc = 0;
-  for (let i = 0; i < doc.rows.length; i++) {
+  for (let i = 0; i < visibleRows.length; i++) {
     rowOffsets.push(acc);
     acc += rowHeights[i];
   }
   const chartHeight = acc;
 
-  const tasks: LaidOutTask[] = doc.tasks.map((task) => {
-    const rIdx = rowIndex.get(task.rowId) ?? 0;
-    const subRow = taskSubRow.get(task.id) ?? 0;
-    const x = dateToX(task.start, viewStart, pxPerDay);
-    const endX = dateToX(task.end, viewStart, pxPerDay);
-    const width = Math.max(2, endX - x + pxPerDay);
-    const subRowOffset = subRow * ROW_HEIGHT;
-    const y = rowOffsets[rIdx] + subRowOffset + (ROW_HEIGHT - BAR_HEIGHT) / 2;
-    return { task, x, y, width, height: BAR_HEIGHT, rowIndex: rIdx, subRow };
-  });
+  const tasks: LaidOutTask[] = doc.tasks
+    .filter((t) => rowIndex.has(t.rowId))
+    .map((task) => {
+      const rIdx = rowIndex.get(task.rowId)!;
+      const subRow = taskSubRow.get(task.id) ?? 0;
+      const x = dateToX(task.start, viewStart, pxPerDay);
+      const endX = dateToX(task.end, viewStart, pxPerDay);
+      const width = Math.max(2, endX - x + pxPerDay);
+      const subRowOffset = subRow * ROW_HEIGHT;
+      const y = rowOffsets[rIdx] + subRowOffset + (ROW_HEIGHT - BAR_HEIGHT) / 2;
+      return { task, x, y, width, height: BAR_HEIGHT, rowIndex: rIdx, subRow };
+    });
 
-  const milestones: LaidOutMilestone[] = doc.milestones.map((m) => {
-    const rIdx = rowIndex.get(m.rowId) ?? 0;
-    const x = dateToX(m.date, viewStart, pxPerDay) + (rIdx >= 0 ? 0 : 0);
-    const y = rowOffsets[rIdx] + ROW_HEIGHT / 2;
-    return { milestone: m, x, y, rowIndex: rIdx };
-  });
+  const milestones: LaidOutMilestone[] = doc.milestones
+    .filter((m) => rowIndex.has(m.rowId))
+    .map((m) => {
+      const rIdx = rowIndex.get(m.rowId)!;
+      const x = dateToX(m.date, viewStart, pxPerDay);
+      const y = rowOffsets[rIdx] + ROW_HEIGHT / 2;
+      return { milestone: m, x, y, rowIndex: rIdx };
+    });
+
+  // Compute summary bars for group/summary rows (rows that contain other rows)
+  const summaries: SummaryBar[] = [];
+  const childRowsByParent = new Map<string, Row[]>();
+  for (const r of doc.rows) {
+    if (!r.groupId) continue;
+    if (!childRowsByParent.has(r.groupId)) childRowsByParent.set(r.groupId, []);
+    childRowsByParent.get(r.groupId)!.push(r);
+  }
+  for (const parent of doc.rows) {
+    const children = childRowsByParent.get(parent.id);
+    if (!children || children.length === 0) continue;
+    if (!rowIndex.has(parent.id)) continue;
+    const childIds = children.map((c) => c.id);
+    const childTasks = doc.tasks.filter((t) => childIds.includes(t.rowId));
+    if (childTasks.length === 0) continue;
+    const start = childTasks.reduce((a, t) => (t.start < a ? t.start : a), childTasks[0].start);
+    const end = childTasks.reduce((a, t) => (t.end > a ? t.end : a), childTasks[0].end);
+    const x = dateToX(start, viewStart, pxPerDay);
+    const endX = dateToX(end, viewStart, pxPerDay);
+    const width = Math.max(2, endX - x + pxPerDay);
+    const parentIdx = rowIndex.get(parent.id)!;
+    const y = rowOffsets[parentIdx] + ROW_HEIGHT / 2 - 4;
+    summaries.push({ rowId: parent.id, rowLabel: parent.label, start, end, x, y, width, rowIndex: parentIdx });
+  }
 
   const brackets: LaidOutBracket[] = doc.brackets.map((b) => {
     const x = dateToX(b.start, viewStart, pxPerDay);
@@ -140,7 +185,7 @@ export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap = false 
     return [{ dependency: dep, path, fromX, fromY, toX, toY }];
   });
 
-  return { tasks, milestones, brackets, dependencies, rowHeights, chartHeight, rowOffsets };
+  return { tasks, milestones, brackets, dependencies, summaries, rowHeights, chartHeight, rowOffsets, visibleRows };
 }
 
 export { dateToX, xToDate };

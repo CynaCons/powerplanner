@@ -1,16 +1,16 @@
-import type { GanttDocument } from '../types/document';
+import type { Row } from '../types/document';
 
 interface Props {
-  doc: GanttDocument;
+  rows: Row[];
   rowHeights: number[];
   rowOffsets: number[];
   width: number;
 }
 
-export function Rows({ doc, rowHeights, rowOffsets, width }: Props) {
+export function Rows({ rows, rowHeights, rowOffsets, width }: Props) {
   return (
     <g>
-      {doc.rows.map((row, i) => (
+      {rows.map((row, i) => (
         <g key={row.id}>
           <line
             x1={0}

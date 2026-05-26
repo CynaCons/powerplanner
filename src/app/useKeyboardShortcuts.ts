@@ -18,7 +18,7 @@ export function useKeyboardShortcuts() {
       if (isEditableTarget(e.target)) return;
 
       const docStore = useDocumentStore.getState();
-      const { undo, redo, addTask, addMilestone, deleteTask, deleteMilestone, deleteBracket, updateTask, updateMilestone, doc } = docStore;
+      const { undo, redo, addTask, addMilestone, addBracket, deleteTask, deleteMilestone, deleteBracket, deleteDependency, deleteMarker, updateTask, updateMilestone, doc } = docStore;
       const sel = useSelectionStore.getState();
       const view = useViewportStore.getState();
       const edit = useEditStore.getState();
@@ -41,8 +41,26 @@ export function useKeyboardShortcuts() {
           if (item.kind === 'task') deleteTask(item.id);
           else if (item.kind === 'milestone') deleteMilestone(item.id);
           else if (item.kind === 'bracket') deleteBracket(item.id);
+          else if (item.kind === 'dependency') deleteDependency(item.id);
+          else if (item.kind === 'marker') deleteMarker(item.id);
         }
         sel.clear();
+        return;
+      }
+      if (e.key.toLowerCase() === 'b' && !meta) {
+        e.preventDefault();
+        if (doc.rows.length === 0) return;
+        const taskIds = sel.items.filter((s) => s.kind === 'task').map((s) => s.id);
+        const tasks = doc.tasks.filter((t) => taskIds.includes(t.id));
+        if (tasks.length === 0) {
+          const t = todayISO();
+          addBracket({ id: newId('br'), label: 'Phase', start: t, end: addDays(t, 14), rowIds: [doc.rows[0].id] });
+        } else {
+          const start = tasks.reduce((a, t) => (t.start < a ? t.start : a), tasks[0].start);
+          const end = tasks.reduce((a, t) => (t.end > a ? t.end : a), tasks[0].end);
+          const rowIds = Array.from(new Set(tasks.map((t) => t.rowId)));
+          addBracket({ id: newId('br'), label: 'Phase', start, end, rowIds });
+        }
         return;
       }
       if (e.key.toLowerCase() === 'n') {

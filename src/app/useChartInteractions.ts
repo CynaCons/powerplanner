@@ -15,7 +15,17 @@ interface InteractionOptions {
   axisHeight: number;
 }
 
-export type DragKind = 'pan' | 'task-move' | 'task-resize-start' | 'task-resize-end' | 'milestone-move' | 'bracket-move' | 'bracket-resize-start' | 'bracket-resize-end';
+export type DragKind =
+  | 'pan'
+  | 'task-move'
+  | 'task-resize-start'
+  | 'task-resize-end'
+  | 'milestone-move'
+  | 'bracket-move'
+  | 'bracket-resize-start'
+  | 'bracket-resize-end'
+  | 'dep-create'
+  | 'lasso';
 
 export interface DragState {
   kind: DragKind;
@@ -27,6 +37,16 @@ export interface DragState {
   originalDate?: string;
   startViewDate?: string;
   deltaDays: number;
+  depSourceTaskId?: string;
+  depSourceEdge?: 'start' | 'end';
+  depCurrentX?: number;
+  depCurrentY?: number;
+  depStartX?: number;
+  depStartY?: number;
+  lassoStartX?: number;
+  lassoStartY?: number;
+  lassoCurrentX?: number;
+  lassoCurrentY?: number;
 }
 
 export interface DragPreviewMap {
@@ -35,9 +55,11 @@ export interface DragPreviewMap {
   brackets: Map<string, { start: string; end: string }>;
 }
 
-export function useChartInteractions({ svgRef, rowGutterWidth }: InteractionOptions) {
+export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight }: InteractionOptions) {
   const dragRef = useRef<DragState | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
+  const [, forceRender] = useState(0);
+  const triggerRender = useCallback(() => forceRender((n) => n + 1), []);
 
   const getSvgPoint = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } => {
@@ -97,15 +119,40 @@ export function useChartInteractions({ svgRef, rowGutterWidth }: InteractionOpti
       const id = datasetEl.dataset.ppId as string;
       const sub = datasetEl.dataset.ppSub as string | undefined;
 
+      // Dependency creation handle: a small grab dot on bar edges in "connector" mode
+      if (kind === 'connector') {
+        const task = doc.tasks.find((t) => t.id === id);
+        if (!task) return;
+        const { x: cx, y: cy } = getSvgPoint(e.clientX, e.clientY);
+        dragRef.current = {
+          kind: 'dep-create',
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          depSourceTaskId: id,
+          depSourceEdge: sub === 'start' ? 'start' : 'end',
+          depStartX: cx - rowGutterWidth,
+          depStartY: cy - axisHeight,
+          depCurrentX: cx - rowGutterWidth,
+          depCurrentY: cy - axisHeight,
+          deltaDays: 0,
+        };
+        attachWindowListeners(handleWindowMove, handleWindowUp);
+        return;
+      }
+
       // Selection on click
       const selStore = useSelectionStore.getState();
       const additive = e.shiftKey || e.metaKey || e.ctrlKey;
-      if (kind === 'task' || kind === 'milestone' || kind === 'bracket') {
+      if (kind === 'task' || kind === 'milestone' || kind === 'bracket' || kind === 'dependency' || kind === 'marker') {
         if (!additive) {
-          selStore.setSelection([{ kind: kind as 'task' | 'milestone' | 'bracket', id }]);
+          selStore.setSelection([{ kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id }]);
         } else if (!selStore.isSelected(id)) {
-          selStore.add({ kind: kind as 'task' | 'milestone' | 'bracket', id });
+          selStore.add({ kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id });
         }
+      }
+      // Dependency and marker are selection-only (no drag)
+      if (kind === 'dependency' || kind === 'marker') {
+        return;
       }
 
       // Start drag
@@ -196,6 +243,16 @@ export function useChartInteractions({ svgRef, rowGutterWidth }: InteractionOpti
       return;
     }
 
+    if (state.kind === 'dep-create') {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      state.depCurrentX = e.clientX - rect.left - rowGutterWidth;
+      state.depCurrentY = e.clientY - rect.top - axisHeight;
+      triggerRender();
+      return;
+    }
+
     state.deltaDays = dDays;
     const next: DragPreviewMap = { tasks: new Map(), milestones: new Map(), brackets: new Map() };
 
@@ -240,6 +297,28 @@ export function useChartInteractions({ svgRef, rowGutterWidth }: InteractionOpti
     const scale = docStore.doc.calendar.scale;
     const snappedDelta = edit.snapEnabled ? snapDelta(state.deltaDays, scale) : state.deltaDays;
 
+    if (state.kind === 'dep-create' && state.depSourceTaskId) {
+      // Check if drop target is a task
+      const dropEl = document.elementFromPoint(state.depCurrentX! + rowGutterWidth + (svgRef.current?.getBoundingClientRect().left ?? 0), state.depCurrentY! + axisHeight + (svgRef.current?.getBoundingClientRect().top ?? 0));
+      const targetEl = dropEl?.closest('[data-pp-kind="task"]') as HTMLElement | null;
+      if (targetEl && targetEl.dataset.ppId && targetEl.dataset.ppId !== state.depSourceTaskId) {
+        const fromId = state.depSourceTaskId;
+        const toId = targetEl.dataset.ppId;
+        const exists = docStore.doc.dependencies.some((d) => d.from === fromId && d.to === toId);
+        if (!exists) {
+          docStore.addDependency({
+            id: `dep-${Math.random().toString(36).slice(2, 10)}`,
+            from: fromId,
+            to: toId,
+            type: state.depSourceEdge === 'start' ? 'start-to-start' : 'finish-to-start',
+          });
+        }
+      }
+      setDragPreview(null);
+      triggerRender();
+      return;
+    }
+
     if (state.kind === 'task-move' && state.targetId && state.originalStart && state.originalEnd) {
       docStore.updateTask(state.targetId, {
         start: addDays(state.originalStart, snappedDelta),
@@ -268,7 +347,8 @@ export function useChartInteractions({ svgRef, rowGutterWidth }: InteractionOpti
     setDragPreview(null);
   }, [handleWindowMove]);
 
-  return { handleSvgMouseDown, handleWheel, dragPreview, xToDate };
+  const depDrag = dragRef.current?.kind === 'dep-create' ? dragRef.current : null;
+  return { handleSvgMouseDown, handleWheel, dragPreview, xToDate, depDrag };
 }
 
 let attached = false;

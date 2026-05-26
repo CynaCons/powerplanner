@@ -1,7 +1,8 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
-import { Undo2, Redo2, Plus, Calendar, Maximize2, Diamond, Magnet, Rows3 } from 'lucide-react';
+import { Undo2, Redo2, Plus, Calendar, Maximize2, Diamond, Magnet, Rows3, Brackets as BracketIcon, Flag } from 'lucide-react';
+import { useSelectionStore } from '../stores/selectionStore';
 import { newId } from '../utils/ids';
 import { todayISO, addDays } from '../utils/dates';
 
@@ -15,6 +16,9 @@ export function Header() {
   const addTask = useDocumentStore((s) => s.addTask);
   const addMilestone = useDocumentStore((s) => s.addMilestone);
   const addRow = useDocumentStore((s) => s.addRow);
+  const addBracket = useDocumentStore((s) => s.addBracket);
+  const addMarker = useDocumentStore((s) => s.addMarker);
+  const selection = useSelectionStore((s) => s.items);
   const rows = useDocumentStore((s) => s.doc.rows);
   const fit = useViewportStore((s) => s.fit);
   const doc = useDocumentStore((s) => s.doc);
@@ -56,6 +60,24 @@ export function Header() {
     addRow({ id: newId('row'), label: `Row ${rows.length + 1}`, groupId: null });
   };
 
+  const onAddBracket = () => {
+    const selectedTaskIds = selection.filter((s) => s.kind === 'task').map((s) => s.id);
+    const tasks = doc.tasks.filter((t) => selectedTaskIds.includes(t.id));
+    if (tasks.length === 0) {
+      const today = todayISO();
+      addBracket({ id: newId('br'), label: 'Phase', start: today, end: addDays(today, 14), rowIds: rows.length > 0 ? [rows[0].id] : [] });
+      return;
+    }
+    const start = tasks.reduce((a, t) => (t.start < a ? t.start : a), tasks[0].start);
+    const end = tasks.reduce((a, t) => (t.end > a ? t.end : a), tasks[0].end);
+    const rowIds = Array.from(new Set(tasks.map((t) => t.rowId)));
+    addBracket({ id: newId('br'), label: 'Phase', start, end, rowIds });
+  };
+
+  const onAddDeadline = () => {
+    addMarker({ id: newId('mk'), type: 'deadline', label: 'Deadline', date: todayISO() });
+  };
+
   return (
     <header className="app-header">
       <div className="brand">
@@ -74,6 +96,12 @@ export function Header() {
         </button>
         <button onClick={onAddMilestone} title="Add milestone (M)" className="icon-btn">
           <Diamond size={14} /> Milestone
+        </button>
+        <button onClick={onAddBracket} title="Add bracket from selection (B)" className="icon-btn">
+          <BracketIcon size={14} /> Bracket
+        </button>
+        <button onClick={onAddDeadline} title="Add deadline marker" className="icon-btn">
+          <Flag size={14} /> Deadline
         </button>
         <button onClick={onAddRow} title="Add row" className="icon-btn">
           <Rows3 size={14} /> Row

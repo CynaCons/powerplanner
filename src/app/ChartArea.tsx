@@ -7,6 +7,7 @@ import { buildAxis, dateToX, xToDate } from '../layout/timeAxis';
 import { todayISO, isWeekend, addDays } from '../utils/dates';
 import { TimeAxis } from '../renderer/TimeAxis';
 import { Rows } from '../renderer/Rows';
+import { Summaries } from '../renderer/Summaries';
 import { TaskBars } from '../renderer/TaskBars';
 import { Milestones } from '../renderer/Milestones';
 import { Brackets } from '../renderer/Brackets';
@@ -14,6 +15,7 @@ import { Dependencies } from '../renderer/Dependencies';
 import { Markers } from '../renderer/Markers';
 import { RowGutter } from '../renderer/RowGutter';
 import { useChartInteractions } from './useChartInteractions';
+import { ConnectorOverlay } from './ConnectorOverlay';
 
 const AXIS_TOTAL_H = 56;
 const ROW_GUTTER_W = 200;
@@ -89,7 +91,7 @@ export function ChartArea() {
     return stripes;
   }, [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.workingDays]);
 
-  const { handleSvgMouseDown, handleWheel, dragPreview } = useChartInteractions({
+  const { handleSvgMouseDown, handleWheel, dragPreview, depDrag } = useChartInteractions({
     svgRef,
     chartWidth,
     rowGutterWidth: ROW_GUTTER_W,
@@ -123,7 +125,7 @@ export function ChartArea() {
         {/* Row separators */}
         <g transform={`translate(0 ${AXIS_TOTAL_H})`}>
           <Rows
-            doc={doc}
+            rows={layout.visibleRows}
             rowHeights={layout.rowHeights}
             rowOffsets={layout.rowOffsets}
             width={size.width}
@@ -132,7 +134,7 @@ export function ChartArea() {
 
         {/* Row gutter labels */}
         <g transform={`translate(0 ${AXIS_TOTAL_H})`}>
-          <RowGutter doc={doc} rowHeights={layout.rowHeights} rowOffsets={layout.rowOffsets} width={ROW_GUTTER_W} />
+          <RowGutter rows={layout.visibleRows} rowHeights={layout.rowHeights} rowOffsets={layout.rowOffsets} width={ROW_GUTTER_W} />
         </g>
 
         {/* Time axis */}
@@ -162,10 +164,19 @@ export function ChartArea() {
           )}
 
           <Brackets layout={layout} />
+          <Summaries layout={layout} />
           <TaskBars layout={layout} dragPreview={dragPreview} />
           <Milestones layout={layout} />
           <Dependencies layout={layout} />
           <Markers doc={doc} viewStart={viewStart} pxPerDay={pxPerDay} chartHeight={layout.chartHeight} />
+          {depDrag && depDrag.depStartX != null && depDrag.depCurrentX != null && (
+            <ConnectorOverlay
+              fromX={depDrag.depStartX}
+              fromY={depDrag.depStartY!}
+              toX={depDrag.depCurrentX}
+              toY={depDrag.depCurrentY!}
+            />
+          )}
         </g>
 
         {/* Bottom border between axis and chart */}
