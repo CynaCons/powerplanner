@@ -1,9 +1,11 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
+import { useEditStore } from '../stores/editStore';
 import type { LayoutResult } from '../layout/engine';
 import { dateToX } from '../layout/timeAxis';
 import type { DragPreviewMap } from '../app/useChartInteractions';
+import { InlineLabel } from '../app/InlineLabel';
 
 interface Props {
   layout: LayoutResult;
@@ -17,6 +19,9 @@ export function TaskBars({ layout, dragPreview }: Props) {
   const pxPerDay = useViewportStore((s) => s.pxPerDay);
   const isSelected = useSelectionStore((s) => s.isSelected);
   const updateTask = useDocumentStore((s) => s.updateTask);
+  const editingTaskId = useEditStore((s) => s.editingTaskId);
+  const endEdit = useEditStore((s) => s.endEdit);
+  const beginEdit = useEditStore((s) => s.beginEdit);
 
   return (
     <g>
@@ -101,19 +106,32 @@ export function TaskBars({ layout, dragPreview }: Props) {
                 pointerEvents="none"
               />
             )}
-            {/* Label */}
-            <LabelText
-              text={t.label}
-              x={x}
-              y={y}
-              barWidth={width}
-              barHeight={h}
-              placement={t.labelPlacement ?? 'on-bar'}
-              onDoubleClick={() => {
-                const newLabel = prompt('Task label', t.label);
-                if (newLabel != null) updateTask(t.id, { label: newLabel });
-              }}
-            />
+            {/* Inline editor / Label */}
+            {editingTaskId === t.id ? (
+              <InlineLabel
+                text={t.label}
+                x={x + 2}
+                y={y + 2}
+                width={Math.max(80, width - 4)}
+                height={h - 4}
+                onCommit={(text) => {
+                  updateTask(t.id, { label: text });
+                  endEdit();
+                }}
+                onCancel={endEdit}
+              />
+            ) : (
+              <g onDoubleClick={() => beginEdit(t.id)} style={{ cursor: 'text' }}>
+                <LabelText
+                  text={t.label}
+                  x={x}
+                  y={y}
+                  barWidth={width}
+                  barHeight={h}
+                  placement={t.labelPlacement ?? 'on-bar'}
+                />
+              </g>
+            )}
           </g>
         );
       })}
@@ -128,16 +146,14 @@ interface LabelProps {
   barWidth: number;
   barHeight: number;
   placement: 'on-bar' | 'left' | 'right' | 'above' | 'below' | 'hidden';
-  onDoubleClick?: () => void;
 }
 
-function LabelText({ text, x, y, barWidth, barHeight, placement, onDoubleClick }: LabelProps) {
+function LabelText({ text, x, y, barWidth, barHeight, placement }: LabelProps) {
   if (placement === 'hidden') return null;
   const baseProps = {
     fontSize: 11,
     fill: 'var(--color-text)',
     pointerEvents: 'none' as const,
-    onDoubleClick,
   };
   if (placement === 'left') {
     return (

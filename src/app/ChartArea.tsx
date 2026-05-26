@@ -21,7 +21,7 @@ const ROW_GUTTER_W = 200;
 export function ChartArea() {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
-  const [size, setSize] = useState({ width: 1000, height: 600 });
+  const [size, setSize] = useState({ width: 0, height: 0 });
   const clear = useSelectionStore((s) => s.clear);
 
   const doc = useDocumentStore((s) => s.doc);

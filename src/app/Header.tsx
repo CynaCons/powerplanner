@@ -1,6 +1,7 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
-import { Undo2, Redo2, Plus, Calendar, Maximize2 } from 'lucide-react';
+import { useEditStore } from '../stores/editStore';
+import { Undo2, Redo2, Plus, Calendar, Maximize2, Diamond, Magnet, Rows3 } from 'lucide-react';
 import { newId } from '../utils/ids';
 import { todayISO, addDays } from '../utils/dates';
 
@@ -12,9 +13,13 @@ export function Header() {
   const canUndo = useDocumentStore((s) => s.past.length > 0);
   const canRedo = useDocumentStore((s) => s.future.length > 0);
   const addTask = useDocumentStore((s) => s.addTask);
+  const addMilestone = useDocumentStore((s) => s.addMilestone);
+  const addRow = useDocumentStore((s) => s.addRow);
   const rows = useDocumentStore((s) => s.doc.rows);
   const fit = useViewportStore((s) => s.fit);
   const doc = useDocumentStore((s) => s.doc);
+  const snapEnabled = useEditStore((s) => s.snapEnabled);
+  const setSnap = useEditStore((s) => s.setSnap);
 
   const onFit = () => {
     const dates = [
@@ -42,6 +47,15 @@ export function Header() {
     });
   };
 
+  const onAddMilestone = () => {
+    if (rows.length === 0) return;
+    addMilestone({ id: newId('ms'), rowId: rows[0].id, label: 'New milestone', date: todayISO() });
+  };
+
+  const onAddRow = () => {
+    addRow({ id: newId('row'), label: `Row ${rows.length + 1}`, groupId: null });
+  };
+
   return (
     <header className="app-header">
       <div className="brand">
@@ -57,6 +71,20 @@ export function Header() {
       <div className="toolbar">
         <button onClick={onAddTask} title="Add task (N)" className="icon-btn">
           <Plus size={14} /> Task
+        </button>
+        <button onClick={onAddMilestone} title="Add milestone (M)" className="icon-btn">
+          <Diamond size={14} /> Milestone
+        </button>
+        <button onClick={onAddRow} title="Add row" className="icon-btn">
+          <Rows3 size={14} /> Row
+        </button>
+        <button
+          onClick={() => setSnap(!snapEnabled)}
+          title="Toggle snap to scale (S)"
+          className="icon-btn"
+          style={{ background: snapEnabled ? 'var(--color-accent-soft)' : undefined, color: snapEnabled ? 'white' : undefined }}
+        >
+          <Magnet size={14} /> Snap
         </button>
         <button onClick={onFit} title="Fit to data (Home)" className="icon-btn">
           <Maximize2 size={14} /> Fit

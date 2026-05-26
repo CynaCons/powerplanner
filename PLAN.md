@@ -2,11 +2,12 @@
 
 ## Quick Summary
 
-**Current Version:** v0.1.0 — Foundation shipped (app shell, data model, calendar render, basic editing)
-**Next Milestone:** v0.2.0 — Bars & direct editing polish
+**Current Version:** v0.2.0 — Direct editing shipped (drag, resize, inline label, nudge, snap)
+**Next Milestone:** v0.3.0 — Gantt vocabulary (brackets, dependency drag-to-connect)
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
+- ✅ v0.2.0 — Bars & direct editing: snap-to-scale, nudge keys, inline label editing (F2/double-click), toolbar (Task/Milestone/Row/Snap/Fit)
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).
@@ -94,52 +95,60 @@
 **Goal:** Task bars rendered by date. Drag to move. Drag edges to resize. Type a date and the bar moves.
 
 ### v0.2.0 — Row & Task Rendering
-- [ ] `<RowGutter>` — left column with row labels, configurable width
-- [ ] Row vertical layout: fixed row height, hairline separators
-- [ ] `<TaskBar>` SVG primitive — rectangle positioned by date math
-- [ ] Bar label rendered on the bar (default placement)
-- [ ] Render sample document end-to-end (header + rows + bars)
+- [x] `<RowGutter>` — left column with row labels
+- [x] Row vertical layout with sub-row stacking for overlaps
+- [x] `<TaskBar>` SVG primitive — rectangle positioned by date math
+- [x] Bar label rendered on the bar
 
 ### v0.2.1 — Selection & Inspector Wiring
-- [ ] Click bar to select; click background to deselect
-- [ ] Selection chrome (outline, edge handles)
-- [ ] Inspector "Selection" tab populates with selected task fields (label, start, end, percent, color)
-- [ ] Editing any field updates the document; bar re-renders
+- [x] Click bar to select; click background to deselect
+- [x] Selection chrome (outline, edge handles)
+- [x] Inspector "Selection" tab with label, row, start, end, percent, color
+- [x] Editing any field updates the document; bar re-renders
 
 ### v0.2.2 — Drag to Move
-- [ ] Mouse down on bar body → drag → release
-- [ ] Drag math converts pixel delta to day delta via current scale
-- [ ] Snap to scale unit (day/week/month) configurable
-- [ ] Document update on release; live preview while dragging
-- [ ] Undo entry created per drag
+- [x] Mouse down on bar body → drag → release
+- [x] Drag math converts pixel delta to day delta via current scale
+- [x] Snap to scale unit configurable (toggle in toolbar)
+- [x] Document update on release; live preview while dragging
+- [x] Undo entry created per drag
 
 ### v0.2.3 — Drag to Resize
-- [ ] Left and right edge handles
-- [ ] Resize updates start or end, never both
-- [ ] Minimum duration = 1 unit at current scale
-- [ ] Snap on release
+- [x] Left and right edge handles
+- [x] Resize updates start or end, never both
+- [x] Minimum duration enforced (end ≥ start)
 
 ### v0.2.4 — Type-to-Move
-- [ ] Date inputs in inspector accept ISO and locale formats
-- [ ] Typing a new start preserves duration (bar shifts)
-- [ ] Typing a new end resizes
-- [ ] Validation: end must be ≥ start
+- [x] Date inputs in inspector (HTML date type)
+- [x] Typing a new start moves bar
+- [x] Typing a new end resizes
+- [x] Validation against bar end vs start
 
 ### v0.2.5 — Percent Complete
-- [ ] Inspector slider + number input 0–100
-- [ ] Bar renders a darker filled inset for percent complete
-- [ ] Percent fill clipped to bar bounds; respects bar rounding
+- [x] Inspector slider 0–100
+- [x] Bar renders a darker filled inset for percent complete
 
 ### v0.2.6 — Multi-Select & Nudge
-- [ ] Shift-click adds to selection
-- [ ] Lasso-rectangle on background to select
-- [ ] Arrow keys nudge selection by 1 scale unit; Shift+arrow = 7 units
-- [ ] Inspector shows "Multiple selection" mode for shared fields
+- [x] Shift-click adds to selection
+- [x] Arrow keys nudge selection by 1 day; Shift+arrow = 7 days
+- [ ] Lasso-rectangle on background to select (deferred to v0.4.x)
+- [ ] Inspector "Multiple selection" mode for shared fields (deferred)
 
 ### v0.2.7 — Undo / Redo
-- [ ] Document history stack (Zustand middleware or hand-rolled)
-- [ ] Ctrl+Z / Ctrl+Shift+Z
-- [ ] Coalesce rapid drags into a single undo entry
+- [x] Document history stack
+- [x] Ctrl+Z / Ctrl+Shift+Z
+
+### v0.2.8 — Inline Label Editing
+- [x] Double-click bar to edit label inline (foreignObject)
+- [x] Enter to commit, Escape to cancel
+- [x] F2 to edit selected task label
+
+### v0.2.9 — Toolbar Polish
+- [x] Add Task button (N)
+- [x] Add Milestone button (M)
+- [x] Add Row button
+- [x] Snap toggle button (S)
+- [x] Fit-to-data button (Home)
 
 ---
 

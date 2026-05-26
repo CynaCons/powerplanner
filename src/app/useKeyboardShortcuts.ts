@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useViewportStore } from '../stores/viewportStore';
+import { useEditStore } from '../stores/editStore';
 import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 
@@ -16,9 +17,11 @@ export function useKeyboardShortcuts() {
     const handler = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target)) return;
 
-      const { undo, redo, addTask, addMilestone, deleteTask, deleteMilestone, deleteBracket, doc } = useDocumentStore.getState();
+      const docStore = useDocumentStore.getState();
+      const { undo, redo, addTask, addMilestone, deleteTask, deleteMilestone, deleteBracket, updateTask, updateMilestone, doc } = docStore;
       const sel = useSelectionStore.getState();
       const view = useViewportStore.getState();
+      const edit = useEditStore.getState();
 
       const meta = e.metaKey || e.ctrlKey;
       if (meta && e.key.toLowerCase() === 'z' && !e.shiftKey) {
@@ -69,6 +72,7 @@ export function useKeyboardShortcuts() {
       }
       if (e.key === 'Escape') {
         sel.clear();
+        edit.endEdit();
         return;
       }
       if (e.key === '+' || e.key === '=') {
@@ -79,6 +83,49 @@ export function useKeyboardShortcuts() {
       if (e.key === '-') {
         e.preventDefault();
         view.zoom(0.8, 400);
+        return;
+      }
+      if (e.key === 'Home') {
+        e.preventDefault();
+        const dates = [
+          ...doc.tasks.flatMap((t) => [t.start, t.end]),
+          ...doc.milestones.map((m) => m.date),
+        ];
+        if (dates.length === 0) return;
+        const min = dates.reduce((a, b) => (a < b ? a : b));
+        const max = dates.reduce((a, b) => (a > b ? a : b));
+        const chartArea = document.querySelector('.chart-area');
+        const width = (chartArea?.clientWidth ?? 800) - 200;
+        view.fit(min, max, Math.max(200, width));
+        return;
+      }
+      if (e.key === 'F2' && sel.items.length === 1 && sel.items[0].kind === 'task') {
+        e.preventDefault();
+        edit.beginEdit(sel.items[0].id);
+        return;
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (sel.items.length === 0) return;
+        e.preventDefault();
+        const direction = e.key === 'ArrowLeft' ? -1 : 1;
+        const step = e.shiftKey ? 7 : 1;
+        const delta = direction * step;
+        for (const item of sel.items) {
+          if (item.kind === 'task') {
+            const t = doc.tasks.find((x) => x.id === item.id);
+            if (!t) continue;
+            updateTask(t.id, { start: addDays(t.start, delta), end: addDays(t.end, delta) });
+          } else if (item.kind === 'milestone') {
+            const m = doc.milestones.find((x) => x.id === item.id);
+            if (!m) continue;
+            updateMilestone(m.id, { date: addDays(m.date, delta) });
+          }
+        }
+        return;
+      }
+      if (e.key.toLowerCase() === 's' && !meta) {
+        e.preventDefault();
+        edit.setSnap(!edit.snapEnabled);
         return;
       }
     };

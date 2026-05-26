@@ -3,8 +3,10 @@ import type { RefObject, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheel
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
+import { useEditStore } from '../stores/editStore';
 import { xToDate } from '../layout/timeAxis';
 import { addDays, diffDays } from '../utils/dates';
+import { snapDelta } from '../utils/snap';
 
 interface InteractionOptions {
   svgRef: RefObject<SVGSVGElement | null>;
@@ -233,31 +235,35 @@ export function useChartInteractions({ svgRef, rowGutterWidth }: InteractionOpti
       setDragPreview(null);
       return;
     }
-    const doc = useDocumentStore.getState();
+    const docStore = useDocumentStore.getState();
+    const edit = useEditStore.getState();
+    const scale = docStore.doc.calendar.scale;
+    const snappedDelta = edit.snapEnabled ? snapDelta(state.deltaDays, scale) : state.deltaDays;
+
     if (state.kind === 'task-move' && state.targetId && state.originalStart && state.originalEnd) {
-      doc.updateTask(state.targetId, {
-        start: addDays(state.originalStart, state.deltaDays),
-        end: addDays(state.originalEnd, state.deltaDays),
+      docStore.updateTask(state.targetId, {
+        start: addDays(state.originalStart, snappedDelta),
+        end: addDays(state.originalEnd, snappedDelta),
       });
     } else if (state.kind === 'task-resize-start' && state.targetId && state.originalStart && state.originalEnd) {
-      const newStart = addDays(state.originalStart, state.deltaDays);
+      const newStart = addDays(state.originalStart, snappedDelta);
       const limited = diffDays(newStart, state.originalEnd) >= 0 ? newStart : state.originalEnd;
-      doc.updateTask(state.targetId, { start: limited });
+      docStore.updateTask(state.targetId, { start: limited });
     } else if (state.kind === 'task-resize-end' && state.targetId && state.originalStart && state.originalEnd) {
-      const newEnd = addDays(state.originalEnd, state.deltaDays);
+      const newEnd = addDays(state.originalEnd, snappedDelta);
       const limited = diffDays(state.originalStart, newEnd) >= 0 ? newEnd : state.originalStart;
-      doc.updateTask(state.targetId, { end: limited });
+      docStore.updateTask(state.targetId, { end: limited });
     } else if (state.kind === 'milestone-move' && state.targetId && state.originalDate) {
-      doc.updateMilestone(state.targetId, { date: addDays(state.originalDate, state.deltaDays) });
+      docStore.updateMilestone(state.targetId, { date: addDays(state.originalDate, snappedDelta) });
     } else if (state.kind === 'bracket-move' && state.targetId && state.originalStart && state.originalEnd) {
-      doc.updateBracket(state.targetId, {
-        start: addDays(state.originalStart, state.deltaDays),
-        end: addDays(state.originalEnd, state.deltaDays),
+      docStore.updateBracket(state.targetId, {
+        start: addDays(state.originalStart, snappedDelta),
+        end: addDays(state.originalEnd, snappedDelta),
       });
     } else if (state.kind === 'bracket-resize-start' && state.targetId && state.originalStart) {
-      doc.updateBracket(state.targetId, { start: addDays(state.originalStart, state.deltaDays) });
+      docStore.updateBracket(state.targetId, { start: addDays(state.originalStart, snappedDelta) });
     } else if (state.kind === 'bracket-resize-end' && state.targetId && state.originalEnd) {
-      doc.updateBracket(state.targetId, { end: addDays(state.originalEnd, state.deltaDays) });
+      docStore.updateBracket(state.targetId, { end: addDays(state.originalEnd, snappedDelta) });
     }
     setDragPreview(null);
   }, [handleWindowMove]);
