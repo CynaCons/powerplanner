@@ -1,0 +1,360 @@
+# PowerPlanner Implementation Plan
+
+## Quick Summary
+
+**Current Version:** v0.1.0 — Foundation shipped (app shell, data model, calendar render, basic editing)
+**Next Milestone:** v0.2.0 — Bars & direct editing polish
+
+### Recent Achievements
+- ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
+
+### Key Objectives
+- Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).
+- Calendar-true bars, milestones, brackets, dependencies, today line.
+- Direct editing: drag a bar to change dates, type a date to move a bar.
+- Vector export (SVG / PNG / PDF) of presentation quality.
+- One engine, four surfaces over time: portable HTML → web app → PowerNote node → PowerPoint add-in.
+
+### Stack
+- React 19 + TypeScript + Vite.
+- SVG renderer (no Canvas/Konva for the chart itself).
+- Zustand for state, Tailwind for app chrome.
+- Vitest unit tests, Playwright E2E tests.
+- Single-file portable HTML build (`vite.export.config.ts`), same pattern as PowerNote.
+
+### Quick Links
+- [Product Requirements](PRD.md)
+- [README](README.md)
+
+---
+
+## Format Rules
+
+- Iterations: version number + brief title.
+- Goal: one-line objective statement (optional).
+- Status: Complete / In Progress (only if in progress).
+- Tasks: simple checkbox items only (no sub-bullets, no implementation details).
+- NO "Files Modified" sections (use git for that).
+- NO "Impact" sections (tasks describe the work).
+- NO verbose summaries.
+- Close iterations chronologically — don't skip ahead.
+- Move incomplete tasks to future iterations, don't leave them in closed ones.
+- Update PLAN.md in real time as tasks complete.
+- Smoke test before tagging any release: app launches without crashes, can create a task, can save, can reopen.
+
+---
+
+# Phase 1: Foundation (v0.1.x)
+**Goal:** App shell, data model, calendar header rendering. No tasks yet — just the canvas, the scale, and the inspector frame.
+
+### v0.1.0 — Project Scaffold
+- [x] Initialize Vite + React + TypeScript project
+- [x] Configure strict TypeScript, ESLint
+- [x] Install Zustand, lucide-react
+- [x] Set up Vitest config and unit tests
+- [x] Set up Playwright config with desktop / tablet / mobile projects
+- [x] Folder structure: `src/{types,stores,layout,renderer,app,utils,styles}`
+- [x] AppShell: header | left inspector | chart canvas | bottom status
+- [x] Smoke test: `npm run dev` launches cleanly
+
+### v0.1.1 — Data Model & Stores
+- [x] Define `Document`, `Task`, `Milestone`, `Bracket`, `Dependency`, `Marker`, `Row`, `Calendar`, `Style` types
+- [x] `useDocumentStore` — document state + CRUD reducers + undo/redo
+- [x] `useViewportStore` — scale, time range, pixel-per-day, pan/zoom
+- [x] `useSelectionStore` — selected ids, multi-select
+- [x] `utils/dates.ts` — date math (addDays, diffDays, snapTo, fiscalQuarterOf)
+- [x] `utils/ids.ts` — nanoid wrapper
+- [x] Sample document factory (6-task, 2-milestone chart for development)
+- [x] Unit tests for dates and layout engine
+
+### v0.1.2 — Calendar Header Rendering
+- [x] SVG `<TimeAxis>` component: multi-level header
+- [x] Scale switcher: day / week / month / quarter / year
+- [x] Tick positioning math in `layout/timeAxis.ts`
+- [x] Today line (auto, dashed)
+- [x] Fiscal year start month configurable
+- [x] Weekend stripes in day/week scales
+
+### v0.1.3 — Chart Canvas + Pan/Zoom
+- [x] SVG `<ChartArea>` fills the chart area (ResizeObserver)
+- [x] Horizontal pan via drag on background
+- [x] Zoom via Ctrl+wheel along the time axis, pointer-anchored
+- [x] Shift+wheel horizontal pan
+- [x] Clamp zoom to a sensible day-to-year range
+- [x] Auto-fit to data on first load + manual Fit button
+
+### v0.1.4 — Inspector Panel Frame
+- [x] `<Inspector>` left panel: Document section with title + scale + fiscal year + theme
+- [x] Selection tab populates with task / milestone / bracket fields
+- [x] Wire title and scale to document/viewport stores
+
+---
+
+# Phase 2: Bars & Direct Editing (v0.2.x)
+**Goal:** Task bars rendered by date. Drag to move. Drag edges to resize. Type a date and the bar moves.
+
+### v0.2.0 — Row & Task Rendering
+- [ ] `<RowGutter>` — left column with row labels, configurable width
+- [ ] Row vertical layout: fixed row height, hairline separators
+- [ ] `<TaskBar>` SVG primitive — rectangle positioned by date math
+- [ ] Bar label rendered on the bar (default placement)
+- [ ] Render sample document end-to-end (header + rows + bars)
+
+### v0.2.1 — Selection & Inspector Wiring
+- [ ] Click bar to select; click background to deselect
+- [ ] Selection chrome (outline, edge handles)
+- [ ] Inspector "Selection" tab populates with selected task fields (label, start, end, percent, color)
+- [ ] Editing any field updates the document; bar re-renders
+
+### v0.2.2 — Drag to Move
+- [ ] Mouse down on bar body → drag → release
+- [ ] Drag math converts pixel delta to day delta via current scale
+- [ ] Snap to scale unit (day/week/month) configurable
+- [ ] Document update on release; live preview while dragging
+- [ ] Undo entry created per drag
+
+### v0.2.3 — Drag to Resize
+- [ ] Left and right edge handles
+- [ ] Resize updates start or end, never both
+- [ ] Minimum duration = 1 unit at current scale
+- [ ] Snap on release
+
+### v0.2.4 — Type-to-Move
+- [ ] Date inputs in inspector accept ISO and locale formats
+- [ ] Typing a new start preserves duration (bar shifts)
+- [ ] Typing a new end resizes
+- [ ] Validation: end must be ≥ start
+
+### v0.2.5 — Percent Complete
+- [ ] Inspector slider + number input 0–100
+- [ ] Bar renders a darker filled inset for percent complete
+- [ ] Percent fill clipped to bar bounds; respects bar rounding
+
+### v0.2.6 — Multi-Select & Nudge
+- [ ] Shift-click adds to selection
+- [ ] Lasso-rectangle on background to select
+- [ ] Arrow keys nudge selection by 1 scale unit; Shift+arrow = 7 units
+- [ ] Inspector shows "Multiple selection" mode for shared fields
+
+### v0.2.7 — Undo / Redo
+- [ ] Document history stack (Zustand middleware or hand-rolled)
+- [ ] Ctrl+Z / Ctrl+Shift+Z
+- [ ] Coalesce rapid drags into a single undo entry
+
+---
+
+# Phase 3: Gantt Vocabulary (v0.3.x)
+**Goal:** Milestones, brackets, dependencies, markers. The full vocabulary of a real Gantt chart.
+
+### v0.3.0 — Milestones
+- [ ] Diamond marker primitive
+- [ ] Anchored to a single date on a row
+- [ ] Drag to move; type date in inspector to move
+- [ ] Label position options (above, below, left, right)
+- [ ] Add via toolbar button or context menu
+
+### v0.3.1 — Brackets
+- [ ] Horizontal bracket primitive spanning a date range
+- [ ] Anchored to one or more rows
+- [ ] Drag body to shift, drag edges to resize
+- [ ] "Auto-span to children" toggle (bracket = min/max of contained tasks)
+
+### v0.3.2 — Dependency Arrows
+- [ ] Edge handles on bar left and right reveal "drag-to-connect" affordance
+- [ ] Dragging from one handle to another bar creates a dependency
+- [ ] Four types: FS, SS, FF, SF (default FS)
+- [ ] Arrow routing: orthogonal segments, avoid bar overlap where possible
+- [ ] Selecting a dependency reveals "delete" and "type" inspector controls
+
+### v0.3.3 — Constraint Enforcement (Opt-In)
+- [ ] Document-level "enforce dependencies" toggle
+- [ ] Moving a predecessor pushes successors forward (cascading)
+- [ ] Cycle detection rejects the new edge with an inspector warning
+
+### v0.3.4 — Custom Markers
+- [ ] Deadline lines: vertical line + label, anchored to a date
+- [ ] Free-form text annotation: text block anchored to a date or a task
+- [ ] Drag to reposition labels (offset from anchor)
+
+### v0.3.5 — Hierarchy (Summary Rows)
+- [ ] Group rows into summary rows
+- [ ] Summary row bar = min(start) → max(end) of children
+- [ ] Indentation in row gutter
+- [ ] Collapse / expand toggles per group
+
+---
+
+# Phase 4: Layout & UX Polish (v0.4.x)
+**Goal:** Auto-layout for collisions, label collision resolution, theming, keyboard ergonomics.
+
+### v0.4.0 — Auto Sub-Row Splitting
+- [ ] When two bars in the same row overlap, split the row into sub-rows
+- [ ] Sub-row assignment is deterministic (sorted by start, greedy fit)
+- [ ] Row height grows to fit all sub-rows
+- [ ] Toggle: "allow overlap" vs "split rows"
+
+### v0.4.1 — Label Collision Resolution
+- [ ] Fallback chain: on-bar → right → left → above → hide
+- [ ] Pixel-measured collision detection
+- [ ] Per-task override always wins
+
+### v0.4.2 — Working Days & Holidays
+- [ ] Calendar settings: weekend mask, holiday list
+- [ ] Non-working days shaded in the chart background
+- [ ] Optional: bars snap to skip non-working days when dragged
+
+### v0.4.3 — Theming
+- [ ] Light, dark, and print themes
+- [ ] Theme tokens in CSS variables
+- [ ] Inspector "Style" tab: theme picker + preset picker
+- [ ] Per-task color override
+
+### v0.4.4 — Keyboard Ergonomics
+- [ ] N — new task at cursor
+- [ ] M — new milestone at cursor
+- [ ] B — new bracket from selection
+- [ ] Delete / Backspace — remove selection
+- [ ] +/− — zoom in/out
+- [ ] Home — fit to data
+- [ ] T — toggle today line
+- [ ] Esc — clear selection / cancel drag
+
+### v0.4.5 — Legend & Title Block
+- [ ] Optional legend block auto-generated from styles in use
+- [ ] Optional title and subtitle anchored to the chart top
+- [ ] Both togglable per chart
+
+---
+
+# Phase 5: Persistence & Portable HTML (v0.5.x)
+**Goal:** Ship the single-file portable HTML edition. Email it, archive it, open it offline.
+
+### v0.5.0 — JSON / YAML Persistence
+- [ ] Serialize document to JSON (canonical, schemaVersion: 1)
+- [ ] Deserialize with schema validation; clear error on mismatch
+- [ ] YAML import / export (human-readable form)
+- [ ] Drag-drop a `.json` / `.yaml` onto the canvas to load
+
+### v0.5.1 — LocalStorage Auto-Save
+- [ ] Snapshot to localStorage every 30s while editing
+- [ ] "Restore previous session?" prompt on launch when a snapshot exists
+- [ ] Manual "Clear local data" in inspector
+
+### v0.5.2 — In-File Persistence (Embedded JSON)
+- [ ] Embed document JSON into the HTML file via a `<script type="application/json" id="powerplanner-data">` tag on save
+- [ ] On launch, read embedded data tag and hydrate
+- [ ] File System Access API save (Chrome / Edge); download fallback elsewhere
+- [ ] Ctrl+S binding
+
+### v0.5.3 — Single-File Build
+- [ ] `vite.export.config.ts` with inline-everything config
+- [ ] Build script `npm run build:template` → `dist-template/PowerPlanner.html`
+- [ ] Verify the built file opens directly (file://) and works offline
+- [ ] Verify save/reopen round-trips byte-for-byte
+
+### v0.5.4 — PNG / SVG / PDF Export
+- [ ] "Export" menu: PNG (1x/2x/4x), SVG, PDF
+- [ ] PNG via canvas rasterization of the SVG
+- [ ] SVG via direct serialization (text remains text)
+- [ ] PDF via a small client-side library
+- [ ] Export bounds = chart bounds (no app chrome)
+
+### v0.5.5 — Release v1.0
+- [ ] All unit + E2E tests passing
+- [ ] Smoke test: download HTML → open → create chart → save → re-open → export
+- [ ] Tag v1.0.0
+- [ ] Publish release with `PowerPlanner.html` asset
+- [ ] README quick start updated
+
+---
+
+# Phase 6: PowerNote Integration (v0.6.x)
+**Goal:** Gantt as an embeddable node type inside PowerNote.
+
+### v0.6.0 — Compact Renderer Component
+- [ ] Extract `<GanttRenderer document={...} viewport={...}>` as a standalone package export
+- [ ] Smaller chrome, no app shell, fits a PowerNote node bounding box
+- [ ] Read-only mode prop
+
+### v0.6.1 — PowerNote Node Type
+- [ ] Add `gantt` node type to PowerNote
+- [ ] Payload = PowerPlanner document JSON
+- [ ] Render via the compact renderer inside a Konva `<Html>` portal
+
+### v0.6.2 — Inline Edit Bridge
+- [ ] Double-click the node in PowerNote opens the full PowerPlanner inspector as a PowerNote overlay
+- [ ] Saving the inspector writes back into the PowerNote node payload
+- [ ] Undo/redo integrates with PowerNote history
+
+### v0.6.3 — Test Coverage
+- [ ] PowerNote E2E test: create page → add Gantt node → edit → save notebook → reopen
+- [ ] Cross-repo coordination (PowerNote release notes updated)
+
+---
+
+# Phase 7: PowerPoint Add-In (v0.7.x)
+**Goal:** Task pane add-in that emits native, vector-editable PowerPoint shapes.
+
+### v0.7.0 — Office.js Add-In Scaffold
+- [ ] Add-in manifest (taskpane host)
+- [ ] Same Vite app served as the task pane
+- [ ] Verify launch in PowerPoint desktop and PowerPoint web
+
+### v0.7.1 — Insert Into Slide
+- [ ] "Insert into slide" button in the task pane
+- [ ] Walk the layout output; emit Office.js shapes (rectangles for bars, diamonds for milestones, connectors for dependencies, text frames for labels)
+- [ ] Group all emitted shapes under a single named group with PowerPlanner metadata tags
+
+### v0.7.2 — Pull From Slide
+- [ ] If the active slide contains a PowerPlanner shape group, "Pull from slide" reads the metadata and reconstructs the document into the task pane
+- [ ] Round-trip test: insert → modify in PowerPoint → pull → re-insert is stable
+
+### v0.7.3 — Native Editability Guarantee
+- [ ] Inserted shapes remain editable in PowerPoint after the add-in is uninstalled
+- [ ] No images, no embedded SVGs — native PPT primitives only
+- [ ] Verified across desktop PowerPoint and PowerPoint web
+
+---
+
+# Phase 8: Web / Cloud Edition (v0.8.x)
+**Goal:** Hosted edition with accounts, cloud persistence, and link sharing — mirrors PowerTimeline.
+
+### v0.8.0 — Firebase Setup
+- [ ] Create Firebase project (dev + prod)
+- [ ] Firestore schema: users, documents, shares
+- [ ] Firebase Auth: email/password + Google
+- [ ] Security rules: owner full access, share roles for read / comment
+
+### v0.8.1 — Cloud Persistence
+- [ ] "Save to cloud" alongside "Save to file"
+- [ ] Document list page (My Charts)
+- [ ] Auto-save with debounce on edits
+
+### v0.8.2 — Sharing
+- [ ] Public read-only share link (signed URL)
+- [ ] Embed iframe option
+- [ ] View counter (denormalized for performance)
+
+### v0.8.3 — Landing Page & SEO
+- [ ] Landing page mirroring PowerTimeline / PowerNote style
+- [ ] OpenGraph meta tags, JSON-LD structured data
+- [ ] robots.txt + sitemap
+
+---
+
+# Backlog (Unscheduled)
+
+These are confirmed-on-the-roadmap-but-not-yet-scheduled items. Promote into a phase above when prioritized.
+
+- Excel / CSV linking (bind tasks to external spreadsheet rows)
+- Resource swimlanes view
+- Baselines (snapshot + drift visualization)
+- Critical path computation and highlight
+- Real-time collaboration (web edition)
+- Comments anchored to tasks
+- AI assist (Gemini): "Draft a Gantt from this paragraph", "Compress the schedule by 2 weeks"
+- Fork / merge workflow for chart variants
+- Two-way PowerNote data binding (Gantt tasks referencing PowerNote-defined entities)
+- Style preset gallery
+- Touch gestures (pinch zoom, two-finger pan) polish
+- Print stylesheet for browser print
