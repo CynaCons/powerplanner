@@ -27,4 +27,20 @@ test.describe('PowerPlanner smoke', () => {
     await page.locator('.inspector [role="radio"]:has-text("Light")').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
+
+  test('command palette opens with Cmd+K and runs a command', async ({ page }) => {
+    await page.goto('/');
+    // Dismiss restore banner if any
+    const dismiss = page.locator('[aria-label="Dismiss"]').first();
+    if (await dismiss.isVisible().catch(() => false)) await dismiss.click();
+    await page.keyboard.press('ControlOrMeta+k');
+    await expect(page.locator('[aria-label="Command palette"]')).toBeVisible();
+    // Filter and execute
+    await page.keyboard.type('milestone');
+    await expect(page.locator('[aria-label="Command palette"]')).toContainText('New milestone');
+    await page.keyboard.press('Enter');
+    // The palette should close and we should now have 3 milestones
+    await expect(page.locator('[aria-label="Command palette"]')).toHaveCount(0);
+    await expect(page.locator('.app-status')).toContainText('3 milestones');
+  });
 });

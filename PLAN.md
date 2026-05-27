@@ -2,8 +2,8 @@
 
 ## Quick Summary
 
-**Current Version:** v1.3.0 — Visual identity overhaul (Engineering Atelier)
-**Next Milestone:** v1.4.0 — Productivity (Cmd+K, templates, search, tags)
+**Current Version:** v1.4.0 — Command Palette + Templates + Task Notes
+**Next Milestone:** v1.5.0 — Pro features + v2.0 public release
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
@@ -15,6 +15,7 @@
 - ✅ v1.1.0 — **Tool modes + bottom toolbar + click-to-create**: new `useToolStore` with Select/Add-Task/Add-Milestone/Marquee/Pan tools; PowerNote-style bottom toolbar (`ToolPalette`) with tool group + scale group (D/W/M/Q/Y) + zoom group (−/readout/+/fit); click on canvas with Add-Task or Add-Milestone tool creates at clicked date+row; lasso marquee selection; wheel = zoom (no Ctrl required, Figma-style); Linear-style single-letter shortcuts (V/T/Y/H/R for tools, Shift+D/W/M/Q/Y for scales); "TODAY" pill label on today line; full visual refresh (Inter typography, layered greys, 8% opacity borders, tabular numerals)
 - ✅ v1.2.0 — **Direct manipulation**: right-click context menu on every chart element (background → Add task/milestone/deadline-here; task → Edit / Color / Duplicate / Wrap-in-bracket / Delete; milestone/bracket/dependency/marker → context-appropriate actions); dependency type switcher in dep context menu (FS/SS/FF/SF with check); muted Notion-inspired color palette swatches (8 presets + custom picker) in task inspector; ShortcutsOverlay modal (? to open) listing all keyboard bindings grouped by Tools/Scale/Selection/Editing/Navigation/File; HelpCircle button in header; right-click on unselected element replaces selection (desktop convention)
 - ✅ v1.3.0 — **Visual identity overhaul** ("Engineering Atelier"): new BrandLogo (3 offset bars + Power/Planner wordmark, indigo→violet→coral gradient used ONLY on the brand mark); Header redesigned with title-as-pill chip + grouped button clusters (Add / View / History); Inspector rewritten as elevated section cards with Stripe-style inset top highlight, Segmented controls for Scale (D/W/M/Q/Y) and Theme (Dark/Light/Print), new Statistics section with mono-numeral tiles (Tasks / Milestones / Span / Avg complete) and date-range footer; updated E2E test for new segmented theme control
+- ✅ v1.4.0 — **Command Palette + Templates + Notes**: Linear-grade Cmd+K command palette with fuzzy filter, 8 command groups (Create / Tools / Scale / View / Theme / File / Templates / Edit / Help), grouped sticky headers, arrow-key + Enter navigation, footer count; 5 templates (Product Launch, Two-Week Sprint, Hiring Plan, Marketing Campaign, Blank) loadable from the palette; Task `notes` field (textarea in inspector + schema validation); 9 new unit tests covering template integrity (schema validity, row references, dep references, date ordering); E2E test for Cmd+K command flow
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).

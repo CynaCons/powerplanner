@@ -31,6 +31,7 @@ export interface Task {
   percentComplete?: number;
   color?: string;
   labelPlacement?: LabelPlacement;
+  notes?: string;
 }
 
 export interface Milestone {

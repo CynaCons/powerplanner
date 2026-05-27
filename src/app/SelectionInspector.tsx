@@ -83,6 +83,27 @@ function TaskFields({ task }: { task: Task }) {
         <label>Color</label>
         <ColorPalette value={task.color ?? '#7a82c9'} onChange={(c) => updateTask(task.id, { color: c })} />
       </div>
+      <div className="field">
+        <label>Notes</label>
+        <textarea
+          value={task.notes ?? ''}
+          onChange={(e) => updateTask(task.id, { notes: e.target.value })}
+          placeholder="Context, links, decisions…"
+          rows={3}
+          style={{
+            font: 'inherit',
+            color: 'var(--color-text)',
+            background: 'var(--color-bg)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius)',
+            padding: '6px 9px',
+            width: '100%',
+            resize: 'vertical',
+            minHeight: 60,
+            outline: 'none',
+          }}
+        />
+      </div>
       <button
         onClick={() => {
           deleteTask(task.id);

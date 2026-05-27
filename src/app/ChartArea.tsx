@@ -110,9 +110,8 @@ export function ChartArea() {
         <div className="empty-state">
           <div className="empty-title">Your chart is empty</div>
           <div className="empty-hint">
-            Pick the <kbd>T</kbd> task tool and click anywhere on the canvas, or press <kbd>V</kbd>
-            <kbd>T</kbd> <kbd>Y</kbd> <kbd>H</kbd> <kbd>R</kbd> to switch tools.
-            Wheel to zoom. <kbd>Shift</kbd>+wheel to pan.
+            Press <kbd>⌘</kbd><kbd>K</kbd> for the command palette &mdash; or pick the <kbd>T</kbd> task tool
+            and click anywhere on the canvas. Templates: <kbd>⌘</kbd><kbd>K</kbd> → "template".
           </div>
         </div>
       )}

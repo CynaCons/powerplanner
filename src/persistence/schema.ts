@@ -73,6 +73,9 @@ export function validateDocument(input: unknown): GanttDocument {
     if (t.percentComplete !== undefined && (!isNumber(t.percentComplete) || t.percentComplete < 0 || t.percentComplete > 100)) {
       throw new SchemaError(`tasks[${i}].percentComplete out of range`);
     }
+    if (t.notes !== undefined && !isString(t.notes)) {
+      throw new SchemaError(`tasks[${i}].notes must be string`);
+    }
   });
 
   const milestones = (input as { milestones?: unknown }).milestones;

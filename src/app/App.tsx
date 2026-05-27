@@ -7,6 +7,7 @@ import { RestoreBanner } from './RestoreBanner';
 import { ToolPalette } from './ToolPalette';
 import { ChartContextMenu } from './ChartContextMenu';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
+import { CommandPalette } from './CommandPalette';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
@@ -21,6 +22,7 @@ export function App() {
   const didHydrate = useRef(false);
   const [pendingRestore, setPendingRestore] = useState<GanttDocument | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -62,6 +64,11 @@ export function App() {
         e.preventDefault();
         setShortcutsOpen((v) => !v);
       }
+      // Cmd/Ctrl+K opens the command palette
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -90,6 +97,7 @@ export function App() {
       )}
       <ChartContextMenu />
       <ShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }
