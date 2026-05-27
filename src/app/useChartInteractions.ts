@@ -4,15 +4,28 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useEditStore } from '../stores/editStore';
+import { useToolStore } from '../stores/toolStore';
 import { xToDate } from '../layout/timeAxis';
 import { addDays, diffDays } from '../utils/dates';
 import { snapDelta } from '../utils/snap';
+import { newId } from '../utils/ids';
+import type { LayoutResult } from '../layout/engine';
 
 interface InteractionOptions {
   svgRef: RefObject<SVGSVGElement | null>;
   chartWidth: number;
   rowGutterWidth: number;
   axisHeight: number;
+  layout: LayoutResult;
+}
+
+function rowAtY(yInChart: number, layout: LayoutResult): string | null {
+  for (let i = 0; i < layout.rowOffsets.length; i++) {
+    const top = layout.rowOffsets[i];
+    const bottom = top + layout.rowHeights[i];
+    if (yInChart >= top && yInChart < bottom) return layout.visibleRows[i].id;
+  }
+  return null;
 }
 
 export type DragKind =
@@ -55,7 +68,7 @@ export interface DragPreviewMap {
   brackets: Map<string, { start: string; end: string }>;
 }
 
-export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight }: InteractionOptions) {
+export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layout }: InteractionOptions) {
   const dragRef = useRef<DragState | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
   const [, forceRender] = useState(0);
@@ -73,18 +86,18 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight }: Int
 
   const handleWheel = useCallback(
     (e: ReactWheelEvent<SVGSVGElement>) => {
-      if (e.ctrlKey || e.metaKey) {
+      // Default: wheel = zoom anchored at cursor (Figma/Linear convention)
+      // Shift+wheel = horizontal pan
+      // Ctrl/Meta still zooms (browser default would zoom anyway)
+      if (e.shiftKey) {
+        e.preventDefault();
+        useViewportStore.getState().pan(-e.deltaY);
+      } else {
         e.preventDefault();
         const { x } = getSvgPoint(e.clientX, e.clientY);
         const anchorX = Math.max(0, x - rowGutterWidth);
         const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
         useViewportStore.getState().zoom(factor, anchorX);
-      } else if (e.shiftKey) {
-        e.preventDefault();
-        useViewportStore.getState().pan(-e.deltaY);
-      } else {
-        e.preventDefault();
-        useViewportStore.getState().pan(-e.deltaX || -e.deltaY);
       }
     },
     [getSvgPoint, rowGutterWidth],
@@ -103,7 +116,59 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight }: Int
       if (!datasetEl && x < rowGutterWidth) return;
 
       if (!datasetEl) {
-        // Pan
+        const tool = useToolStore.getState();
+        const xInChart = x - rowGutterWidth;
+        const { y: yAbs } = getSvgPoint(e.clientX, e.clientY);
+        const yInChart = yAbs - axisHeight;
+
+        // Tool-aware background click
+        if (tool.activeTool === 'add-task' || tool.activeTool === 'add-milestone') {
+          const date = xToDate(xInChart, view.startDate, view.pxPerDay);
+          const rowId = rowAtY(yInChart, layout) ?? layout.visibleRows[0]?.id;
+          if (rowId) {
+            if (tool.activeTool === 'add-task') {
+              const newTaskId = newId('task');
+              doc.tasks; // typescript no-op
+              const stores = useDocumentStore.getState();
+              stores.addTask({
+                id: newTaskId,
+                rowId,
+                label: 'New task',
+                start: date,
+                end: addDays(date, 7),
+                percentComplete: 0,
+              });
+              useSelectionStore.getState().setSelection([{ kind: 'task', id: newTaskId }]);
+            } else {
+              const newMsId = newId('ms');
+              useDocumentStore.getState().addMilestone({ id: newMsId, rowId, label: 'New milestone', date });
+              useSelectionStore.getState().setSelection([{ kind: 'milestone', id: newMsId }]);
+            }
+            tool.consumeOneShot();
+          }
+          return;
+        }
+
+        if (tool.activeTool === 'marquee') {
+          dragRef.current = {
+            kind: 'lasso',
+            startClientX: e.clientX,
+            startClientY: e.clientY,
+            lassoStartX: xInChart,
+            lassoStartY: yInChart,
+            lassoCurrentX: xInChart,
+            lassoCurrentY: yInChart,
+            deltaDays: 0,
+          };
+          attachWindowListeners(handleWindowMove, handleWindowUp);
+          return;
+        }
+
+        if (tool.activeTool === 'select') {
+          useSelectionStore.getState().clear();
+        }
+
+        // Pan (default fallback OR explicit pan tool)
         dragRef.current = {
           kind: 'pan',
           startClientX: e.clientX,
@@ -253,6 +318,16 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight }: Int
       return;
     }
 
+    if (state.kind === 'lasso') {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      state.lassoCurrentX = e.clientX - rect.left - rowGutterWidth;
+      state.lassoCurrentY = e.clientY - rect.top - axisHeight;
+      triggerRender();
+      return;
+    }
+
     state.deltaDays = dDays;
     const next: DragPreviewMap = { tasks: new Map(), milestones: new Map(), brackets: new Map() };
 
@@ -296,6 +371,28 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight }: Int
     const edit = useEditStore.getState();
     const scale = docStore.doc.calendar.scale;
     const snappedDelta = edit.snapEnabled ? snapDelta(state.deltaDays, scale) : state.deltaDays;
+
+    if (state.kind === 'lasso') {
+      const x0 = Math.min(state.lassoStartX!, state.lassoCurrentX!);
+      const x1 = Math.max(state.lassoStartX!, state.lassoCurrentX!);
+      const y0 = Math.min(state.lassoStartY!, state.lassoCurrentY!);
+      const y1 = Math.max(state.lassoStartY!, state.lassoCurrentY!);
+      const sel = useSelectionStore.getState();
+      sel.clear();
+      for (const t of layout.tasks) {
+        if (t.x + t.width >= x0 && t.x <= x1 && t.y + t.height >= y0 && t.y <= y1) {
+          sel.add({ kind: 'task', id: t.task.id });
+        }
+      }
+      for (const m of layout.milestones) {
+        if (m.x >= x0 && m.x <= x1 && m.y >= y0 && m.y <= y1) {
+          sel.add({ kind: 'milestone', id: m.milestone.id });
+        }
+      }
+      useToolStore.getState().consumeOneShot();
+      triggerRender();
+      return;
+    }
 
     if (state.kind === 'dep-create' && state.depSourceTaskId) {
       // Check if drop target is a task
@@ -348,7 +445,8 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight }: Int
   }, [handleWindowMove]);
 
   const depDrag = dragRef.current?.kind === 'dep-create' ? dragRef.current : null;
-  return { handleSvgMouseDown, handleWheel, dragPreview, xToDate, depDrag };
+  const lassoDrag = dragRef.current?.kind === 'lasso' ? dragRef.current : null;
+  return { handleSvgMouseDown, handleWheel, dragPreview, xToDate, depDrag, lassoDrag };
 }
 
 let attached = false;

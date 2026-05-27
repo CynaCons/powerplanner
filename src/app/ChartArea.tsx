@@ -16,6 +16,7 @@ import { Markers } from '../renderer/Markers';
 import { RowGutter } from '../renderer/RowGutter';
 import { useChartInteractions } from './useChartInteractions';
 import { ConnectorOverlay } from './ConnectorOverlay';
+import { useToolStore, cursorForTool } from '../stores/toolStore';
 
 const AXIS_TOTAL_H = 56;
 const ROW_GUTTER_W_BASE = 200;
@@ -92,12 +93,14 @@ export function ChartArea() {
     return stripes;
   }, [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.workingDays]);
 
-  const { handleSvgMouseDown, handleWheel, dragPreview, depDrag } = useChartInteractions({
+  const { handleSvgMouseDown, handleWheel, dragPreview, depDrag, lassoDrag } = useChartInteractions({
     svgRef,
     chartWidth,
     rowGutterWidth: ROW_GUTTER_W,
     axisHeight: AXIS_TOTAL_H,
+    layout,
   });
+  const activeTool = useToolStore((s) => s.activeTool);
 
   const isEmpty = doc.tasks.length === 0 && doc.milestones.length === 0 && doc.brackets.length === 0;
 
@@ -105,8 +108,12 @@ export function ChartArea() {
     <div ref={containerRef} className="chart-area" onMouseDown={(e) => { if (e.target === e.currentTarget) clear(); }}>
       {isEmpty && (
         <div className="empty-state">
-          <div className="empty-title">No items on the chart yet</div>
-          <div className="empty-hint">Press <kbd>N</kbd> for a task, <kbd>M</kbd> for a milestone, <kbd>B</kbd> for a bracket from selection.</div>
+          <div className="empty-title">Your chart is empty</div>
+          <div className="empty-hint">
+            Pick the <kbd>T</kbd> task tool and click anywhere on the canvas, or press <kbd>V</kbd>
+            <kbd>T</kbd> <kbd>Y</kbd> <kbd>H</kbd> <kbd>R</kbd> to switch tools.
+            Wheel to zoom. <kbd>Shift</kbd>+wheel to pan.
+          </div>
         </div>
       )}
       <svg
@@ -115,7 +122,7 @@ export function ChartArea() {
         height={size.height}
         onMouseDown={handleSvgMouseDown}
         onWheel={handleWheel}
-        style={{ display: 'block', cursor: dragPreview ? 'grabbing' : 'default', userSelect: 'none' }}
+        style={{ display: 'block', cursor: dragPreview ? 'grabbing' : cursorForTool(activeTool), userSelect: 'none' }}
       >
         {/* Background */}
         <rect x={0} y={0} width={size.width} height={size.height} fill="var(--color-bg)" />
@@ -159,17 +166,24 @@ export function ChartArea() {
         </defs>
 
         <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H})`} clipPath="url(#chart-clip)">
-          {/* Today line */}
+          {/* Today line + pill label */}
           {showToday && (
-            <line
-              x1={todayX}
-              y1={0}
-              x2={todayX}
-              y2={layout.chartHeight}
-              stroke="var(--color-today)"
-              strokeWidth={1.5}
-              strokeDasharray="4 3"
-            />
+            <g pointerEvents="none">
+              <line
+                x1={todayX}
+                y1={0}
+                x2={todayX}
+                y2={layout.chartHeight}
+                stroke="var(--color-today)"
+                strokeWidth={1.5}
+              />
+              <g transform={`translate(${todayX - 22} -2)`}>
+                <rect x={0} y={-14} width={44} height={14} rx={3} fill="var(--color-today)" />
+                <text x={22} y={-3} textAnchor="middle" fontSize={9} fontWeight={600} fill="white" letterSpacing={0.3}>
+                  TODAY
+                </text>
+              </g>
+            </g>
           )}
 
           <Brackets layout={layout} />
@@ -184,6 +198,19 @@ export function ChartArea() {
               fromY={depDrag.depStartY!}
               toX={depDrag.depCurrentX}
               toY={depDrag.depCurrentY!}
+            />
+          )}
+          {lassoDrag && lassoDrag.lassoStartX != null && lassoDrag.lassoCurrentX != null && (
+            <rect
+              x={Math.min(lassoDrag.lassoStartX, lassoDrag.lassoCurrentX)}
+              y={Math.min(lassoDrag.lassoStartY!, lassoDrag.lassoCurrentY!)}
+              width={Math.abs(lassoDrag.lassoCurrentX - lassoDrag.lassoStartX)}
+              height={Math.abs(lassoDrag.lassoCurrentY! - lassoDrag.lassoStartY!)}
+              fill="var(--color-accent)"
+              fillOpacity={0.1}
+              stroke="var(--color-accent)"
+              strokeDasharray="3 3"
+              pointerEvents="none"
             />
           )}
         </g>

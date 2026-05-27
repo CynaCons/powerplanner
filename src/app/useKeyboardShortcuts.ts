@@ -3,6 +3,7 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
+import { useToolStore } from '../stores/toolStore';
 import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 
@@ -22,6 +23,7 @@ export function useKeyboardShortcuts() {
       const sel = useSelectionStore.getState();
       const view = useViewportStore.getState();
       const edit = useEditStore.getState();
+      const tool = useToolStore.getState();
 
       const meta = e.metaKey || e.ctrlKey;
       if (meta && e.key.toLowerCase() === 'z' && !e.shiftKey) {
@@ -91,7 +93,46 @@ export function useKeyboardShortcuts() {
       if (e.key === 'Escape') {
         sel.clear();
         edit.endEdit();
+        if (tool.activeTool !== 'select') tool.setTool('select', true);
         return;
+      }
+      // Tool switching (Figma-style single-letter)
+      if (!meta && !e.shiftKey) {
+        if (e.key.toLowerCase() === 'v') {
+          e.preventDefault();
+          tool.setTool('select', true);
+          return;
+        }
+        if (e.key.toLowerCase() === 't') {
+          e.preventDefault();
+          tool.setTool('add-task', true);
+          return;
+        }
+        if (e.key.toLowerCase() === 'y') {
+          e.preventDefault();
+          tool.setTool('add-milestone', true);
+          return;
+        }
+        if (e.key.toLowerCase() === 'h') {
+          e.preventDefault();
+          tool.setTool('pan', true);
+          return;
+        }
+        if (e.key.toLowerCase() === 'r') {
+          e.preventDefault();
+          tool.setTool('marquee', true);
+          return;
+        }
+      }
+      // Linear-style scale shortcuts (Shift+letter to avoid clashing with tools)
+      if (e.shiftKey && !meta) {
+        const scaleKey = e.key.toLowerCase();
+        if (scaleKey === 'd' || scaleKey === 'w' || scaleKey === 'm' || scaleKey === 'q' || scaleKey === 'y') {
+          const scaleMap = { d: 'day', w: 'week', m: 'month', q: 'quarter', y: 'year' } as const;
+          e.preventDefault();
+          docStore.setScale(scaleMap[scaleKey as keyof typeof scaleMap]);
+          return;
+        }
       }
       if (e.key === '+' || e.key === '=') {
         e.preventDefault();

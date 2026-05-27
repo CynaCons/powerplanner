@@ -4,6 +4,7 @@ import { Inspector } from './Inspector';
 import { Header } from './Header';
 import { StatusBar } from './StatusBar';
 import { RestoreBanner } from './RestoreBanner';
+import { ToolPalette } from './ToolPalette';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
@@ -63,6 +64,7 @@ export function App() {
       <Header />
       <Inspector />
       <ChartArea />
+      <ToolPalette />
       <StatusBar />
       {pendingRestore && (
         <RestoreBanner
