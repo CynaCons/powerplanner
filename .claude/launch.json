@@ -12,6 +12,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["serve", "-s", "dist-template", "-p", "5180", "--no-clipboard"],
       "port": 5180
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-s", "site", "-p", "5190", "--no-clipboard"],
+      "port": 5190
     }
   ]
 }
