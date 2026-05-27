@@ -1,25 +1,28 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChartArea } from './ChartArea';
 import { Inspector } from './Inspector';
 import { Header } from './Header';
 import { StatusBar } from './StatusBar';
+import { RestoreBanner } from './RestoreBanner';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
-import { loadAutosave, saveAutosave } from '../persistence/autosave';
+import { loadAutosave, saveAutosave, clearAutosave } from '../persistence/autosave';
 import { saveToFile } from '../persistence/fileIo';
+import type { GanttDocument } from '../types/document';
 
 export function App() {
   const theme = useDocumentStore((s) => s.doc.style.theme);
   const doc = useDocumentStore((s) => s.doc);
   const setDocument = useDocumentStore((s) => s.setDocument);
   const didHydrate = useRef(false);
+  const [pendingRestore, setPendingRestore] = useState<GanttDocument | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
-  // Hydrate from embedded data, autosave, or keep sample
+  // Hydrate from embedded data, or offer to restore autosave non-blockingly
   useEffect(() => {
     if (didHydrate.current) return;
     didHydrate.current = true;
@@ -30,8 +33,7 @@ export function App() {
     }
     const auto = loadAutosave();
     if (auto) {
-      const restore = confirm('Restore previous unsaved session?');
-      if (restore) setDocument(auto);
+      setPendingRestore(auto);
     }
   }, [setDocument]);
 
@@ -62,6 +64,18 @@ export function App() {
       <Inspector />
       <ChartArea />
       <StatusBar />
+      {pendingRestore && (
+        <RestoreBanner
+          onRestore={() => {
+            setDocument(pendingRestore);
+            setPendingRestore(null);
+          }}
+          onDismiss={() => {
+            clearAutosave();
+            setPendingRestore(null);
+          }}
+        />
+      )}
     </div>
   );
 }

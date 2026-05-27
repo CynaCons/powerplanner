@@ -2,7 +2,7 @@
 
 ## Quick Summary
 
-**Current Version:** v1.0.0 — **PUBLIC RELEASE** 🎉 Single-file portable HTML shipped
+**Current Version:** v1.0.1 — **PUBLIC RELEASE** 🎉 Single-file portable HTML
 **Next Milestone:** v0.6.x — PowerNote integration
 
 ### Recent Achievements
@@ -11,6 +11,7 @@
 - ✅ v0.3.0 — Gantt vocabulary: drag-to-create dependencies with connector overlay, bracket button (creates from selection), deadline marker button, summary rows from groupId with collapse/expand, free-form marker selection/deletion
 - ✅ v0.4.0 — Layout & UX polish: axis label thinning, responsive row gutter, label collision fallback (on-bar → right), hover state on bars, empty state, light/dark/print themes, responsive toolbar (icon-only on narrow), print stylesheet, milestone label placement
 - ✅ **v1.0.0** — Persistence & portable HTML PUBLIC RELEASE: schema validation, YAML serializer/parser with roundtrip tests, autosave to localStorage, embedded-data Ctrl+S, File menu (Save / Save as / Open / Export JSON/YAML/SVG/PNG / Print), single-file build → `PowerPlanner.html` with inlined favicon, Playwright E2E smoke tests, 22 unit tests + 3 E2E tests passing
+- ✅ v1.0.1 — Replace blocking `confirm()` autosave restore with non-blocking RestoreBanner component (top-center, Restore + Dismiss)
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).
