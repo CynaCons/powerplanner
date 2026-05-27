@@ -173,38 +173,85 @@ kbd {
   background: var(--color-bg-panel);
 }
 .app-header .brand {
-  font-weight: 600;
-  letter-spacing: -0.2px;
   display: flex;
   align-items: center;
   gap: 10px;
+  color: var(--color-text);
 }
-.app-header .brand-mark {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, #6366f1, #ec4899 50%, #f97316);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 1px 2px rgba(0, 0, 0, 0.3);
+.app-header .brand__sep {
+  width: 1px;
+  height: 18px;
+  background: var(--color-border-hairline);
+  margin: 0 4px;
 }
-.app-header .brand input { font-weight: 500; font-size: 13px; }
+.title-chip {
+  width: 240px;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.1px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--color-text);
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+.title-chip::placeholder { color: var(--color-text-dim); font-weight: 400; }
+.title-chip:hover {
+  background: var(--color-bg-subtle);
+  border-color: var(--color-border-hairline);
+}
+.title-chip:focus {
+  background: var(--color-bg-subtle);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+  outline: none;
+}
+
 .app-header .toolbar {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-.app-header .toolbar button {
-  padding: 4px 8px;
+.app-header__cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: 8px;
+}
+.app-header__btn {
+  padding: 4px 9px;
   font-size: 12px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--color-text-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
 }
-.app-header .toolbar button:hover { color: var(--color-text); }
-@media (max-width: 980px) {
-  .app-header .toolbar button.label-hideable span { display: none; }
+.app-header__btn:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-bg-panel);
+}
+.app-header__btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.app-header__btn.is-active {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.app-header__btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+@media (max-width: 1080px) {
+  .app-header__btn.label-hideable span { display: none; }
 }
 
 /* Inspector */

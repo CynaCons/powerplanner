@@ -23,7 +23,8 @@ test.describe('PowerPlanner smoke', () => {
 
   test('changes theme to light', async ({ page }) => {
     await page.goto('/');
-    await page.locator('.inspector select').nth(2).selectOption('light');
+    // Theme is a segmented radio control; click the Light option in the Appearance section
+    await page.locator('.inspector [role="radio"]:has-text("Light")').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
 });

@@ -1,11 +1,23 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
-import { Undo2, Redo2, Plus, Maximize2, Diamond, Magnet, Rows3, Brackets as BracketIcon, Flag, HelpCircle } from 'lucide-react';
+import {
+  Undo2,
+  Redo2,
+  Plus,
+  Maximize2,
+  Diamond,
+  Magnet,
+  Rows3,
+  Brackets as BracketIcon,
+  Flag,
+  HelpCircle,
+} from 'lucide-react';
 import { useSelectionStore } from '../stores/selectionStore';
 import { newId } from '../utils/ids';
 import { todayISO, addDays } from '../utils/dates';
 import { ExportMenu } from './ExportMenu';
+import { BrandLogo } from './BrandLogo';
 
 export function Header() {
   const title = useDocumentStore((s) => s.doc.title);
@@ -67,7 +79,13 @@ export function Header() {
     const tasks = doc.tasks.filter((t) => selectedTaskIds.includes(t.id));
     if (tasks.length === 0) {
       const today = todayISO();
-      addBracket({ id: newId('br'), label: 'Phase', start: today, end: addDays(today, 14), rowIds: rows.length > 0 ? [rows[0].id] : [] });
+      addBracket({
+        id: newId('br'),
+        label: 'Phase',
+        start: today,
+        end: addDays(today, 14),
+        rowIds: rows.length > 0 ? [rows[0].id] : [],
+      });
       return;
     }
     const start = tasks.reduce((a, t) => (t.start < a ? t.start : a), tasks[0].start);
@@ -83,57 +101,112 @@ export function Header() {
   return (
     <header className="app-header">
       <div className="brand">
-        <span className="brand-mark" />
-        <span>PowerPlanner</span>
-        <input
-          aria-label="Chart title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          style={{ marginLeft: 16, width: 240, background: 'transparent', border: 'none' }}
-        />
+        <BrandLogo variant="full" size={22} />
+        <div className="brand__sep" aria-hidden="true" />
+        <TitleChip title={title} onChange={setTitle} />
       </div>
+
       <div className="toolbar">
-        <button onClick={onAddTask} title="Add task (N)" className="icon-btn label-hideable">
-          <Plus size={14} /> <span>Task</span>
-        </button>
-        <button onClick={onAddMilestone} title="Add milestone (M)" className="icon-btn label-hideable">
-          <Diamond size={14} /> <span>Milestone</span>
-        </button>
-        <button onClick={onAddBracket} title="Add bracket from selection (B)" className="icon-btn label-hideable">
-          <BracketIcon size={14} /> <span>Bracket</span>
-        </button>
-        <button onClick={onAddDeadline} title="Add deadline marker" className="icon-btn label-hideable">
-          <Flag size={14} /> <span>Deadline</span>
-        </button>
-        <button onClick={onAddRow} title="Add row" className="icon-btn label-hideable">
-          <Rows3 size={14} /> <span>Row</span>
-        </button>
-        <button
-          onClick={() => setSnap(!snapEnabled)}
-          title="Toggle snap to scale (S)"
-          className="icon-btn label-hideable"
-          style={{ background: snapEnabled ? 'var(--color-accent-soft)' : undefined, color: snapEnabled ? 'white' : undefined }}
-        >
-          <Magnet size={14} /> <span>Snap</span>
-        </button>
-        <button onClick={onFit} title="Fit to data (Home)" className="icon-btn label-hideable">
-          <Maximize2 size={14} /> <span>Fit</span>
-        </button>
-        <button onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)" className="icon-btn">
-          <Undo2 size={14} />
-        </button>
-        <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" className="icon-btn">
-          <Redo2 size={14} />
-        </button>
-        <button
+        <Cluster>
+          <IconBtn onClick={onAddTask} title="Add task (T)" icon={<Plus size={14} strokeWidth={1.75} />} label="Task" />
+          <IconBtn
+            onClick={onAddMilestone}
+            title="Add milestone (Y)"
+            icon={<Diamond size={14} strokeWidth={1.75} />}
+            label="Milestone"
+          />
+          <IconBtn
+            onClick={onAddBracket}
+            title="Add bracket from selection (B)"
+            icon={<BracketIcon size={14} strokeWidth={1.75} />}
+            label="Bracket"
+          />
+          <IconBtn
+            onClick={onAddDeadline}
+            title="Add deadline marker"
+            icon={<Flag size={14} strokeWidth={1.75} />}
+            label="Deadline"
+          />
+          <IconBtn onClick={onAddRow} title="Add row" icon={<Rows3 size={14} strokeWidth={1.75} />} label="Row" />
+        </Cluster>
+
+        <Cluster>
+          <IconBtn
+            onClick={() => setSnap(!snapEnabled)}
+            title="Toggle snap to scale (S)"
+            icon={<Magnet size={14} strokeWidth={1.75} />}
+            label="Snap"
+            active={snapEnabled}
+          />
+          <IconBtn onClick={onFit} title="Fit to data (Home)" icon={<Maximize2 size={14} strokeWidth={1.75} />} label="Fit" />
+        </Cluster>
+
+        <Cluster>
+          <IconBtn
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            icon={<Undo2 size={14} strokeWidth={1.75} />}
+          />
+          <IconBtn
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo (Ctrl+Shift+Z)"
+            icon={<Redo2 size={14} strokeWidth={1.75} />}
+          />
+        </Cluster>
+
+        <IconBtn
           onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true }))}
           title="Keyboard shortcuts (?)"
-          className="icon-btn"
-        >
-          <HelpCircle size={14} />
-        </button>
+          icon={<HelpCircle size={14} strokeWidth={1.75} />}
+        />
         <ExportMenu />
       </div>
     </header>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* sub-components                                                      */
+/* ------------------------------------------------------------------ */
+
+function TitleChip({ title, onChange }: { title: string; onChange: (v: string) => void }) {
+  return (
+    <input
+      aria-label="Chart title"
+      value={title}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="Untitled plan"
+      className="title-chip"
+    />
+  );
+}
+
+function Cluster({ children }: { children: React.ReactNode }) {
+  return <div className="app-header__cluster">{children}</div>;
+}
+
+interface IconBtnProps {
+  onClick?: () => void;
+  title?: string;
+  icon: React.ReactNode;
+  label?: string;
+  disabled?: boolean;
+  active?: boolean;
+}
+
+function IconBtn({ onClick, title, icon, label, disabled, active }: IconBtnProps) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-pressed={active}
+      className={`app-header__btn ${label ? 'label-hideable' : ''} ${active ? 'is-active' : ''}`}
+    >
+      {icon}
+      {label && <span>{label}</span>}
+    </button>
   );
 }
