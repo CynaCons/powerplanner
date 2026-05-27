@@ -48,6 +48,17 @@ export function visibleEnd(viewStart: ISODate, pxPerDay: number, widthPx: number
   return addDays(viewStart, days);
 }
 
+function thinTicks(level: AxisLevel, minSpacingPx: number): AxisLevel {
+  if (level.ticks.length <= 1) return level;
+  const kept: AxisTick[] = [level.ticks[0]];
+  for (let i = 1; i < level.ticks.length; i++) {
+    if (level.ticks[i].x - kept[kept.length - 1].x >= minSpacingPx) {
+      kept.push(level.ticks[i]);
+    }
+  }
+  return { ticks: kept, height: level.height };
+}
+
 export function buildAxis(
   viewStart: ISODate,
   pxPerDay: number,
@@ -56,35 +67,49 @@ export function buildAxis(
   fiscalYearStart: number,
 ): AxisLayout {
   const end = visibleEnd(viewStart, pxPerDay, widthPx);
+  let result: AxisLayout;
 
   switch (scale) {
     case 'day':
-      return {
+      result = {
         major: monthTicks(viewStart, end, pxPerDay),
         minor: weekTicks(viewStart, end, pxPerDay),
         micro: dayTicks(viewStart, end, pxPerDay),
       };
+      break;
     case 'week':
-      return {
+      result = {
         major: monthTicks(viewStart, end, pxPerDay),
         minor: weekTicks(viewStart, end, pxPerDay),
       };
+      break;
     case 'month':
-      return {
+      result = {
         major: quarterTicks(viewStart, end, pxPerDay, fiscalYearStart),
         minor: monthTicks(viewStart, end, pxPerDay),
       };
+      break;
     case 'quarter':
-      return {
+      result = {
         major: yearTicks(viewStart, end, pxPerDay, fiscalYearStart),
         minor: quarterTicks(viewStart, end, pxPerDay, fiscalYearStart),
       };
+      break;
     case 'year':
-      return {
+      result = {
         major: yearTicks(viewStart, end, pxPerDay, fiscalYearStart),
         minor: yearTicks(viewStart, end, pxPerDay, fiscalYearStart),
       };
+      break;
   }
+
+  // Skip overlapping labels based on actual pxPerDay
+  result.major = thinTicks(result.major, 60);
+  result.minor = thinTicks(result.minor, 36);
+  if (result.micro) {
+    result.micro = thinTicks(result.micro, 16);
+  }
+  return result;
 }
 
 function dayTicks(start: ISODate, end: ISODate, pxPerDay: number): AxisLevel {

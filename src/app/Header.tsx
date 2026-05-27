@@ -1,7 +1,7 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
-import { Undo2, Redo2, Plus, Calendar, Maximize2, Diamond, Magnet, Rows3, Brackets as BracketIcon, Flag } from 'lucide-react';
+import { Undo2, Redo2, Plus, Maximize2, Diamond, Magnet, Rows3, Brackets as BracketIcon, Flag } from 'lucide-react';
 import { useSelectionStore } from '../stores/selectionStore';
 import { newId } from '../utils/ids';
 import { todayISO, addDays } from '../utils/dates';
@@ -34,8 +34,9 @@ export function Header() {
     const min = dates.reduce((a, b) => (a < b ? a : b));
     const max = dates.reduce((a, b) => (a > b ? a : b));
     const chartArea = document.querySelector('.chart-area');
-    const width = (chartArea?.clientWidth ?? 800) - 200;
-    fit(min, max, Math.max(200, width));
+    const totalWidth = chartArea?.clientWidth ?? 800;
+    const gutter = totalWidth < 600 ? 120 : 200;
+    fit(min, max, Math.max(100, totalWidth - gutter));
   };
 
   const onAddTask = () => {
@@ -87,35 +88,35 @@ export function Header() {
           aria-label="Chart title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          style={{ marginLeft: 16, width: 280, background: 'transparent', border: 'none' }}
+          style={{ marginLeft: 16, width: 240, background: 'transparent', border: 'none' }}
         />
       </div>
       <div className="toolbar">
-        <button onClick={onAddTask} title="Add task (N)" className="icon-btn">
-          <Plus size={14} /> Task
+        <button onClick={onAddTask} title="Add task (N)" className="icon-btn label-hideable">
+          <Plus size={14} /> <span>Task</span>
         </button>
-        <button onClick={onAddMilestone} title="Add milestone (M)" className="icon-btn">
-          <Diamond size={14} /> Milestone
+        <button onClick={onAddMilestone} title="Add milestone (M)" className="icon-btn label-hideable">
+          <Diamond size={14} /> <span>Milestone</span>
         </button>
-        <button onClick={onAddBracket} title="Add bracket from selection (B)" className="icon-btn">
-          <BracketIcon size={14} /> Bracket
+        <button onClick={onAddBracket} title="Add bracket from selection (B)" className="icon-btn label-hideable">
+          <BracketIcon size={14} /> <span>Bracket</span>
         </button>
-        <button onClick={onAddDeadline} title="Add deadline marker" className="icon-btn">
-          <Flag size={14} /> Deadline
+        <button onClick={onAddDeadline} title="Add deadline marker" className="icon-btn label-hideable">
+          <Flag size={14} /> <span>Deadline</span>
         </button>
-        <button onClick={onAddRow} title="Add row" className="icon-btn">
-          <Rows3 size={14} /> Row
+        <button onClick={onAddRow} title="Add row" className="icon-btn label-hideable">
+          <Rows3 size={14} /> <span>Row</span>
         </button>
         <button
           onClick={() => setSnap(!snapEnabled)}
           title="Toggle snap to scale (S)"
-          className="icon-btn"
+          className="icon-btn label-hideable"
           style={{ background: snapEnabled ? 'var(--color-accent-soft)' : undefined, color: snapEnabled ? 'white' : undefined }}
         >
-          <Magnet size={14} /> Snap
+          <Magnet size={14} /> <span>Snap</span>
         </button>
-        <button onClick={onFit} title="Fit to data (Home)" className="icon-btn">
-          <Maximize2 size={14} /> Fit
+        <button onClick={onFit} title="Fit to data (Home)" className="icon-btn label-hideable">
+          <Maximize2 size={14} /> <span>Fit</span>
         </button>
         <button onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)" className="icon-btn">
           <Undo2 size={14} />
@@ -123,9 +124,6 @@ export function Header() {
         <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" className="icon-btn">
           <Redo2 size={14} />
         </button>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--color-text-dim)', marginLeft: 8 }}>
-          <Calendar size={12} /> v0.1
-        </span>
       </div>
     </header>
   );

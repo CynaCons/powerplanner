@@ -18,7 +18,8 @@ import { useChartInteractions } from './useChartInteractions';
 import { ConnectorOverlay } from './ConnectorOverlay';
 
 const AXIS_TOTAL_H = 56;
-const ROW_GUTTER_W = 200;
+const ROW_GUTTER_W_BASE = 200;
+const ROW_GUTTER_W_MIN = 120;
 
 export function ChartArea() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -42,6 +43,9 @@ export function ChartArea() {
     return () => ro.disconnect();
   }, []);
 
+  const ROW_GUTTER_W = size.width < 600 ? ROW_GUTTER_W_MIN : ROW_GUTTER_W_BASE;
+  const chartWidth = Math.max(100, size.width - ROW_GUTTER_W);
+
   // Auto-fit on first load if document has tasks
   const didInitialFit = useRef(false);
   useEffect(() => {
@@ -55,12 +59,9 @@ export function ChartArea() {
     if (dates.length === 0) return;
     const min = dates.reduce((a, b) => (a < b ? a : b));
     const max = dates.reduce((a, b) => (a > b ? a : b));
-    const chartW = Math.max(200, size.width - ROW_GUTTER_W);
-    fit(min, max, chartW);
+    fit(min, max, chartWidth);
     didInitialFit.current = true;
-  }, [size.width, size.height, doc.tasks, doc.milestones, fit]);
-
-  const chartWidth = Math.max(100, size.width - ROW_GUTTER_W);
+  }, [size.width, size.height, doc.tasks, doc.milestones, fit, chartWidth]);
 
   const layout = useMemo(
     () => layoutDocument({ doc, viewStart, pxPerDay }),
@@ -98,8 +99,16 @@ export function ChartArea() {
     axisHeight: AXIS_TOTAL_H,
   });
 
+  const isEmpty = doc.tasks.length === 0 && doc.milestones.length === 0 && doc.brackets.length === 0;
+
   return (
     <div ref={containerRef} className="chart-area" onMouseDown={(e) => { if (e.target === e.currentTarget) clear(); }}>
+      {isEmpty && (
+        <div className="empty-state">
+          <div className="empty-title">No items on the chart yet</div>
+          <div className="empty-hint">Press <kbd>N</kbd> for a task, <kbd>M</kbd> for a milestone, <kbd>B</kbd> for a bracket from selection.</div>
+        </div>
+      )}
       <svg
         ref={svgRef}
         width={size.width}

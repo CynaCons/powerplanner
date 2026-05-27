@@ -44,6 +44,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
           <g key={t.id}>
             {/* Bar body */}
             <rect
+              className="task-bar-body"
               data-pp-kind="task"
               data-pp-id={t.id}
               x={x}
@@ -52,7 +53,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
               height={h}
               rx={4}
               fill={color}
-              opacity={0.85}
+              opacity={selected ? 1 : 0.92}
               style={{ cursor: 'grab' }}
             />
             {/* Percent fill */}
@@ -184,6 +185,11 @@ function LabelText({ text, x, y, barWidth, barHeight, placement }: LabelProps) {
     fill: 'var(--color-text)',
     pointerEvents: 'none' as const,
   };
+  // Estimate text width (very rough: ~6.5px per char at 11px)
+  const estimatedTextWidth = text.length * 6.5;
+  // If on-bar requested but doesn't fit, fall back to right placement
+  const effective = placement === 'on-bar' && estimatedTextWidth > barWidth - 16 ? 'right' : placement;
+  placement = effective;
   if (placement === 'left') {
     return (
       <text x={x - 6} y={y + barHeight / 2 + 4} textAnchor="end" {...baseProps}>

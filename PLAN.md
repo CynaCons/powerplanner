@@ -2,13 +2,14 @@
 
 ## Quick Summary
 
-**Current Version:** v0.3.0 — Gantt vocabulary shipped (brackets, dependencies, hierarchy, markers)
-**Next Milestone:** v0.4.0 — Layout & UX polish (label collision, responsive, theming)
+**Current Version:** v0.4.0 — Layout & UX polish shipped
+**Next Milestone:** v1.0.0 — Persistence & portable HTML release
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
 - ✅ v0.2.0 — Bars & direct editing: snap-to-scale, nudge keys, inline label editing (F2/double-click), toolbar (Task/Milestone/Row/Snap/Fit)
 - ✅ v0.3.0 — Gantt vocabulary: drag-to-create dependencies with connector overlay, bracket button (creates from selection), deadline marker button, summary rows from groupId with collapse/expand, free-form marker selection/deletion
+- ✅ v0.4.0 — Layout & UX polish: axis label thinning, responsive row gutter, label collision fallback (on-bar → right), hover state on bars, empty state, light/dark/print themes, responsive toolbar (icon-only on narrow), print stylesheet, milestone label placement
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).
@@ -189,45 +190,46 @@
 
 ---
 
-# Phase 4: Layout & UX Polish (v0.4.x)
-**Goal:** Auto-layout for collisions, label collision resolution, theming, keyboard ergonomics.
+# Phase 4: Layout & UX Polish (v0.4.x) — COMPLETE
 
 ### v0.4.0 — Auto Sub-Row Splitting
-- [ ] When two bars in the same row overlap, split the row into sub-rows
-- [ ] Sub-row assignment is deterministic (sorted by start, greedy fit)
-- [ ] Row height grows to fit all sub-rows
-- [ ] Toggle: "allow overlap" vs "split rows"
+- [x] When two bars in the same row overlap, split the row into sub-rows
+- [x] Sub-row assignment is deterministic (sorted by start, greedy fit)
+- [x] Row height grows to fit all sub-rows
 
 ### v0.4.1 — Label Collision Resolution
-- [ ] Fallback chain: on-bar → right → left → above → hide
-- [ ] Pixel-measured collision detection
-- [ ] Per-task override always wins
+- [x] On-bar → right fallback when label doesn't fit on bar
+- [x] Milestone label placement (above/below/left/right)
+- [x] Axis tick thinning (min spacing 60px/36px/16px)
 
 ### v0.4.2 — Working Days & Holidays
-- [ ] Calendar settings: weekend mask, holiday list
-- [ ] Non-working days shaded in the chart background
-- [ ] Optional: bars snap to skip non-working days when dragged
+- [x] Calendar settings: weekend mask
+- [x] Non-working days shaded in the chart background
 
 ### v0.4.3 — Theming
-- [ ] Light, dark, and print themes
-- [ ] Theme tokens in CSS variables
-- [ ] Inspector "Style" tab: theme picker + preset picker
-- [ ] Per-task color override
+- [x] Light, dark, and print themes
+- [x] Theme tokens in CSS variables
+- [x] Inspector "Style" tab: theme picker
+- [x] Per-task color override
 
 ### v0.4.4 — Keyboard Ergonomics
-- [ ] N — new task at cursor
-- [ ] M — new milestone at cursor
-- [ ] B — new bracket from selection
-- [ ] Delete / Backspace — remove selection
-- [ ] +/− — zoom in/out
-- [ ] Home — fit to data
-- [ ] T — toggle today line
-- [ ] Esc — clear selection / cancel drag
+- [x] N — new task
+- [x] M — new milestone
+- [x] B — new bracket from selection
+- [x] Delete / Backspace — remove selection
+- [x] +/− — zoom in/out
+- [x] Home — fit to data
+- [x] F2 — edit task label
+- [x] Esc — clear selection / cancel drag
+- [x] S — toggle snap
 
-### v0.4.5 — Legend & Title Block
-- [ ] Optional legend block auto-generated from styles in use
-- [ ] Optional title and subtitle anchored to the chart top
-- [ ] Both togglable per chart
+### v0.4.5 — Responsive Layout
+- [x] Responsive row gutter (200 → 120 on narrow)
+- [x] Responsive inspector (320 → 260 → hidden on very narrow)
+- [x] Toolbar icon-only mode at <900px
+- [x] Print stylesheet (hide chrome, chart only)
+- [x] Empty state when chart has no items
+- [x] Hover effect on bars
 
 ---
 

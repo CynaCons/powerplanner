@@ -22,6 +22,7 @@ export function Milestones({ layout }: Props) {
         const y = lm.y;
         const selected = isSelected(m.id);
         const color = m.color || '#f59e0b';
+        const placement = m.labelPlacement ?? 'right';
         return (
           <g key={m.id}>
             <polygon
@@ -33,18 +34,30 @@ export function Milestones({ layout }: Props) {
               strokeWidth={selected ? 2 : 1}
               style={{ cursor: 'grab' }}
             />
-            <text
-              x={x + SIZE + 4}
-              y={y + 4}
-              fontSize={11}
-              fill="var(--color-text)"
-              pointerEvents="none"
-            >
-              {m.label}
-            </text>
+            <MilestoneLabel x={x} y={y} placement={placement} text={m.label} />
           </g>
         );
       })}
     </g>
   );
+}
+
+interface MlProps {
+  x: number;
+  y: number;
+  text: string;
+  placement: 'on-bar' | 'left' | 'right' | 'above' | 'below' | 'hidden';
+}
+
+function MilestoneLabel({ x, y, text, placement }: MlProps) {
+  if (placement === 'hidden') return null;
+  const baseProps = {
+    fontSize: 11,
+    fill: 'var(--color-text)',
+    pointerEvents: 'none' as const,
+  };
+  if (placement === 'above') return <text x={x} y={y - SIZE - 4} textAnchor="middle" {...baseProps}>{text}</text>;
+  if (placement === 'below') return <text x={x} y={y + SIZE + 12} textAnchor="middle" {...baseProps}>{text}</text>;
+  if (placement === 'left') return <text x={x - SIZE - 4} y={y + 4} textAnchor="end" {...baseProps}>{text}</text>;
+  return <text x={x + SIZE + 4} y={y + 4} {...baseProps}>{text}</text>;
 }
