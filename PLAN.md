@@ -2,8 +2,8 @@
 
 ## Quick Summary
 
-**Current Version:** v2.0.0 — **PUBLIC v2 RELEASE** 🎉
-**Next Milestone:** Phase 6 — PowerNote integration
+**Current Version:** v2.3.0 — PowerPoint add-in alpha (in addition to landing site + PowerNote integration)
+**Next Milestone:** v2.4 — HTTPS dev cert wiring, full Gantt vocabulary in add-in (brackets/baselines/markers), AppSource manifest validation
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
@@ -17,6 +17,9 @@
 - ✅ v1.3.0 — **Visual identity overhaul** ("Engineering Atelier"): new BrandLogo (3 offset bars + Power/Planner wordmark, indigo→violet→coral gradient used ONLY on the brand mark); Header redesigned with title-as-pill chip + grouped button clusters (Add / View / History); Inspector rewritten as elevated section cards with Stripe-style inset top highlight, Segmented controls for Scale (D/W/M/Q/Y) and Theme (Dark/Light/Print), new Statistics section with mono-numeral tiles (Tasks / Milestones / Span / Avg complete) and date-range footer; updated E2E test for new segmented theme control
 - ✅ v1.4.0 — **Command Palette + Templates + Notes**: Linear-grade Cmd+K command palette with fuzzy filter, 8 command groups (Create / Tools / Scale / View / Theme / File / Templates / Edit / Help), grouped sticky headers, arrow-key + Enter navigation, footer count; 5 templates (Product Launch, Two-Week Sprint, Hiring Plan, Marketing Campaign, Blank) loadable from the palette; Task `notes` field (textarea in inspector + schema validation); 9 new unit tests covering template integrity (schema validity, row references, dep references, date ordering); E2E test for Cmd+K command flow
 - ✅ **v2.0.0** — **PRO features + v2 PUBLIC RELEASE**: full Critical Path Method (forward/backward pass, 4 dependency types, per-component scoping, cycle detection, O(V+E)) with 7 unit tests, red-glow highlight when toggled; Baseline snapshot + drift visualization (capture current schedule, show as translucent rail under bars); Minimap overview rail at chart bottom (compact bars + viewport indicator, click-to-pan); commands wired into palette (View: critical path / baseline / minimap toggles; Edit: capture/clear baseline); new useViewStore for view toggles; README rewritten for v2; 38 unit + 4 E2E tests all passing
+- ✅ v2.1.0 — Landing page at `cynacons.github.io/powerplanner` (Engineering Atelier Editorial Edition): hand-crafted animated SVG Gantt hero, stat strip with count-up numerals, 4-step how-it-works, 3×3 feature grid, 3-card comparison fold, 12-row shortcuts showcase, pricing strip with gradient word, GitHub Actions auto-deploy from `/site`
+- ✅ v2.2.0 — Embeddable Gantt renderer (`src/embed/` barrel) + PowerNote integration: self-contained `<GanttRenderer document width height options>` with no store coupling; vendored into PowerNote at `src/vendor/powerplanner/`; new `'gantt'` node type, `GanttNode.tsx`, NavRail button, click-to-place handler creating a sample chart
+- ✅ v2.3.0 — PowerPoint add-in (alpha): Office.js manifest XML, second Vite entry (`taskpane.html`), `src/taskpane/{main,TaskPaneApp,officeBridge}.tsx`; "Insert into slide" emits native rectangles for tasks, diamonds for milestones, elbow connectors for dependencies, text boxes for row labels + title; full JSON round-trip via `PP_DOC` tag on chart group; npm scripts `addin:certs/start/stop/validate`; docs at `docs/powerpoint-addin.md`
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).
