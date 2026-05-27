@@ -7,10 +7,10 @@ test.describe('PowerPlanner smoke', () => {
     await expect(page.locator('.app-header').getByText('PowerPlanner')).toBeVisible();
     // Inspector visible (in desktop viewport)
     await expect(page.locator('.inspector')).toBeVisible();
-    // SVG renders
-    await expect(page.locator('.chart-area svg')).toBeVisible();
+    // Chart SVG renders (first svg = main chart, second = minimap)
+    await expect(page.locator('.chart-area > svg').first()).toBeVisible();
     // Sample tasks rendered
-    await expect(page.locator('text=Wireframes')).toBeVisible();
+    await expect(page.locator('text=Wireframes').first()).toBeVisible();
     // Status bar shows task count
     await expect(page.locator('.app-status')).toContainText('6 tasks');
   });

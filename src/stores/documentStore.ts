@@ -41,6 +41,9 @@ interface DocumentState {
   updateRow: (id: string, patch: Partial<Row>) => void;
   deleteRow: (id: string) => void;
 
+  captureBaseline: () => void;
+  clearBaseline: () => void;
+
   undo: () => void;
   redo: () => void;
   canUndo: () => boolean;
@@ -118,6 +121,19 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       tasks: d.tasks.filter((t) => t.rowId !== id),
       milestones: d.milestones.filter((m) => m.rowId !== id),
     })),
+
+  captureBaseline: () => mutate(set, (d) => ({
+    ...d,
+    baseline: {
+      capturedAt: new Date().toISOString().slice(0, 10),
+      tasks: d.tasks.map((t) => ({ id: t.id, start: t.start, end: t.end })),
+    },
+  })),
+  clearBaseline: () => mutate(set, (d) => {
+    const next = { ...d };
+    delete next.baseline;
+    return next;
+  }),
 
   undo: () => {
     const s = get();

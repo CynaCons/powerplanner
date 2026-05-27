@@ -4,6 +4,7 @@ import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
 import { useToolStore, type Tool } from '../stores/toolStore';
 import { useSelectionStore } from '../stores/selectionStore';
+import { useViewStore } from '../stores/viewStore';
 import { saveToFile, openFile, exportJson, exportYaml, exportSvg, exportPng } from '../persistence/fileIo';
 import { TEMPLATES } from '../utils/templates';
 import { todayISO, addDays } from '../utils/dates';
@@ -34,6 +35,9 @@ import {
   Undo2,
   Redo2,
   Trash2,
+  Zap,
+  GitCompare,
+  Map as MapIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -355,10 +359,34 @@ function useCommands(close: () => void): Command[] {
   cmds.push({ id: 'scale-y', label: 'Scale: Year', group: 'Scale', icon: CalendarDays, shortcut: '⇧Y', run: run(() => setScale('year')) });
 
   // VIEW
+  const vw = useViewStore.getState();
   cmds.push({ id: 'view-fit', label: 'Fit chart to data', group: 'View', icon: Maximize2, shortcut: 'Home', run: run(fitAll) });
   cmds.push({ id: 'view-snap', label: edit.snapEnabled ? 'Turn snap off' : 'Turn snap on', group: 'View', icon: Magnet, shortcut: 'S', keywords: 'snap toggle', run: run(() => useEditStore.getState().setSnap(!useEditStore.getState().snapEnabled)) });
   cmds.push({ id: 'view-zoom-in', label: 'Zoom in', group: 'View', shortcut: '+', run: run(() => view.zoom(1.25, 400)) });
   cmds.push({ id: 'view-zoom-out', label: 'Zoom out', group: 'View', shortcut: '−', run: run(() => view.zoom(0.8, 400)) });
+  cmds.push({
+    id: 'view-critical',
+    label: vw.showCriticalPath ? 'Hide critical path' : 'Show critical path',
+    group: 'View',
+    icon: Zap,
+    keywords: 'cpm slack longest path',
+    run: run(() => useViewStore.getState().toggle('showCriticalPath')),
+  });
+  cmds.push({
+    id: 'view-baseline',
+    label: vw.showBaseline ? 'Hide baseline' : 'Show baseline (drift)',
+    group: 'View',
+    icon: GitCompare,
+    keywords: 'snapshot drift compare',
+    run: run(() => useViewStore.getState().toggle('showBaseline')),
+  });
+  cmds.push({
+    id: 'view-minimap',
+    label: vw.showMinimap ? 'Hide minimap' : 'Show minimap',
+    group: 'View',
+    icon: MapIcon,
+    run: run(() => useViewStore.getState().toggle('showMinimap')),
+  });
 
   // THEME
   cmds.push({ id: 'theme-dark', label: 'Theme: Dark', group: 'Theme', icon: Moon, run: run(() => setTheme('dark')) });
@@ -390,6 +418,23 @@ function useCommands(close: () => void): Command[] {
   // EDIT
   cmds.push({ id: 'edit-undo', label: 'Undo', group: 'Edit', icon: Undo2, shortcut: '⌘Z', run: run(() => docActions.undo()) });
   cmds.push({ id: 'edit-redo', label: 'Redo', group: 'Edit', icon: Redo2, shortcut: '⌘⇧Z', run: run(() => docActions.redo()) });
+  cmds.push({
+    id: 'edit-baseline-capture',
+    label: useDocumentStore.getState().doc.baseline ? 'Re-capture baseline (overwrite)' : 'Capture baseline',
+    group: 'Edit',
+    icon: GitCompare,
+    keywords: 'snapshot save current dates',
+    run: run(() => useDocumentStore.getState().captureBaseline()),
+  });
+  if (useDocumentStore.getState().doc.baseline) {
+    cmds.push({
+      id: 'edit-baseline-clear',
+      label: 'Clear baseline',
+      group: 'Edit',
+      icon: Trash2,
+      run: run(() => useDocumentStore.getState().clearBaseline()),
+    });
+  }
   if (sel.items.length > 0) {
     cmds.push({ id: 'edit-delete', label: `Delete ${sel.items.length} selected`, group: 'Edit', icon: Trash2, shortcut: 'Del', run: run(deleteSelection) });
   }

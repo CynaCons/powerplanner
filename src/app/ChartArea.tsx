@@ -9,6 +9,8 @@ import { TimeAxis } from '../renderer/TimeAxis';
 import { Rows } from '../renderer/Rows';
 import { Summaries } from '../renderer/Summaries';
 import { TaskBars } from '../renderer/TaskBars';
+import { Baseline } from '../renderer/Baseline';
+import { Minimap } from '../renderer/Minimap';
 import { Milestones } from '../renderer/Milestones';
 import { Brackets } from '../renderer/Brackets';
 import { Dependencies } from '../renderer/Dependencies';
@@ -188,6 +190,7 @@ export function ChartArea() {
 
           <Brackets layout={layout} />
           <Summaries layout={layout} />
+          <Baseline layout={layout} />
           <TaskBars layout={layout} dragPreview={dragPreview} />
           <Milestones layout={layout} />
           <Dependencies layout={layout} />
@@ -218,6 +221,7 @@ export function ChartArea() {
         {/* Bottom border between axis and chart */}
         <line x1={ROW_GUTTER_W} y1={AXIS_TOTAL_H} x2={size.width} y2={AXIS_TOTAL_H} stroke="var(--color-border-soft)" />
       </svg>
+      <Minimap chartWidth={chartWidth} rowGutterWidth={ROW_GUTTER_W} />
     </div>
   );
 }

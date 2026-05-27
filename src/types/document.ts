@@ -80,6 +80,11 @@ export interface Viewport {
   pxPerDay: number;
 }
 
+export interface BaselineSnapshot {
+  capturedAt: ISODate;
+  tasks: Array<Pick<Task, 'id' | 'start' | 'end'>>;
+}
+
 export interface GanttDocument {
   schemaVersion: 1;
   title: string;
@@ -91,4 +96,5 @@ export interface GanttDocument {
   dependencies: Dependency[];
   markers: Marker[];
   style: StyleSettings;
+  baseline?: BaselineSnapshot;
 }

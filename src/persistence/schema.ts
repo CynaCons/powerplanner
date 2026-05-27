@@ -115,5 +115,18 @@ export function validateDocument(input: unknown): GanttDocument {
     throw new SchemaError('style invalid');
   }
 
+  // Optional baseline
+  const baseline = (input as { baseline?: unknown }).baseline;
+  if (baseline !== undefined) {
+    if (!isObject(baseline) || !isISODate(baseline.capturedAt) || !Array.isArray(baseline.tasks)) {
+      throw new SchemaError('baseline invalid');
+    }
+    baseline.tasks.forEach((b, i) => {
+      if (!isObject(b) || !isString(b.id) || !isISODate(b.start) || !isISODate(b.end)) {
+        throw new SchemaError(`baseline.tasks[${i}] invalid`);
+      }
+    });
+  }
+
   return input as unknown as GanttDocument;
 }

@@ -1,11 +1,14 @@
+import { useMemo } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useEditStore } from '../stores/editStore';
+import { useViewStore } from '../stores/viewStore';
 import type { LayoutResult } from '../layout/engine';
 import { dateToX } from '../layout/timeAxis';
 import type { DragPreviewMap } from '../app/useChartInteractions';
 import { InlineLabel } from '../app/InlineLabel';
+import { computeCriticalPath } from '../layout/criticalPath';
 
 interface Props {
   layout: LayoutResult;
@@ -22,6 +25,12 @@ export function TaskBars({ layout, dragPreview }: Props) {
   const editingTaskId = useEditStore((s) => s.editingTaskId);
   const endEdit = useEditStore((s) => s.endEdit);
   const beginEdit = useEditStore((s) => s.beginEdit);
+  const showCritical = useViewStore((s) => s.showCriticalPath);
+  const doc = useDocumentStore((s) => s.doc);
+  const criticalIds = useMemo(
+    () => (showCritical ? computeCriticalPath(doc).criticalTaskIds : new Set<string>()),
+    [showCritical, doc],
+  );
 
   return (
     <g>
@@ -36,12 +45,28 @@ export function TaskBars({ layout, dragPreview }: Props) {
         const y = lt.y;
         const h = lt.height;
         const selected = isSelected(t.id);
+        const critical = criticalIds.has(t.id);
         const color = t.color || 'var(--bar-default)';
         const pct = Math.max(0, Math.min(100, t.percentComplete ?? 0));
         const fillWidth = (width * pct) / 100;
 
         return (
           <g key={t.id}>
+            {/* Critical path glow */}
+            {critical && (
+              <rect
+                x={x - 3}
+                y={y - 3}
+                width={width + 6}
+                height={h + 6}
+                rx={6}
+                fill="none"
+                stroke="var(--color-today)"
+                strokeWidth={1.5}
+                opacity={0.75}
+                pointerEvents="none"
+              />
+            )}
             {/* Bar body */}
             <rect
               className="task-bar-body"
