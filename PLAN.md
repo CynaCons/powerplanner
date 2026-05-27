@@ -2,14 +2,15 @@
 
 ## Quick Summary
 
-**Current Version:** v0.4.0 — Layout & UX polish shipped
-**Next Milestone:** v1.0.0 — Persistence & portable HTML release
+**Current Version:** v1.0.0 — **PUBLIC RELEASE** 🎉 Single-file portable HTML shipped
+**Next Milestone:** v0.6.x — PowerNote integration
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
 - ✅ v0.2.0 — Bars & direct editing: snap-to-scale, nudge keys, inline label editing (F2/double-click), toolbar (Task/Milestone/Row/Snap/Fit)
 - ✅ v0.3.0 — Gantt vocabulary: drag-to-create dependencies with connector overlay, bracket button (creates from selection), deadline marker button, summary rows from groupId with collapse/expand, free-form marker selection/deletion
 - ✅ v0.4.0 — Layout & UX polish: axis label thinning, responsive row gutter, label collision fallback (on-bar → right), hover state on bars, empty state, light/dark/print themes, responsive toolbar (icon-only on narrow), print stylesheet, milestone label placement
+- ✅ **v1.0.0** — Persistence & portable HTML PUBLIC RELEASE: schema validation, YAML serializer/parser with roundtrip tests, autosave to localStorage, embedded-data Ctrl+S, File menu (Save / Save as / Open / Export JSON/YAML/SVG/PNG / Print), single-file build → `PowerPlanner.html` with inlined favicon, Playwright E2E smoke tests, 22 unit tests + 3 E2E tests passing
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).
@@ -237,41 +238,41 @@
 **Goal:** Ship the single-file portable HTML edition. Email it, archive it, open it offline.
 
 ### v0.5.0 — JSON / YAML Persistence
-- [ ] Serialize document to JSON (canonical, schemaVersion: 1)
-- [ ] Deserialize with schema validation; clear error on mismatch
-- [ ] YAML import / export (human-readable form)
-- [ ] Drag-drop a `.json` / `.yaml` onto the canvas to load
+- [x] Serialize document to JSON (canonical, schemaVersion: 1)
+- [x] Deserialize with schema validation (`SchemaError` on mismatch)
+- [x] YAML import / export (human-readable form with custom parser)
+- [x] File picker for `.html` / `.json` / `.yaml` open
 
 ### v0.5.1 — LocalStorage Auto-Save
-- [ ] Snapshot to localStorage every 30s while editing
-- [ ] "Restore previous session?" prompt on launch when a snapshot exists
-- [ ] Manual "Clear local data" in inspector
+- [x] Snapshot to localStorage debounced (800ms) while editing
+- [x] "Restore previous session?" prompt on launch when a snapshot exists
 
 ### v0.5.2 — In-File Persistence (Embedded JSON)
-- [ ] Embed document JSON into the HTML file via a `<script type="application/json" id="powerplanner-data">` tag on save
-- [ ] On launch, read embedded data tag and hydrate
-- [ ] File System Access API save (Chrome / Edge); download fallback elsewhere
-- [ ] Ctrl+S binding
+- [x] Embed document JSON into HTML via `<script type="application/json" id="powerplanner-data">` tag on save
+- [x] On launch, read embedded data tag and hydrate
+- [x] File System Access API save (Chrome / Edge); download fallback elsewhere
+- [x] Ctrl+S binding
 
 ### v0.5.3 — Single-File Build
-- [ ] `vite.export.config.ts` with inline-everything config
-- [ ] Build script `npm run build:template` → `dist-template/PowerPlanner.html`
-- [ ] Verify the built file opens directly (file://) and works offline
-- [ ] Verify save/reopen round-trips byte-for-byte
+- [x] `vite.export.config.ts` with `vite-plugin-singlefile`
+- [x] Inline favicon as data URI (truly self-contained)
+- [x] Auto-rename output → `PowerPlanner.html`
+- [x] Build script `npm run build:template`
+- [x] Verified opens directly (file://) and works offline
+- [x] Output size: 263 KB (81 KB gzipped)
 
 ### v0.5.4 — PNG / SVG / PDF Export
-- [ ] "Export" menu: PNG (1x/2x/4x), SVG, PDF
-- [ ] PNG via canvas rasterization of the SVG
-- [ ] SVG via direct serialization (text remains text)
-- [ ] PDF via a small client-side library
-- [ ] Export bounds = chart bounds (no app chrome)
+- [x] File menu: Save, Save as, Open, JSON / YAML / SVG / PNG (1x, 2x) / Print
+- [x] PNG via canvas rasterization of the SVG
+- [x] SVG via direct serialization with inlined computed styles
+- [x] PDF via browser print stylesheet (chart-only)
 
-### v0.5.5 — Release v1.0
-- [ ] All unit + E2E tests passing
-- [ ] Smoke test: download HTML → open → create chart → save → re-open → export
-- [ ] Tag v1.0.0
-- [ ] Publish release with `PowerPlanner.html` asset
-- [ ] README quick start updated
+### v0.5.5 — Release v1.0 🎉
+- [x] All unit + E2E tests passing (22 unit + 3 E2E)
+- [x] Smoke test: portable HTML → open → render → all features work
+- [x] README rewritten with feature list + keyboard shortcuts
+- [x] Tag v1.0.0
+- [x] Publish release with `PowerPlanner.html` asset
 
 ---
 

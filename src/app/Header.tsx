@@ -5,6 +5,7 @@ import { Undo2, Redo2, Plus, Maximize2, Diamond, Magnet, Rows3, Brackets as Brac
 import { useSelectionStore } from '../stores/selectionStore';
 import { newId } from '../utils/ids';
 import { todayISO, addDays } from '../utils/dates';
+import { ExportMenu } from './ExportMenu';
 
 export function Header() {
   const title = useDocumentStore((s) => s.doc.title);
@@ -124,6 +125,7 @@ export function Header() {
         <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" className="icon-btn">
           <Redo2 size={14} />
         </button>
+        <ExportMenu />
       </div>
     </header>
   );
