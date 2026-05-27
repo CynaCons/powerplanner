@@ -2,8 +2,8 @@
 
 ## Quick Summary
 
-**Current Version:** v1.1.0 — Tool modes + bottom toolbar + click-to-create
-**Next Milestone:** v1.2.0 — Direct manipulation (right-click, marquee, color palette)
+**Current Version:** v1.2.0 — Right-click + color palette + shortcuts overlay
+**Next Milestone:** v1.3.0 — Visual identity overhaul
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
@@ -13,6 +13,7 @@
 - ✅ **v1.0.0** — Persistence & portable HTML PUBLIC RELEASE: schema validation, YAML serializer/parser with roundtrip tests, autosave to localStorage, embedded-data Ctrl+S, File menu (Save / Save as / Open / Export JSON/YAML/SVG/PNG / Print), single-file build → `PowerPlanner.html` with inlined favicon, Playwright E2E smoke tests, 22 unit tests + 3 E2E tests passing
 - ✅ v1.0.1 — Replace blocking `confirm()` autosave restore with non-blocking RestoreBanner component (top-center, Restore + Dismiss)
 - ✅ v1.1.0 — **Tool modes + bottom toolbar + click-to-create**: new `useToolStore` with Select/Add-Task/Add-Milestone/Marquee/Pan tools; PowerNote-style bottom toolbar (`ToolPalette`) with tool group + scale group (D/W/M/Q/Y) + zoom group (−/readout/+/fit); click on canvas with Add-Task or Add-Milestone tool creates at clicked date+row; lasso marquee selection; wheel = zoom (no Ctrl required, Figma-style); Linear-style single-letter shortcuts (V/T/Y/H/R for tools, Shift+D/W/M/Q/Y for scales); "TODAY" pill label on today line; full visual refresh (Inter typography, layered greys, 8% opacity borders, tabular numerals)
+- ✅ v1.2.0 — **Direct manipulation**: right-click context menu on every chart element (background → Add task/milestone/deadline-here; task → Edit / Color / Duplicate / Wrap-in-bracket / Delete; milestone/bracket/dependency/marker → context-appropriate actions); dependency type switcher in dep context menu (FS/SS/FF/SF with check); muted Notion-inspired color palette swatches (8 presets + custom picker) in task inspector; ShortcutsOverlay modal (? to open) listing all keyboard bindings grouped by Tools/Scale/Selection/Editing/Navigation/File; HelpCircle button in header; right-click on unselected element replaces selection (desktop convention)
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).

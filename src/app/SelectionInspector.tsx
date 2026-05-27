@@ -1,6 +1,7 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import type { Task, Milestone, Bracket } from '../types/document';
+import { ColorPalette } from './ColorPalette';
 
 export function SelectionInspector() {
   const items = useSelectionStore((s) => s.items);
@@ -80,7 +81,7 @@ function TaskFields({ task }: { task: Task }) {
       </div>
       <div className="field">
         <label>Color</label>
-        <input type="color" value={task.color ?? '#6366f1'} onChange={(e) => updateTask(task.id, { color: e.target.value })} />
+        <ColorPalette value={task.color ?? '#7a82c9'} onChange={(c) => updateTask(task.id, { color: c })} />
       </div>
       <button
         onClick={() => {

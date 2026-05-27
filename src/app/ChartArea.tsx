@@ -93,7 +93,7 @@ export function ChartArea() {
     return stripes;
   }, [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.workingDays]);
 
-  const { handleSvgMouseDown, handleWheel, dragPreview, depDrag, lassoDrag } = useChartInteractions({
+  const { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, depDrag, lassoDrag } = useChartInteractions({
     svgRef,
     chartWidth,
     rowGutterWidth: ROW_GUTTER_W,
@@ -121,6 +121,7 @@ export function ChartArea() {
         width={size.width}
         height={size.height}
         onMouseDown={handleSvgMouseDown}
+        onContextMenu={handleContextMenu}
         onWheel={handleWheel}
         style={{ display: 'block', cursor: dragPreview ? 'grabbing' : cursorForTool(activeTool), userSelect: 'none' }}
       >

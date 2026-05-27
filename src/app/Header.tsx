@@ -1,7 +1,7 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
-import { Undo2, Redo2, Plus, Maximize2, Diamond, Magnet, Rows3, Brackets as BracketIcon, Flag } from 'lucide-react';
+import { Undo2, Redo2, Plus, Maximize2, Diamond, Magnet, Rows3, Brackets as BracketIcon, Flag, HelpCircle } from 'lucide-react';
 import { useSelectionStore } from '../stores/selectionStore';
 import { newId } from '../utils/ids';
 import { todayISO, addDays } from '../utils/dates';
@@ -124,6 +124,13 @@ export function Header() {
         </button>
         <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" className="icon-btn">
           <Redo2 size={14} />
+        </button>
+        <button
+          onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true }))}
+          title="Keyboard shortcuts (?)"
+          className="icon-btn"
+        >
+          <HelpCircle size={14} />
         </button>
         <ExportMenu />
       </div>

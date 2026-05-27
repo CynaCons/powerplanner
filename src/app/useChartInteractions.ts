@@ -5,6 +5,7 @@ import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useEditStore } from '../stores/editStore';
 import { useToolStore } from '../stores/toolStore';
+import { useContextMenuStore } from '../stores/contextMenuStore';
 import { xToDate } from '../layout/timeAxis';
 import { addDays, diffDays } from '../utils/dates';
 import { snapDelta } from '../utils/snap';
@@ -446,7 +447,37 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
 
   const depDrag = dragRef.current?.kind === 'dep-create' ? dragRef.current : null;
   const lassoDrag = dragRef.current?.kind === 'lasso' ? dragRef.current : null;
-  return { handleSvgMouseDown, handleWheel, dragPreview, xToDate, depDrag, lassoDrag };
+
+  const handleContextMenu = useCallback(
+    (e: ReactMouseEvent<SVGSVGElement>) => {
+      e.preventDefault();
+      const target = e.target as Element;
+      const datasetEl = target.closest('[data-pp-kind]') as HTMLElement | null;
+      const { x: svgX, y: svgY } = getSvgPoint(e.clientX, e.clientY);
+      const ctx = useContextMenuStore.getState();
+      const sel = useSelectionStore.getState();
+
+      if (datasetEl) {
+        const kind = datasetEl.dataset.ppKind as string;
+        const id = datasetEl.dataset.ppId as string;
+        if (kind === 'task' || kind === 'milestone' || kind === 'bracket' || kind === 'dependency' || kind === 'marker') {
+          if (!sel.isSelected(id)) sel.setSelection([{ kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id }]);
+          ctx.show(e.clientX, e.clientY, { kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id });
+          return;
+        }
+      }
+      // Background
+      const xInChart = svgX - rowGutterWidth;
+      const yInChart = svgY - axisHeight;
+      const view = useViewportStore.getState();
+      const date = xToDate(xInChart, view.startDate, view.pxPerDay);
+      const rowId = rowAtY(yInChart, layout) ?? layout.visibleRows[0]?.id;
+      ctx.show(e.clientX, e.clientY, { kind: 'background', date, rowId });
+    },
+    [getSvgPoint, rowGutterWidth, axisHeight, layout],
+  );
+
+  return { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, xToDate, depDrag, lassoDrag };
 }
 
 let attached = false;

@@ -5,6 +5,8 @@ import { Header } from './Header';
 import { StatusBar } from './StatusBar';
 import { RestoreBanner } from './RestoreBanner';
 import { ToolPalette } from './ToolPalette';
+import { ChartContextMenu } from './ChartContextMenu';
+import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
@@ -18,6 +20,7 @@ export function App() {
   const setDocument = useDocumentStore((s) => s.setDocument);
   const didHydrate = useRef(false);
   const [pendingRestore, setPendingRestore] = useState<GanttDocument | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -44,13 +47,20 @@ export function App() {
     return () => clearTimeout(t);
   }, [doc]);
 
-  // Ctrl+S → save
+  // Ctrl+S → save; ? → show shortcuts overlay
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const isEditable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         const current = useDocumentStore.getState().doc;
         void saveToFile(current, suggestedName(current.title));
+        return;
+      }
+      if (!isEditable && (e.key === '?' || (e.shiftKey && e.key === '/'))) {
+        e.preventDefault();
+        setShortcutsOpen((v) => !v);
       }
     }
     window.addEventListener('keydown', onKey);
@@ -78,6 +88,8 @@ export function App() {
           }}
         />
       )}
+      <ChartContextMenu />
+      <ShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   );
 }
