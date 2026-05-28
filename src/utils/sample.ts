@@ -31,6 +31,6 @@ export function sampleDocument(): GanttDocument {
     brackets: [],
     dependencies: [],
     markers: [{ id: 'mk-deadline-1', type: 'deadline', label: 'Board review', date: '2026-07-15' }],
-    style: { theme: 'dark', preset: 'default' },
+    style: { theme: 'light', preset: 'default' },
   };
 }

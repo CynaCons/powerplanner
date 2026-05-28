@@ -42,6 +42,6 @@ export function blankDocument(title = 'Untitled plan'): GanttDocument {
     brackets: [],
     dependencies: [],
     markers: [],
-    style: { theme: 'dark', preset: 'default' },
+    style: { theme: 'light', preset: 'default' },
   };
 }
