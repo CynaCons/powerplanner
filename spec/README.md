@@ -6,10 +6,12 @@ concept/design layer. Everything else is an *implementation* of this spec:
 
 ```
 spec/            ← the concept (this directory) — language-neutral
-  data-model.md          entities, fields, invariants
-  layout.md              the projection/layout algorithm in ABSTRACT coordinates
-  visual-vocabulary.md   how each element is drawn (shape, size, color, labels)
-  interaction.md         selection + editing model (incl. future on-slide UI)
+  srs/                   REQUIREMENTS (ASPICE-style): what the app shall do (the foundation)
+    SRS-<feature>.md       requirement tables (shall-statements, rationale, verification, trace)
+  data-model.md          DESIGN: entities, fields, invariants
+  layout.md              DESIGN: the projection/layout algorithm in ABSTRACT coordinates
+  visual-vocabulary.md   DESIGN: how each element is drawn (shape, size, color, labels)
+  interaction.md         DESIGN: selection + editing model (incl. future on-slide UI)
   schema/document.schema.json   machine-readable data contract (JSON Schema)
   fixtures/              golden documents + expected layout (conformance tests)
 

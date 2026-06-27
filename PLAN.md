@@ -388,12 +388,14 @@ native/    ← implementation B — POWERPOINT (C++ COM add-in, think-cell style
 
 ---
 
-# Phase S: Specification Layer (the concept) — IN PROGRESS
-**Goal:** Extract PowerPlanner's concept out of the web app into a language-neutral
-`spec/` that both implementations follow, with machine-checkable conformance so the
-web and PowerPoint versions cannot silently drift. See [spec/README.md](spec/README.md).
+# Phase F: Foundation Layer (ASPICE-style specification) — IN PROGRESS
+**Goal:** The foundation is the single source of truth: a set of ASPICE-like
+software requirement specs (`spec/srs/SRS-<feature>.md`, requirement tables) plus
+a visual specification, backed by the JSON Schema and conformance fixtures. Both
+implementations — web (`src/`) and native (`native/`) — derive from it and are
+traceable to it. See [spec/README.md](spec/README.md).
 
-### S0 — Spec foundation — COMPLETE
+### F0 — Concept foundation — COMPLETE
 - [x] `spec/data-model.md` — entities, fields, invariants (mirrors `src/types/document.ts`)
 - [x] `spec/layout.md` — projection algorithm in abstract day/row-slot coordinates
 - [x] `spec/visual-vocabulary.md` — element shapes, proportions, color, label rules
@@ -402,7 +404,14 @@ web and PowerPoint versions cannot silently drift. See [spec/README.md](spec/REA
 - [x] `spec/fixtures/basic-chart.*` — golden document + expected abstract layout
 - [x] Web conformance test (`tests/unit/spec-conformance.test.ts`) passing
 
-### S1 — Conformance breadth (later)
+### F1 — SRS specification (ASPICE) — IMMEDIATE FOCUS
+- [ ] Define feature decomposition + requirement-table format (`spec/srs/README.md`)
+- [ ] Author an `SRS-<feature>.md` per feature: shall-statements, rationale, verification, trace
+- [ ] Trace each requirement to design (`spec/*.md`), the JSON Schema, fixtures, and tests
+- [ ] Stand up the visual-specification approach (reference figures keyed to requirement IDs)
+- [ ] Acceptance: every foundation feature has an SRS with verifiable, traceable requirements
+
+### F2 — Conformance breadth (later)
 - [ ] More fixtures: empty doc, collapsed groups, all four dependency types, multi-row brackets, baseline drift
 - [ ] Generate `src/types/document.ts` types from the JSON Schema (or assert equivalence in a test)
 - [ ] Wire the JSON Schema into web persistence validation (replace/augment hand-written `schema.ts`)
