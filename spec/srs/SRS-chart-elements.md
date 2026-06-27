@@ -10,11 +10,12 @@ Traces up to: `../data-model.md`, `../layout.md`, `../visual-vocabulary.md`.
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
 | SRS-ELEM-001 | The system shall render each task as a horizontal bar positioned at its `start` date and spanning to its `end` date **inclusive** (a task with `start == end` occupies one whole day). | A Gantt bar's length is its duration; inclusive end matches user intent. | Test: `spec/fixtures/basic-chart` (t_d1 widthDays=8) | layout §4; `src/renderer/TaskBars.tsx`; `native/.../GanttLayout` |
-| SRS-ELEM-002 | The system shall reject or refuse to render a task whose `end` is before its `start`. | Negative duration is invalid. | Analysis (schema + layout `max` clamp) | data-model; `schema.ts` |
-| SRS-ELEM-003 | When two tasks in the same row overlap in time, the system shall place them on separate stacking sub-rows so neither is occluded. | Overlapping work must remain readable. | Test: `basic-chart` (t_d1 subRow 0, t_d2 subRow 1) | layout §2 |
+| SRS-ELEM-002 | A task shall satisfy the invariant `end >= start` (duration ≥ 1 day inclusive); a task violating it is malformed. | Negative duration is meaningless. | Review (invariant) — **not yet enforced at load; see open items** | data-model §Task; SRS-EDIT-003 |
+| SRS-ELEM-003 | When two tasks in the same row overlap in time, the system shall place them on separate stacking sub-rows so neither is occluded. | Overlapping work must remain readable. | Test: `basic-chart` (t_d1 subRow 0, t_d2 subRow 1) | layout §2; SRS-LAY-020 |
 | SRS-ELEM-004 | The system shall fill a task bar with its `color` when set, else an implementation default accent. | Color encodes category; sensible default when unset. | Review | visual-vocabulary; data-model |
 | SRS-ELEM-005 | The system shall indicate `percentComplete` (0–100) as a darker inset filling that fraction of the bar from its start. | Communicates progress at a glance. | Demo / Review | visual-vocabulary |
-| SRS-ELEM-006 | The system shall place a task's label per `labelPlacement`, defaulting to on-bar and falling back to right then left when the label does not fit. | Labels must stay readable on narrow bars. | Demo | visual-vocabulary |
+| SRS-ELEM-006 | The system shall place a task's label per `labelPlacement` (on-bar, left, right, above, below, hidden), defaulting to on-bar with fallback to right then left when it does not fit on the bar; `hidden` suppresses the label. | Labels must stay readable on narrow bars; all enum values must be honored. | Demo | data-model (LabelPlacement); visual-vocabulary |
+| SRS-ELEM-007 | The system shall render every task with a minimum bar width so a zero- or near-zero-span (or malformed) task stays visible and never crashes the renderer. | Robustness: a degenerate span must not vanish or break layout. | Analysis (engine `width = max(2, …)`) | layout §4; `src/layout/engine.ts` |
 
 ## Milestones
 
@@ -27,7 +28,7 @@ Traces up to: `../data-model.md`, `../layout.md`, `../visual-vocabulary.md`.
 
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
-| SRS-ELEM-020 | For any row that is a parent of other rows and has descendant tasks, the system shall derive a summary bar spanning the min `start` to max `end` of those tasks. | A summary rolls up its children's span. | Test: `basic-chart` (r_phase xDay=4, widthDays=24) | layout §6 |
+| SRS-ELEM-020 | For any **visible** row that is a parent of other rows and has descendant tasks, the system shall derive a summary bar spanning the min `start` to max `end` of those tasks. | A summary rolls up its children's span. | Test: `basic-chart` (r_phase xDay=4, widthDays=24) | layout §6 |
 | SRS-ELEM-021 | The system shall hide a collapsed group's child rows and still show the parent's summary bar. | Collapse declutters without losing the rollup. | Test (collapsed fixture, F2) | layout §1, §6 |
 
 ## Brackets
@@ -51,7 +52,10 @@ Traces up to: `../data-model.md`, `../layout.md`, `../visual-vocabulary.md`.
 
 ## Open items
 
+- **SRS-ELEM-002 is not yet enforced:** neither `schema.ts` nor the JSON Schema
+  rejects `end < start`, and the engine only clamps width (SRS-ELEM-007). Enforce
+  the invariant when the JSON Schema becomes the validation source (Phase F2).
 - All-dependency-types and collapsed-group fixtures are added in **F2**
   (conformance breadth); SRS-ELEM-021/041 cite them as future tests.
-- Percent-complete and label-collision currently verify by Demo/Review; promote
+- Percent-complete and label-placement currently verify by Demo/Review; promote
   to Test when a render-level fixture exists.

@@ -41,18 +41,19 @@ Priority is implied by phase ordering in `PLAN.md`, not a column.
 
 ## Feature index
 
-| SRS file                       | Feature                                   | Status  |
-|--------------------------------|-------------------------------------------|---------|
-| `SRS-chart-elements.md`        | Tasks, milestones, brackets, deps, markers, summaries | drafted |
-| `SRS-time-axis.md`             | Scales, fiscal year, ticks/thinning       | todo    |
-| `SRS-layout.md`                | Positioning, sub-row stacking, collision  | todo    |
-| `SRS-editing.md`               | Create / move / resize / connect / delete | todo    |
-| `SRS-persistence.md`           | JSON/YAML/HTML save, load, round-trip      | todo    |
-| `SRS-critical-path.md`         | Forward/backward pass, highlight          | todo    |
-| `SRS-baseline.md`              | Snapshot + drift                          | todo    |
-| `SRS-theming-export.md`        | Themes, PNG/SVG/PDF export                | todo    |
-| `SRS-powerpoint.md` `[native]` | Insert, round-trip, on-slide editing      | todo    |
-| `SRS-visual.md`                | Visual specification (see below)          | todo    |
+| SRS file                       | Feature tag(s)  | Status  |
+|--------------------------------|-----------------|---------|
+| `SRS-chart-elements.md`        | `ELEM`          | drafted |
+| `SRS-time-axis.md`             | `TAX`           | drafted |
+| `SRS-layout.md`                | `LAY`           | drafted |
+| `SRS-editing.md`               | `EDIT`          | drafted |
+| `SRS-persistence.md`           | `PERS`          | drafted |
+| `SRS-critical-path.md`         | `CPM`           | drafted |
+| `SRS-baseline.md`              | `BASE`          | drafted |
+| `SRS-theming-export.md`        | `THEME`, `EXP`  | drafted |
+| `SRS-powerpoint.md` `[native]` | `PPT`           | drafted |
+
+The visual specification is generated (see below), not a separate SRS file.
 
 ## Visual specification
 
@@ -70,3 +71,18 @@ annotated callouts keyed to requirement IDs come later (F1/F2).
 Bidirectional: every requirement has down-links in its **Trace** column; every
 conformance fixture and test should name the requirement IDs it covers. A
 requirement with no verification is not "done".
+
+## Quality status
+
+All 9 SRS files passed a two-round independent ASPICE audit (requirement
+quality, ID integrity, format consistency, traceability, and accuracy vs. the
+actual source). Code-accuracy mismatches were corrected so requirements describe
+what the code does. Two items are stated but **not yet enforced**, and are
+disclosed in the relevant open-items rather than misstated as done:
+
+- `end >= start` is an invariant (SRS-ELEM-002) not yet enforced at load — to be
+  enforced when the JSON Schema becomes the runtime validation source (Phase F2).
+- Element `color` is canonically `#RRGGBB` in the JSON Schema, but the current
+  runtime validator does not check it (same F2 deferral).
+- Distinct **holiday** shading (vs. the weekend mask) is a future item; weekend
+  shading (SRS-TAX-031) is implemented.

@@ -104,7 +104,7 @@ A free-standing vertical annotation at a date.
 | `type`  | MarkerType | yes      | `today` \| `deadline` \| `note`     |
 | `label` | string     | yes      |                                     |
 | `date`  | ISODate    | yes      |                                     |
-| `color` | string     | no       |                                     |
+| `color` | string     | no       | Any CSS color string (markers may use named colors), unlike element `color` which is strict `#RRGGBB`. |
 
 ## StyleSettings
 

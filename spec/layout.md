@@ -38,6 +38,13 @@ layout(doc, viewStart, scale=1, allowOverlap=false)
 - `scale` — device scale (days→units); `1` for abstract/conformance
 - `allowOverlap` — when true, skip sub-row stacking (all tasks on subRow 0)
 
+**Naming note for re-implementers.** This spec is abstract; the web reference
+code uses device names for the same things — the public engine parameter is
+`pxPerDay` (the web device scale), and engine results use `x` / `width` / `fromX`
+where the conformance fixtures use `xDay` / `widthDays` / `fromXDay`. At `scale = 1`
+they are numerically identical; a native port should treat its `ptPerDay` as the
+`scale` and compare against the fixtures' `*Day` fields.
+
 ## Step 1 — Visible rows
 
 ```

@@ -404,16 +404,16 @@ traceable to it. See [spec/README.md](spec/README.md).
 - [x] `spec/fixtures/basic-chart.*` — golden document + expected abstract layout
 - [x] Web conformance test (`tests/unit/spec-conformance.test.ts`) passing
 
-### F1 — SRS specification (ASPICE) — IMMEDIATE FOCUS
+### F1 — SRS specification (ASPICE) — COMPLETE
 - [x] Define feature decomposition + requirement-table format (`spec/srs/README.md`)
-- [x] First `SRS-<feature>.md` authored as the template (`SRS-chart-elements.md`)
+- [x] Author all 9 `SRS-<feature>.md` files (chart-elements, time-axis, layout, editing,
+      persistence, critical-path, baseline, theming-export, powerpoint) with traceable requirements
+- [x] Trace each requirement to design (`spec/*.md`), the JSON Schema, fixtures, and tests
 - [x] Visual specification approach decided + pipeline working: generated from the web
       renderer (`scripts/gen-visual-spec.ts` → `spec/visual/*.svg`, `npm run gen:visual`)
-- [ ] Author the remaining `SRS-<feature>.md` files (time-axis, layout, editing, persistence,
-      critical-path, baseline, theming-export, powerpoint) with traceable requirements
-- [ ] Trace each requirement to design (`spec/*.md`), the JSON Schema, fixtures, and tests
-- [ ] Acceptance: every foundation feature has an SRS with verifiable, traceable requirements,
-      and each fixture has a generated visual figure
+- [x] Independent ASPICE audit (2 review rounds): fixed code-accuracy mismatches (end≥start
+      enforcement, fiscal-year ticks, color/Hex), gaps, and traces; residual gaps disclosed in open items
+- [x] Acceptance met: every foundation feature has an SRS of verifiable, traceable requirements
 
 ### F2 — Conformance breadth (later)
 - [ ] More fixtures: empty doc, collapsed groups, all four dependency types, multi-row brackets, baseline drift
