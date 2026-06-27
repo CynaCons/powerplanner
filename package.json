@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "gen:visual": "vite-node scripts/gen-visual-spec.ts",
     "addin:certs": "office-addin-dev-certs install",
     "addin:start": "office-addin-debugging start manifest.xml desktop",
     "addin:stop": "office-addin-debugging stop manifest.xml",

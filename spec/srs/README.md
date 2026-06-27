@@ -56,11 +56,14 @@ Priority is implied by phase ordering in `PLAN.md`, not a column.
 
 ## Visual specification
 
-The foundation includes a **visual** specification — reference figures that show
-exactly how each element and the whole chart should look — keyed to requirement
-IDs (e.g. a figure tagged `SRS-ELEM-010`). Approach is being decided (figures in
-`spec/visual/` + a viewer; see PLAN.md F1). Until then, `../visual-vocabulary.md`
-holds the textual visual rules.
+The foundation includes a **visual** specification (`../visual/`) — reference
+figures that show exactly how a chart should look. They are **generated from the
+web reference implementation** (`scripts/gen-visual-spec.ts` renders each fixture
+through `<GanttRenderer>` → `spec/visual/*.svg`; `npm run gen:visual`), so they
+cannot drift from what the app produces. A fixture is the input, its
+`*.expected.json` is the machine-checked output, and its `*.svg` is the
+human-checkable visual. `../visual-vocabulary.md` holds the textual visual rules;
+annotated callouts keyed to requirement IDs come later (F1/F2).
 
 ## Traceability
 

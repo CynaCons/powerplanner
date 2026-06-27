@@ -1,0 +1,11 @@
+{
+  "generatedFrom": "src/embed/GanttRenderer",
+  "figures": [
+    {
+      "figure": "basic-chart.svg",
+      "fixture": "basic-chart.json",
+      "width": 920,
+      "height": 260
+    }
+  ]
+}

@@ -405,11 +405,15 @@ traceable to it. See [spec/README.md](spec/README.md).
 - [x] Web conformance test (`tests/unit/spec-conformance.test.ts`) passing
 
 ### F1 — SRS specification (ASPICE) — IMMEDIATE FOCUS
-- [ ] Define feature decomposition + requirement-table format (`spec/srs/README.md`)
-- [ ] Author an `SRS-<feature>.md` per feature: shall-statements, rationale, verification, trace
+- [x] Define feature decomposition + requirement-table format (`spec/srs/README.md`)
+- [x] First `SRS-<feature>.md` authored as the template (`SRS-chart-elements.md`)
+- [x] Visual specification approach decided + pipeline working: generated from the web
+      renderer (`scripts/gen-visual-spec.ts` → `spec/visual/*.svg`, `npm run gen:visual`)
+- [ ] Author the remaining `SRS-<feature>.md` files (time-axis, layout, editing, persistence,
+      critical-path, baseline, theming-export, powerpoint) with traceable requirements
 - [ ] Trace each requirement to design (`spec/*.md`), the JSON Schema, fixtures, and tests
-- [ ] Stand up the visual-specification approach (reference figures keyed to requirement IDs)
-- [ ] Acceptance: every foundation feature has an SRS with verifiable, traceable requirements
+- [ ] Acceptance: every foundation feature has an SRS with verifiable, traceable requirements,
+      and each fixture has a generated visual figure
 
 ### F2 — Conformance breadth (later)
 - [ ] More fixtures: empty doc, collapsed groups, all four dependency types, multi-row brackets, baseline drift
