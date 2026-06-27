@@ -1,8 +1,26 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { App } from '../app/App';
 import { useDocumentStore } from '../stores/documentStore';
 import { insertGanttIntoSlide, readGanttFromSlide, isOfficeAvailable } from './officeBridge';
 import { LayoutGrid, Download } from 'lucide-react';
+
+declare const Office: {
+  context?: {
+    requirements?: {
+      isSetSupported: (set: string, version: string) => boolean;
+    };
+  };
+};
+declare const PowerPoint: unknown;
+
+function powerPointApiSupported(): boolean {
+  return !!Office?.context?.requirements?.isSetSupported('PowerPointApi', '1.4');
+}
+
+interface TaskPaneAppProps {
+  /** Set when mounted outside PowerPoint or before Office.onReady resolves. */
+  hostHint?: string;
+}
 
 /**
  * Office task pane shell.
@@ -11,13 +29,22 @@ import { LayoutGrid, Download } from 'lucide-react';
  * top: "Insert into slide" emits the current chart as native PowerPoint
  * shapes, and "Pull from slide" reads back a previously inserted chart.
  */
-export function TaskPaneApp() {
+export function TaskPaneApp({ hostHint }: TaskPaneAppProps) {
   const doc = useDocumentStore((s) => s.doc);
   const setDocument = useDocumentStore((s) => s.setDocument);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const inOffice = isOfficeAvailable();
+  const inBrowser = hostHint === 'browser' || !inOffice;
+  const apiSupported = useMemo(() => (inOffice ? powerPointApiSupported() : false), [inOffice]);
+  const bridgeReady = inOffice && apiSupported && typeof PowerPoint !== 'undefined';
+
   const onInsert = async () => {
+    if (!bridgeReady) {
+      setStatus('Insert requires PowerPoint with PowerPointApi 1.4 or newer.');
+      return;
+    }
     setBusy(true);
     setStatus(null);
     try {
@@ -31,6 +58,10 @@ export function TaskPaneApp() {
   };
 
   const onPull = async () => {
+    if (!bridgeReady) {
+      setStatus('Pull requires PowerPoint with PowerPointApi 1.4 or newer.');
+      return;
+    }
     setBusy(true);
     setStatus(null);
     try {
@@ -49,9 +80,18 @@ export function TaskPaneApp() {
   };
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* Office-specific top bar */}
-      {isOfficeAvailable() && (
+    <div className="taskpane-shell" style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      {inBrowser && (
+        <div className="taskpane-banner taskpane-banner--info">
+          Browser preview — open via PowerPoint sideload to use Insert / Pull.
+        </div>
+      )}
+      {inOffice && !apiSupported && (
+        <div className="taskpane-banner taskpane-banner--warn">
+          This PowerPoint build does not support PowerPointApi 1.4. Update Office to insert native shapes.
+        </div>
+      )}
+      {inOffice && (
         <div
           style={{
             display: 'flex',
@@ -61,11 +101,12 @@ export function TaskPaneApp() {
             background: 'var(--color-bg-elev)',
             borderBottom: '1px solid var(--color-border-hairline)',
             fontSize: 12,
+            flexWrap: 'wrap',
           }}
         >
           <button
             onClick={onInsert}
-            disabled={busy}
+            disabled={busy || !bridgeReady}
             className="icon-btn"
             style={{
               background: 'var(--color-accent)',
@@ -73,7 +114,8 @@ export function TaskPaneApp() {
               padding: '5px 10px',
               borderRadius: 6,
               border: 'none',
-              cursor: busy ? 'wait' : 'pointer',
+              cursor: busy || !bridgeReady ? 'not-allowed' : 'pointer',
+              opacity: bridgeReady ? 1 : 0.55,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
@@ -84,13 +126,14 @@ export function TaskPaneApp() {
           </button>
           <button
             onClick={onPull}
-            disabled={busy}
+            disabled={busy || !bridgeReady}
             className="icon-btn"
             style={{
               padding: '5px 10px',
               borderRadius: 6,
               border: '1px solid var(--color-border-hairline)',
-              cursor: busy ? 'wait' : 'pointer',
+              cursor: busy || !bridgeReady ? 'not-allowed' : 'pointer',
+              opacity: bridgeReady ? 1 : 0.55,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
@@ -104,9 +147,8 @@ export function TaskPaneApp() {
           )}
         </div>
       )}
-      {/* Main editor */}
       <div style={{ flex: 1, minHeight: 0 }}>
-        <App />
+        <App compact />
       </div>
     </div>
   );

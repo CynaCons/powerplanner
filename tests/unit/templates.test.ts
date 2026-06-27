@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { TEMPLATES } from '../../src/utils/templates';
+import { sampleDocument } from '../../src/utils/sample';
+import { blankDocument } from '../../src/embed';
 import { validateDocument } from '../../src/persistence/schema';
 
 describe('templates', () => {
@@ -14,6 +16,14 @@ describe('templates', () => {
       expect(() => validateDocument(tpl.doc)).not.toThrow();
     },
   );
+
+  it('defaults sample, blank, and template documents to light theme', () => {
+    expect(sampleDocument().style.theme).toBe('light');
+    expect(blankDocument().style.theme).toBe('light');
+    for (const tpl of TEMPLATES) {
+      expect(tpl.doc.style.theme, `${tpl.id} should default to light`).toBe('light');
+    }
+  });
 
   it('every task references a known row', () => {
     for (const tpl of TEMPLATES) {

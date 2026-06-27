@@ -59,7 +59,7 @@ describe('persistence', () => {
         brackets: [],
         dependencies: [],
         markers: [],
-        style: { theme: 'dark' as const, preset: 'default' },
+        style: { theme: 'light' as const, preset: 'default' },
       };
       const yaml = toYaml(doc);
       const parsed = fromYaml(yaml);

@@ -1,11 +1,12 @@
 {
   "name": "powerplanner",
   "private": true,
-  "version": "2.3.0",
+  "version": "2.3.1",
   "type": "module",
   "description": "Calendar-true Gantt charts you can actually present.",
   "scripts": {
     "dev": "vite",
+    "dev:addin": "vite --mode addin",
     "build": "tsc -b && vite build",
     "build:template": "tsc -b && vite build --config vite.export.config.ts",
     "preview": "vite preview",

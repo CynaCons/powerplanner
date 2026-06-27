@@ -56,7 +56,7 @@ const productLaunch: GanttDocument = {
     { id: 'dep-pl-4', from: 'task-pl-5', to: 'task-pl-9', type: 'finish-to-start' },
   ],
   markers: [{ id: 'mk-pl-1', type: 'deadline', label: 'Board review', date: '2026-07-15' }],
-  style: { theme: 'dark', preset: 'default' },
+  style: { theme: 'light', preset: 'default' },
 };
 
 const sprint: GanttDocument = {
@@ -99,7 +99,7 @@ const sprint: GanttDocument = {
     { id: 'dep-sp-4', from: 'task-sp-10', to: 'task-sp-11', type: 'finish-to-start' },
   ],
   markers: [{ id: 'mk-sp-1', type: 'deadline', label: 'Ship by EOD', date: '2026-06-14' }],
-  style: { theme: 'dark', preset: 'default' },
+  style: { theme: 'light', preset: 'default' },
 };
 
 const hiringPlan: GanttDocument = {
@@ -140,7 +140,7 @@ const hiringPlan: GanttDocument = {
     { id: 'dep-hp-4', from: 'task-hp-8', to: 'task-hp-9', type: 'finish-to-start' },
   ],
   markers: [{ id: 'mk-hp-1', type: 'deadline', label: 'Headcount target', date: '2026-08-30' }],
-  style: { theme: 'dark', preset: 'default' },
+  style: { theme: 'light', preset: 'default' },
 };
 
 const marketingCampaign: GanttDocument = {
@@ -186,7 +186,7 @@ const marketingCampaign: GanttDocument = {
     { id: 'dep-mc-4', from: 'task-mc-7', to: 'task-mc-12', type: 'finish-to-start' },
   ],
   markers: [{ id: 'mk-mc-1', type: 'deadline', label: 'Earnings call mention', date: '2026-08-30' }],
-  style: { theme: 'dark', preset: 'default' },
+  style: { theme: 'light', preset: 'default' },
 };
 
 export const TEMPLATES: Template[] = [
@@ -208,7 +208,7 @@ export const TEMPLATES: Template[] = [
       brackets: [],
       dependencies: [],
       markers: [],
-      style: { theme: 'dark', preset: 'default' },
+      style: { theme: 'light', preset: 'default' },
     },
   },
 ];

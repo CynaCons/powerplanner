@@ -50,7 +50,7 @@ Start fast with built-in starters: **Product Launch**, **Two-Week Sprint**, **Hi
 - **Open** any prior `.html`, `.json`, or `.yaml` via file picker or drag-drop
 
 ### Themes
-Dark, Light, and Print (high-contrast for paper-quality output).
+Light by default, with Dark and Print (high-contrast for paper-quality output) available from the theme switcher.
 
 ## Keyboard shortcuts
 
@@ -92,11 +92,16 @@ See [PLAN.md](PLAN.md) for the full roadmap and [PRD.md](PRD.md) for product det
 
 ```bash
 npm install
-npm run dev              # Dev server at http://localhost:5173
+npm run addin:certs      # Trust the localhost dev certificate (run once per machine)
+npm run dev              # Dev server at http://localhost:5180
+npm run dev:addin        # HTTPS dev server for PowerPoint sideload (port 5180)
 npm run build:template   # Build standalone PowerPlanner.html → dist-template/
 npm test                 # Unit tests (vitest)
 npm run test:e2e         # Playwright E2E tests
 ```
+
+Agent guidance for Codex, Claude, and other coding assistants lives in
+[AGENTS.md](AGENTS.md). `CLAUDE.md` delegates to the same shared instructions.
 
 ## Stack
 

@@ -85,7 +85,7 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0, 0, 0, 0.45)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+        background: 'var(--color-overlay-scrim)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
         zIndex: 9999,
       }}
     >

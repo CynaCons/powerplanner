@@ -3,7 +3,7 @@
 ## Quick Summary
 
 **Current Version:** v2.3.0 — PowerPoint add-in alpha (in addition to landing site + PowerNote integration)
-**Next Milestone:** v2.4 — HTTPS dev cert wiring, full Gantt vocabulary in add-in (brackets/baselines/markers), AppSource manifest validation
+**Next Milestone:** v2.4 — full Gantt vocabulary in add-in (brackets/baselines/markers), taskpane-specific inspector UX, AppSource submission
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
@@ -20,6 +20,7 @@
 - ✅ v2.1.0 — Landing page at `cynacons.github.io/powerplanner` (Engineering Atelier Editorial Edition): hand-crafted animated SVG Gantt hero, stat strip with count-up numerals, 4-step how-it-works, 3×3 feature grid, 3-card comparison fold, 12-row shortcuts showcase, pricing strip with gradient word, GitHub Actions auto-deploy from `/site`
 - ✅ v2.2.0 — Embeddable Gantt renderer (`src/embed/` barrel) + PowerNote integration: self-contained `<GanttRenderer document width height options>` with no store coupling; vendored into PowerNote at `src/vendor/powerplanner/`; new `'gantt'` node type, `GanttNode.tsx`, NavRail button, click-to-place handler creating a sample chart
 - ✅ v2.3.0 — PowerPoint add-in (alpha): Office.js manifest XML, second Vite entry (`taskpane.html`), `src/taskpane/{main,TaskPaneApp,officeBridge}.tsx`; "Insert into slide" emits native rectangles for tasks, diamonds for milestones, elbow connectors for dependencies, text boxes for row labels + title; full JSON round-trip via `PP_DOC` tag on chart group; npm scripts `addin:certs/start/stop/validate`; docs at `docs/powerpoint-addin.md`
+- ✅ v2.3.1 — Add-in dev ergonomics: split `npm run dev` (HTTP) vs `npm run dev:addin` (HTTPS + Office cert); taskpane browser fallback mount + PowerPointApi 1.4 runtime check; PNG ribbon icons + manifest `<Requirements>`; compact taskpane layout; troubleshooting section in `docs/powerpoint-addin.md`
 
 ### Key Objectives
 - Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).

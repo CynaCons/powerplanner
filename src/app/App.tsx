@@ -15,7 +15,12 @@ import { loadAutosave, saveAutosave, clearAutosave } from '../persistence/autosa
 import { saveToFile } from '../persistence/fileIo';
 import type { GanttDocument } from '../types/document';
 
-export function App() {
+interface AppProps {
+  /** Chart-first layout for narrow Office task panes (hides the inspector column). */
+  compact?: boolean;
+}
+
+export function App({ compact = false }: AppProps) {
   const theme = useDocumentStore((s) => s.doc.style.theme);
   const doc = useDocumentStore((s) => s.doc);
   const setDocument = useDocumentStore((s) => s.setDocument);
@@ -77,7 +82,7 @@ export function App() {
   useKeyboardShortcuts();
 
   return (
-    <div className="app-shell">
+    <div className={compact ? 'app-shell app-shell--compact' : 'app-shell'}>
       <Header />
       <Inspector />
       <ChartArea />

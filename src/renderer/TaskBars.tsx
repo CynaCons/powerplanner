@@ -88,8 +88,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
                 y={y + h - 4}
                 width={fillWidth}
                 height={4}
-                fill="black"
-                opacity={0.45}
+                fill="var(--color-bar-progress)"
                 pointerEvents="none"
               />
             )}

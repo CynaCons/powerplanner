@@ -11,3 +11,7 @@ playwright-report
 test-results
 .tsbuildinfo
 *.tsbuildinfo
+
+# Local agent tooling (not project files)
+mcps
+terminals

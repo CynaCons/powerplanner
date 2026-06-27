@@ -18,18 +18,16 @@ screenshot, not an embedded SVG.
 
 - Brackets, baselines, today line, deadline markers (alpha emits tasks
   + milestones + dependencies + row labels only)
-- HTTPS dev cert auto-install through Vite (we use Office's own cert
-  installer — see below)
 - AppSource submission
 
 ## Local setup
 
 ```bash
-# 1. Install the dev cert that Office requires (run once)
+# 1. Install the dev cert that Office requires (run once per machine)
 npm run addin:certs
 
-# 2. Start the Vite dev server in one terminal
-npm run dev
+# 2. Start the HTTPS dev server (add-in only) in one terminal
+npm run dev:addin
 
 # 3. In a separate terminal, sideload + launch PowerPoint
 npm run addin:start
@@ -38,14 +36,22 @@ npm run addin:start
 npm run addin:stop
 ```
 
-The first run installs `office-addin-dev-certs` and trusts a localhost
-certificate. After that, sideloading registers the add-in with PowerPoint
-Desktop and opens it with the PowerPlanner pane visible.
+`npm run dev` serves the main app over **HTTP** for everyday editing and
+Playwright tests. The add-in manifest points at **HTTPS**, so use
+`npm run dev:addin` when sideloading — it reuses the Office localhost cert
+from `office-addin-dev-certs`.
 
-> Note: Vite must be configured to serve over HTTPS. Add
-> `server: { https: true }` to `vite.config.ts` once the dev cert is
-> installed. The default config in this repo serves HTTP for the main
-> editor; flip the flag locally before sideloading.
+### Troubleshooting
+
+- **Blank task pane** — confirm `https://localhost:5180/taskpane.html` loads
+  in a browser (you should see a “Browser preview” banner and the editor).
+  If that works but PowerPoint is blank, run `npm run addin:stop` then
+  `npm run addin:start` to refresh the sideload cache.
+- **Insert/Pull disabled** — requires PowerPoint Desktop with **PowerPointApi
+  1.4+** (Microsoft 365 builds from mid-2022 onward). The pane shows a
+  warning when the API set is missing.
+- **Runtime logs** — `%TEMP%\OfficeAddins.log.txt` on Windows.
+- **Validate manifest** — `npm run addin:validate` (icons must be PNG).
 
 ## Sideload in PowerPoint Web
 
@@ -57,7 +63,7 @@ Desktop and opens it with the PowerPlanner pane visible.
 ## Production deployment
 
 Host the built `dist/` (with `taskpane.html`) on any HTTPS-capable static
-host. Update the manifest's URLs from `https://localhost:5173/...` to your
+host. Update the manifest's URLs from `https://localhost:5180/...` to your
 public origin, and the manifest's `<AppDomains>` to match. Distribute via:
 
 - **Sideload** — send the manifest XML + a one-pager (simplest)

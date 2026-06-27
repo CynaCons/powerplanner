@@ -89,6 +89,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
   );
 
   const criticalIds = showCriticalPath ? computeCriticalPath(document).criticalTaskIds : null;
+  const effectiveTheme = themeOverride ?? document.style.theme ?? 'light';
 
   // Weekend stripes
   const weekendStripes: { x: number; w: number }[] = [];
@@ -106,13 +107,13 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
   const todayX = dateToX(today, viewStart, pxPerDay);
   const todayVisible = showToday && todayX >= 0 && todayX <= chartW;
 
-  // Theme isolation: wrap in a div with data-theme so host's theme doesn't bleed.
+  // Theme isolation: set data-theme so host theme tokens don't bleed in.
   const rootStyle: CSSProperties = {
     width: '100%',
     height: '100%',
     display: 'block',
-    background: 'var(--pp-bg, #0b0c0f)',
-    color: 'var(--pp-text, #f0f1f3)',
+    background: 'var(--pp-bg, #fafbfc)',
+    color: 'var(--pp-text, #0b0c0f)',
     fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
     ...style,
   };
@@ -125,7 +126,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
       preserveAspectRatio="xMidYMid meet"
       className={className}
       style={rootStyle}
-      data-theme={themeOverride}
+      data-theme={effectiveTheme}
       role="img"
       aria-label={`Gantt chart: ${document.title}`}
     >
@@ -141,29 +142,29 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
       </defs>
 
       {/* Window background */}
-      <rect x={0} y={0} width={width} height={height} fill="var(--pp-bg, #0b0c0f)" />
+      <rect x={0} y={0} width={width} height={height} fill="var(--pp-bg, #fafbfc)" />
 
       {/* Gutter background */}
-      <rect x={0} y={0} width={gutterW} height={height} fill="var(--pp-bg-panel, #101216)" />
-      <line x1={gutterW} y1={0} x2={gutterW} y2={height} stroke="var(--pp-border-hair, rgba(255,255,255,0.06))" />
+      <rect x={0} y={0} width={gutterW} height={height} fill="var(--pp-bg-panel, #ffffff)" />
+      <line x1={gutterW} y1={0} x2={gutterW} y2={height} stroke="var(--pp-border-hair, rgba(0,0,0,0.06))" />
 
       {/* Time axis — major + minor levels */}
       <g transform={`translate(${gutterW} 0)`}>
-        <rect x={0} y={0} width={chartW} height={axis.major.height} fill="var(--pp-bg-panel, #101216)" />
+        <rect x={0} y={0} width={chartW} height={axis.major.height} fill="var(--pp-bg-panel, #ffffff)" />
         {axis.major.ticks.map((t, i) => (
           <g key={`maj-${i}`} transform={`translate(${t.x} 0)`}>
-            <line x1={0} y1={0} x2={0} y2={axis.major.height} stroke="var(--pp-border-hair, rgba(255,255,255,0.06))" />
-            <text x={6} y={axis.major.height - 8} fill="var(--pp-text-soft, #a1a5ad)" fontSize={10} fontWeight={600}>
+            <line x1={0} y1={0} x2={0} y2={axis.major.height} stroke="var(--pp-border-hair, rgba(0,0,0,0.06))" />
+            <text x={6} y={axis.major.height - 8} fill="var(--pp-text-soft, #5b6068)" fontSize={10} fontWeight={600}>
               {t.label}
             </text>
           </g>
         ))}
         <g transform={`translate(0 ${axis.major.height})`}>
-          <rect x={0} y={0} width={chartW} height={axis.minor.height} fill="var(--pp-bg, #0b0c0f)" />
+          <rect x={0} y={0} width={chartW} height={axis.minor.height} fill="var(--pp-bg, #fafbfc)" />
           {axis.minor.ticks.map((t, i) => (
             <g key={`min-${i}`} transform={`translate(${t.x} 0)`}>
-              <line x1={0} y1={0} x2={0} y2={axis.minor.height} stroke="var(--pp-border-hair, rgba(255,255,255,0.06))" />
-              <text x={4} y={axis.minor.height - 6} fill="var(--pp-text-dim, #6b7079)" fontSize={9}>
+              <line x1={0} y1={0} x2={0} y2={axis.minor.height} stroke="var(--pp-border-hair, rgba(0,0,0,0.06))" />
+              <text x={4} y={axis.minor.height - 6} fill="var(--pp-text-dim, #8b8f97)" fontSize={9}>
                 {t.label}
               </text>
             </g>
@@ -178,7 +179,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
             <text
               x={12 + (row.groupId ? 16 : 0)}
               y={layout.rowHeights[i] / 2 + 4}
-              fill="var(--pp-text, #f0f1f3)"
+              fill="var(--pp-text, #0b0c0f)"
               fontSize={11}
               fontWeight={500}
             >
@@ -189,7 +190,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
               y1={layout.rowHeights[i]}
               x2={width}
               y2={layout.rowHeights[i]}
-              stroke="var(--pp-border-hair, rgba(255,255,255,0.06))"
+              stroke="var(--pp-border-hair, rgba(0,0,0,0.06))"
               strokeWidth={0.5}
             />
           </g>
@@ -200,7 +201,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
       <g transform={`translate(${gutterW} ${AXIS_H})`} clipPath={`url(#pp-clip-${document.title.replace(/\W/g, '')})`}>
         {/* Weekend stripes */}
         {weekendStripes.map((s, i) => (
-          <rect key={`w-${i}`} x={s.x} y={0} width={s.w} height={layout.chartHeight} fill="var(--pp-weekend, rgba(255,255,255,0.025))" />
+          <rect key={`w-${i}`} x={s.x} y={0} width={s.w} height={layout.chartHeight} fill="var(--pp-weekend, rgba(0,0,0,0.025))" />
         ))}
 
         {/* Today line */}
@@ -221,7 +222,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
                 y1={0}
                 x2={x}
                 y2={layout.chartHeight}
-                stroke={m.type === 'deadline' ? 'var(--pp-deadline, #fbbf24)' : 'var(--pp-text-soft, #a1a5ad)'}
+                stroke={m.type === 'deadline' ? 'var(--pp-deadline, #fbbf24)' : 'var(--pp-text-soft, #5b6068)'}
                 strokeWidth={1}
                 strokeDasharray={m.type === 'deadline' ? '5 3' : '2 2'}
                 opacity={0.8}
@@ -230,7 +231,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
                 x={x + 4}
                 y={10}
                 fontSize={9}
-                fill={m.type === 'deadline' ? 'var(--pp-deadline, #fbbf24)' : 'var(--pp-text-soft, #a1a5ad)'}
+                fill={m.type === 'deadline' ? 'var(--pp-deadline, #fbbf24)' : 'var(--pp-text-soft, #5b6068)'}
               >
                 {m.label}
               </text>
@@ -242,7 +243,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
         {layout.brackets.map((lb) => {
           const top = layout.rowOffsets[lb.topRow] - 10;
           const w = Math.max(2, lb.width);
-          const color = lb.bracket.color || 'var(--pp-accent, #818cf8)';
+          const color = lb.bracket.color || 'var(--pp-accent, #4f46e5)';
           return (
             <g key={lb.bracket.id} pointerEvents="none">
               <line x1={lb.x} y1={top} x2={lb.x + w} y2={top} stroke={color} strokeWidth={1.2} />
@@ -258,13 +259,13 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
         {/* Summary rows */}
         {layout.summaries.map((s) => (
           <g key={s.rowId} pointerEvents="none">
-            <rect x={s.x} y={s.y} width={s.width} height={5} rx={1.5} fill="var(--pp-text-soft, #a1a5ad)" opacity={0.55} />
+            <rect x={s.x} y={s.y} width={s.width} height={5} rx={1.5} fill="var(--pp-text-soft, #5b6068)" opacity={0.55} />
           </g>
         ))}
 
         {/* Task bars */}
         {layout.tasks.map((lt) => {
-          const color = lt.task.color || 'var(--pp-accent, #818cf8)';
+          const color = lt.task.color || 'var(--pp-accent, #4f46e5)';
           const pct = Math.max(0, Math.min(100, lt.task.percentComplete ?? 0));
           const fillW = (lt.width * pct) / 100;
           const isCritical = criticalIds?.has(lt.task.id);
@@ -285,7 +286,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
               )}
               <rect x={lt.x} y={lt.y} width={lt.width} height={lt.height} rx={3} fill={color} opacity={0.92} />
               {pct > 0 && (
-                <rect x={lt.x} y={lt.y + lt.height - 3} width={fillW} height={3} fill="rgba(0,0,0,0.45)" />
+                <rect x={lt.x} y={lt.y + lt.height - 3} width={fillW} height={3} fill="var(--pp-bar-progress, rgba(0,0,0,0.28))" />
               )}
               {lt.width > 60 && (
                 <text x={lt.x + 6} y={lt.y + lt.height / 2 + 3.5} fontSize={10} fill="white" fontWeight={500}>
@@ -320,7 +321,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
             key={ld.dependency.id}
             d={ld.path}
             fill="none"
-            stroke="var(--pp-text-soft, #a1a5ad)"
+            stroke="var(--pp-text-soft, #5b6068)"
             strokeWidth={1}
             opacity={0.7}
             pointerEvents="none"
@@ -329,25 +330,53 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
       </g>
 
       {/* Bottom border between axis and chart */}
-      <line x1={gutterW} y1={AXIS_H} x2={width} y2={AXIS_H} stroke="var(--pp-border-hair, rgba(255,255,255,0.06))" />
+      <line x1={gutterW} y1={AXIS_H} x2={width} y2={AXIS_H} stroke="var(--pp-border-hair, rgba(0,0,0,0.06))" />
 
       <style>{`
-        @media (max-width: 999999px) {
-          svg[data-theme='light'] {
-            --pp-bg: #fafbfc;
-            --pp-bg-panel: #ffffff;
-            --pp-text: #0b0c0f;
-            --pp-text-soft: #5b6068;
-            --pp-text-dim: #8b8f97;
-            --pp-border-hair: rgba(0, 0, 0, 0.06);
-            --pp-weekend: rgba(0, 0, 0, 0.025);
-          }
+        svg[data-theme='light'] {
+          --pp-bg: #fafbfc;
+          --pp-bg-panel: #ffffff;
+          --pp-text: #0b0c0f;
+          --pp-text-soft: #5b6068;
+          --pp-text-dim: #8b8f97;
+          --pp-border-hair: rgba(0, 0, 0, 0.06);
+          --pp-weekend: rgba(0, 0, 0, 0.025);
+          --pp-accent: #4f46e5;
+          --pp-today: #f87171;
+          --pp-deadline: #fbbf24;
+          --pp-bar-progress: rgba(0, 0, 0, 0.28);
+        }
+        svg[data-theme='dark'] {
+          --pp-bg: #0b0c0f;
+          --pp-bg-panel: #101216;
+          --pp-text: #f0f1f3;
+          --pp-text-soft: #a1a5ad;
+          --pp-text-dim: #6b7079;
+          --pp-border-hair: rgba(255, 255, 255, 0.06);
+          --pp-weekend: rgba(255, 255, 255, 0.025);
+          --pp-accent: #818cf8;
+          --pp-today: #f87171;
+          --pp-deadline: #fbbf24;
+          --pp-bar-progress: rgba(0, 0, 0, 0.45);
+        }
+        svg[data-theme='print'] {
+          --pp-bg: #ffffff;
+          --pp-bg-panel: #ffffff;
+          --pp-text: #000000;
+          --pp-text-soft: #333333;
+          --pp-text-dim: #777777;
+          --pp-border-hair: #cccccc;
+          --pp-weekend: #f3f3f3;
+          --pp-accent: #000000;
+          --pp-today: #d00000;
+          --pp-deadline: #aa6000;
+          --pp-bar-progress: rgba(0, 0, 0, 0.35);
         }
       `}</style>
 
       {/* Padding placeholder so height>0 even when no rows */}
       {layout.visibleRows.length === 0 && (
-        <text x={width / 2} y={height / 2} textAnchor="middle" fontSize={11} fill="var(--pp-text-dim, #6b7079)">
+        <text x={width / 2} y={height / 2} textAnchor="middle" fontSize={11} fill="var(--pp-text-dim, #8b8f97)">
           {HEADER_PADDING}empty chart
         </text>
       )}

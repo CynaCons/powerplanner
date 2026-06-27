@@ -133,7 +133,7 @@ export function CommandPalette({ open, onClose }: Props) {
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-        paddingTop: '12vh', background: 'rgba(0, 0, 0, 0.45)',
+        paddingTop: '12vh', background: 'var(--color-overlay-scrim)',
         backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', zIndex: 10000,
       }}
     >

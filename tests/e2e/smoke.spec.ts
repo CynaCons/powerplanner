@@ -21,9 +21,12 @@ test.describe('PowerPlanner smoke', () => {
     await expect(page.locator('.app-status')).toContainText('7 tasks');
   });
 
-  test('changes theme to light', async ({ page }) => {
+  test('defaults to light theme and can switch themes', async ({ page }) => {
     await page.goto('/');
-    // Theme is a segmented radio control; click the Light option in the Appearance section
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    // Theme is a segmented radio control in the Appearance section.
+    await page.locator('.inspector [role="radio"]:has-text("Dark")').click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.locator('.inspector [role="radio"]:has-text("Light")').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });

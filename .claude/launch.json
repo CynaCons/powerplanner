@@ -5,13 +5,19 @@
       "name": "dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "port": 5173
+      "port": 5180
+    },
+    {
+      "name": "dev:addin",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:addin"],
+      "port": 5180
     },
     {
       "name": "portable",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", "-s", "dist-template", "-p", "5180", "--no-clipboard"],
-      "port": 5180
+      "runtimeArgs": ["serve", "-s", "dist-template", "-p", "5181", "--no-clipboard"],
+      "port": 5181
     },
     {
       "name": "site",

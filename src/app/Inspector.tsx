@@ -164,7 +164,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
           inset: '0 1px auto 1px',
           top: 0,
           height: 1,
-          background: 'linear-gradient(to right, transparent, rgba(255,255,255,0.05) 40%, rgba(255,255,255,0.05) 60%, transparent)',
+          background: 'linear-gradient(to right, transparent, var(--color-card-highlight) 40%, var(--color-card-highlight) 60%, transparent)',
           borderTopLeftRadius: 'var(--radius-lg)',
           borderTopRightRadius: 'var(--radius-lg)',
           pointerEvents: 'none',

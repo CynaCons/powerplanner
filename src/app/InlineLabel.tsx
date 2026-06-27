@@ -34,8 +34,8 @@ export function InlineLabel({ text, x, y, width, height, color = 'white', onComm
         style={{
           width: '100%',
           height: '100%',
-          background: 'rgba(0,0,0,0.4)',
-          border: '1px solid rgba(255,255,255,0.6)',
+          background: 'var(--color-inline-editor-bg)',
+          border: '1px solid var(--color-inline-editor-border)',
           color,
           padding: '0 6px',
           fontSize: 11,

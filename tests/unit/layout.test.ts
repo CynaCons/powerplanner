@@ -13,7 +13,7 @@ function makeDoc(overrides: Partial<GanttDocument> = {}): GanttDocument {
     brackets: [],
     dependencies: [],
     markers: [],
-    style: { theme: 'dark', preset: 'default' },
+    style: { theme: 'light', preset: 'default' },
     ...overrides,
   };
 }
