@@ -2,8 +2,8 @@
 
 ## Quick Summary
 
-**Current Version:** v2.3.0 — PowerPoint add-in alpha (in addition to landing site + PowerNote integration)
-**Next Milestone:** v2.4 — full Gantt vocabulary in add-in (brackets/baselines/markers), taskpane-specific inspector UX, AppSource submission
+**Current Version:** v2.3.1 — PowerPoint add-in alpha (Office.js) + landing site + PowerNote integration
+**Next Milestone:** Native PowerPoint add-in (Phase 9) — a C++ COM add-in (think-cell style) with the chart as native shapes and on-slide contextual UI; the Office.js add-in stays as a cross-platform fallback
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
@@ -357,6 +357,41 @@
 - [ ] Landing page mirroring PowerTimeline / PowerNote style
 - [ ] OpenGraph meta tags, JSON-LD structured data
 - [ ] robots.txt + sitemap
+
+---
+
+# Phase 9: Native PowerPoint Add-In (C++ COM) — IN PROGRESS
+**Goal:** A native in-process COM add-in for PowerPoint desktop in the style of
+think-cell: the Gantt chart lives on the slide as native shapes, and the editing
+UI is drawn contextually over the slide (not a task pane). Windows-only, separate
+codebase under `native/`. The Office.js add-in remains as a cross-platform
+fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md).
+
+### N1 — Loadable COM Add-in Skeleton — COMPLETE
+- [x] ATL in-proc COM DLL project under `native/` (x64, per-user registration)
+- [x] `IDTExtensibility2` lifecycle; cache `PowerPoint.Application` on connect
+- [x] `IRibbonExtensibility` "PowerPlanner" ribbon tab with an "Insert Gantt" button
+- [x] Ribbon callbacks routed through hand-implemented `IDispatch`
+- [x] `build.bat`/`build.ps1` (compile/register/unregister); DLL loads in PowerPoint, button reaches native code (verified: ribbon tab renders, click fires `DoInsertGantt`)
+
+### N2 — Native Shape Emission
+- [ ] Port `src/taskpane/officeBridge.ts` layout→shapes to C++ via the PowerPoint OM
+- [ ] Emit tasks/milestones/dependencies/labels as native shapes, grouped + tagged
+
+### N3 — Data Model + Round-Trip
+- [ ] C++ Gantt data model
+- [ ] Embed/read document JSON in a shape tag (`PP_DOC`); re-layout
+
+### N4 — On-Slide Contextual UI
+- [ ] Layered child window overlay aligned to the slide-edit pane
+- [ ] Hook `WindowSelectionChange` / mouse; draw handles over chart shapes
+- [ ] Contextual buttons rendered on-slide (add task, drag dates)
+
+### N5 — Live Linkage ("Agents")
+- [ ] Watch shape edits; keep chart consistent; reflow
+
+### N6 — Installer + Packaging
+- [ ] WiX/MSI per-user installer, COM registration, ribbon icons
 
 ---
 

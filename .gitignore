@@ -15,3 +15,6 @@ test-results
 # Local agent tooling (not project files)
 mcps
 terminals
+
+# Native add-in build output
+native/build

@@ -1,0 +1,4 @@
+#include "resource.h"
+
+// ATL registrar script for the COM class + PowerPoint add-in load entry.
+IDR_CONNECT REGISTRY "Connect.rgs"

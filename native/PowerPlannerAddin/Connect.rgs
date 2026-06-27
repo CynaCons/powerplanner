@@ -1,0 +1,49 @@
+HKCR
+{
+	PowerPlanner.Connect.1 = s 'PowerPlanner Add-in'
+	{
+		CLSID = s '{E329C60E-49D1-4C42-AC07-75EC1917F06F}'
+	}
+	PowerPlanner.Connect = s 'PowerPlanner Add-in'
+	{
+		CLSID = s '{E329C60E-49D1-4C42-AC07-75EC1917F06F}'
+		CurVer = s 'PowerPlanner.Connect.1'
+	}
+	NoRemove CLSID
+	{
+		ForceRemove '{E329C60E-49D1-4C42-AC07-75EC1917F06F}' = s 'PowerPlanner Add-in'
+		{
+			ProgID = s 'PowerPlanner.Connect.1'
+			VersionIndependentProgID = s 'PowerPlanner.Connect'
+			InprocServer32 = s '%MODULE%'
+			{
+				val ThreadingModel = s 'Apartment'
+			}
+		}
+	}
+}
+HKCU
+{
+	NoRemove Software
+	{
+		NoRemove Microsoft
+		{
+			NoRemove Office
+			{
+				NoRemove PowerPoint
+				{
+					NoRemove AddIns
+					{
+						ForceRemove 'PowerPlanner.Connect'
+						{
+							val FriendlyName = s 'PowerPlanner'
+							val Description = s 'PowerPlanner native Gantt add-in'
+							val LoadBehavior = d 3
+							val CommandLineSafe = d 0
+						}
+					}
+				}
+			}
+		}
+	}
+}
