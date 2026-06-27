@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://powerplanner.dev/spec/document.schema.json",
+  "title": "PowerPlanner GanttDocument",
+  "description": "Canonical PowerPlanner document. Mirrors src/types/document.ts and src/persistence/schema.ts. Both the web and PowerPoint implementations validate against this contract.",
+  "type": "object",
+  "required": ["schemaVersion", "title", "calendar", "rows", "tasks", "milestones", "brackets", "dependencies", "markers", "style"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "title": { "type": "string" },
+    "calendar": { "$ref": "#/$defs/CalendarSettings" },
+    "rows": { "type": "array", "items": { "$ref": "#/$defs/Row" } },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/Task" } },
+    "milestones": { "type": "array", "items": { "$ref": "#/$defs/Milestone" } },
+    "brackets": { "type": "array", "items": { "$ref": "#/$defs/Bracket" } },
+    "dependencies": { "type": "array", "items": { "$ref": "#/$defs/Dependency" } },
+    "markers": { "type": "array", "items": { "$ref": "#/$defs/Marker" } },
+    "style": { "$ref": "#/$defs/StyleSettings" },
+    "baseline": { "$ref": "#/$defs/BaselineSnapshot" }
+  },
+  "$defs": {
+    "ISODate": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "Hex": { "type": "string", "pattern": "^#?[0-9A-Fa-f]{6}$" },
+    "TimeScale": { "enum": ["day", "week", "month", "quarter", "year"] },
+    "DependencyType": { "enum": ["finish-to-start", "start-to-start", "finish-to-finish", "start-to-finish"] },
+    "LabelPlacement": { "enum": ["on-bar", "left", "right", "above", "below", "hidden"] },
+    "ThemeName": { "enum": ["light", "dark", "print"] },
+    "MarkerType": { "enum": ["today", "deadline", "note"] },
+    "CalendarSettings": {
+      "type": "object",
+      "required": ["scale", "fiscalYearStart", "workingDays", "holidays"],
+      "properties": {
+        "scale": { "$ref": "#/$defs/TimeScale" },
+        "fiscalYearStart": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "workingDays": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 6 } },
+        "holidays": { "type": "array", "items": { "$ref": "#/$defs/ISODate" } }
+      }
+    },
+    "Row": {
+      "type": "object",
+      "required": ["id", "label", "groupId"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "groupId": { "type": ["string", "null"] },
+        "collapsed": { "type": "boolean" }
+      }
+    },
+    "Task": {
+      "type": "object",
+      "required": ["id", "rowId", "label", "start", "end"],
+      "properties": {
+        "id": { "type": "string" },
+        "rowId": { "type": "string" },
+        "label": { "type": "string" },
+        "start": { "$ref": "#/$defs/ISODate" },
+        "end": { "$ref": "#/$defs/ISODate" },
+        "percentComplete": { "type": "number", "minimum": 0, "maximum": 100 },
+        "color": { "$ref": "#/$defs/Hex" },
+        "labelPlacement": { "$ref": "#/$defs/LabelPlacement" },
+        "notes": { "type": "string" }
+      }
+    },
+    "Milestone": {
+      "type": "object",
+      "required": ["id", "rowId", "label", "date"],
+      "properties": {
+        "id": { "type": "string" },
+        "rowId": { "type": "string" },
+        "label": { "type": "string" },
+        "date": { "$ref": "#/$defs/ISODate" },
+        "labelPlacement": { "$ref": "#/$defs/LabelPlacement" },
+        "color": { "$ref": "#/$defs/Hex" }
+      }
+    },
+    "Bracket": {
+      "type": "object",
+      "required": ["id", "label", "start", "end", "rowIds"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "start": { "$ref": "#/$defs/ISODate" },
+        "end": { "$ref": "#/$defs/ISODate" },
+        "rowIds": { "type": "array", "items": { "type": "string" } },
+        "color": { "$ref": "#/$defs/Hex" }
+      }
+    },
+    "Dependency": {
+      "type": "object",
+      "required": ["id", "from", "to", "type"],
+      "properties": {
+        "id": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "type": { "$ref": "#/$defs/DependencyType" }
+      }
+    },
+    "Marker": {
+      "type": "object",
+      "required": ["id", "type", "label", "date"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "$ref": "#/$defs/MarkerType" },
+        "label": { "type": "string" },
+        "date": { "$ref": "#/$defs/ISODate" },
+        "color": { "type": "string" }
+      }
+    },
+    "StyleSettings": {
+      "type": "object",
+      "required": ["theme", "preset"],
+      "properties": {
+        "theme": { "$ref": "#/$defs/ThemeName" },
+        "preset": { "type": "string" }
+      }
+    },
+    "BaselineSnapshot": {
+      "type": "object",
+      "required": ["capturedAt", "tasks"],
+      "properties": {
+        "capturedAt": { "$ref": "#/$defs/ISODate" },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "start", "end"],
+            "properties": {
+              "id": { "type": "string" },
+              "start": { "$ref": "#/$defs/ISODate" },
+              "end": { "$ref": "#/$defs/ISODate" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

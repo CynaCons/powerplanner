@@ -1,0 +1,25 @@
+{
+  "_note": "Expected ABSTRACT layout at device scale = 1 (one day = one x-unit, one row slot = one y-unit), viewStart = 2026-01-01. Generated/verified by tests/unit/spec-conformance.test.ts against src/layout/engine.ts. Both implementations must reproduce these values.",
+  "visibleRowIds": ["r_phase", "r_design", "r_build", "r_launch"],
+  "rowSlots": [1, 2, 1, 1],
+  "rowOffsets": [0, 1, 3, 4],
+  "chartRows": 5,
+  "tasks": [
+    { "id": "t_d1", "rowIndex": 1, "subRow": 0, "xDay": 4, "widthDays": 8 },
+    { "id": "t_d2", "rowIndex": 1, "subRow": 1, "xDay": 9, "widthDays": 9 },
+    { "id": "t_b1", "rowIndex": 2, "subRow": 0, "xDay": 14, "widthDays": 14 },
+    { "id": "t_l1", "rowIndex": 3, "subRow": 0, "xDay": 25, "widthDays": 8 }
+  ],
+  "milestones": [
+    { "id": "m_ship", "rowIndex": 3, "xDay": 33 }
+  ],
+  "summaries": [
+    { "rowId": "r_phase", "rowIndex": 0, "xDay": 4, "widthDays": 24 }
+  ],
+  "brackets": [
+    { "id": "br1", "xDay": 4, "widthDays": 24, "topRow": 1, "bottomRow": 2 }
+  ],
+  "dependencies": [
+    { "id": "dep1", "fromXDay": 12, "toXDay": 14 }
+  ]
+}

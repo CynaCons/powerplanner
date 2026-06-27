@@ -1,0 +1,33 @@
+{
+  "name": "basic-chart",
+  "description": "Exercises sub-row stacking (two overlapping Design tasks), a derived summary row (Phase 1), a bracket across two rows, and a finish-to-start dependency.",
+  "view": { "viewStart": "2026-01-01", "scale": 1 },
+  "document": {
+    "schemaVersion": 1,
+    "title": "Basic Chart Fixture",
+    "calendar": { "scale": "week", "fiscalYearStart": 1, "workingDays": [1, 2, 3, 4, 5], "holidays": [] },
+    "rows": [
+      { "id": "r_phase", "label": "Phase 1", "groupId": null },
+      { "id": "r_design", "label": "Design", "groupId": "r_phase" },
+      { "id": "r_build", "label": "Build", "groupId": "r_phase" },
+      { "id": "r_launch", "label": "Launch", "groupId": null }
+    ],
+    "tasks": [
+      { "id": "t_d1", "rowId": "r_design", "label": "Design A", "start": "2026-01-05", "end": "2026-01-12" },
+      { "id": "t_d2", "rowId": "r_design", "label": "Design B", "start": "2026-01-10", "end": "2026-01-18" },
+      { "id": "t_b1", "rowId": "r_build", "label": "Build", "start": "2026-01-15", "end": "2026-01-28" },
+      { "id": "t_l1", "rowId": "r_launch", "label": "Launch prep", "start": "2026-01-26", "end": "2026-02-02" }
+    ],
+    "milestones": [
+      { "id": "m_ship", "rowId": "r_launch", "label": "Ship", "date": "2026-02-03" }
+    ],
+    "brackets": [
+      { "id": "br1", "label": "Delivery", "start": "2026-01-05", "end": "2026-01-28", "rowIds": ["r_design", "r_build"] }
+    ],
+    "dependencies": [
+      { "id": "dep1", "from": "t_d1", "to": "t_b1", "type": "finish-to-start" }
+    ],
+    "markers": [],
+    "style": { "theme": "light", "preset": "default" }
+  }
+}

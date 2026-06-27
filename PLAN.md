@@ -39,6 +39,34 @@
 ### Quick Links
 - [Product Requirements](PRD.md)
 - [README](README.md)
+- [Specification (concept layer)](spec/README.md)
+- [Native add-in notes](docs/native-addin.md)
+
+---
+
+## Architecture: one spec, two implementations
+
+PowerPlanner is a **concept** with two **implementations**. The concept lives in
+`spec/` (language-neutral); each implementation realizes it in its own medium.
+
+```
+spec/      ← the concept (source of truth): data-model, layout, visual-vocabulary,
+             interaction, JSON Schema, conformance fixtures
+src/       ← implementation A — WEB (React 19 + TS + SVG). The reference impl.
+native/    ← implementation B — POWERPOINT (C++ COM add-in, think-cell style)
+```
+
+- **Abstract coordinates.** `spec/layout.md` defines layout in days + row slots,
+  never pixels/points. Web maps day→px (`pxPerDay`); PowerPoint maps day→pt
+  (`ptPerDay`). Device mapping is each implementation's final, owned step.
+- **Conformance is the contract.** `spec/fixtures/` pairs canonical documents with
+  expected abstract layout. Web verifies via `tests/unit/spec-conformance.test.ts`;
+  native verifies the same fixtures against its C++ layout port. Same inputs →
+  same outputs keeps the two from drifting.
+- **The web app is the reference.** When spec and web disagree, that's a bug to
+  reconcile in one of them — neither is free to drift from the other.
+- `src/` and `native/` stay where they are (no `web/` move for now); the focus is
+  the PowerPoint implementation, built spec-first.
 
 ---
 
@@ -360,6 +388,27 @@
 
 ---
 
+# Phase S: Specification Layer (the concept) — IN PROGRESS
+**Goal:** Extract PowerPlanner's concept out of the web app into a language-neutral
+`spec/` that both implementations follow, with machine-checkable conformance so the
+web and PowerPoint versions cannot silently drift. See [spec/README.md](spec/README.md).
+
+### S0 — Spec foundation — COMPLETE
+- [x] `spec/data-model.md` — entities, fields, invariants (mirrors `src/types/document.ts`)
+- [x] `spec/layout.md` — projection algorithm in abstract day/row-slot coordinates
+- [x] `spec/visual-vocabulary.md` — element shapes, proportions, color, label rules
+- [x] `spec/interaction.md` — editing model incl. the future on-slide PPT UI
+- [x] `spec/schema/document.schema.json` — canonical JSON Schema (mirrors `schema.ts`)
+- [x] `spec/fixtures/basic-chart.*` — golden document + expected abstract layout
+- [x] Web conformance test (`tests/unit/spec-conformance.test.ts`) passing
+
+### S1 — Conformance breadth (later)
+- [ ] More fixtures: empty doc, collapsed groups, all four dependency types, multi-row brackets, baseline drift
+- [ ] Generate `src/types/document.ts` types from the JSON Schema (or assert equivalence in a test)
+- [ ] Wire the JSON Schema into web persistence validation (replace/augment hand-written `schema.ts`)
+
+---
+
 # Phase 9: Native PowerPoint Add-In (C++ COM) — IN PROGRESS
 **Goal:** A native in-process COM add-in for PowerPoint desktop in the style of
 think-cell: the Gantt chart lives on the slide as native shapes, and the editing
@@ -374,13 +423,16 @@ fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md)
 - [x] Ribbon callbacks routed through hand-implemented `IDispatch`
 - [x] `build.bat`/`build.ps1` (compile/register/unregister); DLL loads in PowerPoint, button reaches native code (verified: ribbon tab renders, click fires `DoInsertGantt`)
 
-### N2 — Native Shape Emission
-- [ ] Port `src/taskpane/officeBridge.ts` layout→shapes to C++ via the PowerPoint OM
-- [ ] Emit tasks/milestones/dependencies/labels as native shapes, grouped + tagged
+### N2 — Native Shape Emission — IN PROGRESS
+- [x] Emit tasks/milestones/dependencies/row-labels/title as native shapes (`GanttBuilder.cpp`)
+- [ ] Re-ground the C++ data model + layout on `spec/data-model.md` + `spec/layout.md`
+      (split `GanttModel` / `GanttLayout` out of the freehand port)
+- [ ] C++ conformance check passes `spec/fixtures/` at `ptPerDay = 1`
+- [ ] Group emitted shapes under a tagged root; verify in PowerPoint
 
 ### N3 — Data Model + Round-Trip
-- [ ] C++ Gantt data model
-- [ ] Embed/read document JSON in a shape tag (`PP_DOC`); re-layout
+- [ ] Parse a `GanttDocument` JSON (validated against `spec/schema`) instead of the built-in sample
+- [ ] Embed/read document JSON in a shape tag (`PP_DOC`); re-layout (round-trip)
 
 ### N4 — On-Slide Contextual UI
 - [ ] Layered child window overlay aligned to the slide-edit pane
