@@ -47,6 +47,9 @@ struct GanttLayoutResult {
 // Days since epoch for an ISO "YYYY-MM-DD" date (exposed for the emitter).
 long DateToDays(const std::string& iso);
 
+// Inverse of DateToDays: day number -> ISO "YYYY-MM-DD" (for N5 reflow).
+std::string DaysToDate(long days);
+
 // Lay out the document. xDay is relative to viewStart; one day = one x-unit,
 // one row slot = one y-unit (device scale = 1).
 GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStart);

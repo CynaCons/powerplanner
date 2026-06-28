@@ -468,8 +468,14 @@ fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md)
 - [x] Verified: `overlay-test` harness drives PowerPoint, selects the chart, screen-captures the overlay
 - [ ] (→ N5) Contextual *interactive* controls (clickable add-task / drag-dates) — needs hit-testing + editing
 
-### N5 — Live Linkage ("Agents")
-- [ ] Watch shape edits; keep chart consistent; reflow
+### N5 — Live Linkage ("Agents") — COMPLETE (core)
+- [x] Inverse projection (`DaysToDate` + stored `PP_PROJ` tag): shape position → dates
+- [x] `ReflowFromSlide`: reads each task bar's position back into dates, updates the document,
+      and reflows (re-emit) so dependent connectors/summary and `PP_DOC` stay in sync
+- [x] "Reflow" ribbon button (`OnReflowGantt`)
+- [x] Verified: `reflow-test` moves a bar +14 days → dates shift exactly +14 days, connectors
+      reflow, `PP_DOC` updated (REFLOW PASS); reflowed chart exported
+- [ ] (follow-on) Auto-reflow on the polling timer (detect a committed edit and reflow without the button)
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons

@@ -6,6 +6,8 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <cstdio>
+#include <cmath>
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -329,6 +331,11 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 			group->GetTags()->Add(_bstr_t(L"PP_KIND"), _bstr_t(L"CHART_ROOT"));
 			group->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
 			group->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
+			// Projection params for the inverse mapping (N5 reflow).
+			char proj[192];
+			::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
+				DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
+			group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
 			// SAFEARRAY freed by _variant_t destructor.
 		}
 	}
@@ -360,4 +367,72 @@ std::string ReadGanttFromSlide(IDispatch* pApp) {
 		return "";
 	}
 	return "";
+}
+
+HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
+	if (outChanged) *outChanged = false;
+	if (!pApp) return E_POINTER;
+	try {
+		PowerPoint::_ApplicationPtr app(pApp);
+		PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+
+		// Find the chart root group.
+		PowerPoint::ShapePtr group;
+		long n = shapes->GetCount();
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (k.length() && Narrow((const wchar_t*)k) == "CHART_ROOT") { group = sh; break; }
+		}
+		if (!group) return S_FALSE;
+
+		std::string docJson = Narrow((const wchar_t*)group->GetTags()->Item(_bstr_t(L"PP_DOC")));
+		std::string projJson = Narrow((const wchar_t*)group->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+		if (docJson.empty() || projJson.empty()) return S_FALSE;
+
+		long minDay = 0, pad = 0; float ptPerDay = 1.0f, originX = 0.0f;
+		::sscanf_s(projJson.c_str(), "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%f,\"originX\":%f}",
+			&minDay, &pad, &ptPerDay, &originX);
+		if (ptPerDay <= 0.0f) return S_FALSE;
+
+		PpDocument doc = DocumentFromJson(docJson);
+
+		// Read task shape positions from the group's children (PP_ID -> left,width).
+		std::map<std::string, std::pair<float, float>> pos;
+		PowerPoint::GroupShapesPtr items = group->GetGroupItems();
+		long m = items->GetCount();
+		for (long i = 1; i <= m; ++i) {
+			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+			_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!k.length() || Narrow((const wchar_t*)k) != "TASK") continue;
+			_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+			pos[Narrow((const wchar_t*)id)] = { ch->GetLeft(), ch->GetWidth() };
+		}
+
+		// Invert positions -> dates; update the document.
+		bool changed = false;
+		for (auto& t : doc.tasks) {
+			auto it = pos.find(t.id);
+			if (it == pos.end()) continue;
+			const float left = it->second.first, width = it->second.second;
+			long startDay = minDay - pad + (long)::llround((left - originX) / ptPerDay);
+			long widthDays = (long)::llround(width / ptPerDay);
+			if (widthDays < 1) widthDays = 1;
+			std::string ns = DaysToDate(startDay);
+			std::string ne = DaysToDate(startDay + widthDays - 1);
+			if (ns != t.start || ne != t.end) { t.start = ns; t.end = ne; changed = true; }
+		}
+
+		if (changed) {
+			group->Delete();
+			int cnt = 0;
+			InsertGantt(pApp, doc, &cnt);
+		}
+		if (outChanged) *outChanged = changed;
+		return S_OK;
+	}
+	catch (const _com_error&) {
+		return E_FAIL;
+	}
 }

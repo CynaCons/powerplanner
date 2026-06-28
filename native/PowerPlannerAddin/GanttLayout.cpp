@@ -22,6 +22,22 @@ long DateToDays(const std::string& iso) {
 	return DaysFromCivil(y, m, d);
 }
 
+// Civil date from day number (Howard Hinnant's inverse algorithm).
+std::string DaysToDate(long z) {
+	z += 719468;
+	const long era = (z >= 0 ? z : z - 146096) / 146097;
+	const unsigned doe = (unsigned)(z - era * 146097);
+	const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+	const long y = (long)yoe + era * 400;
+	const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+	const unsigned mp = (5 * doy + 2) / 153;
+	const unsigned d = doy - (153 * mp + 2) / 5 + 1;
+	const unsigned m = mp < 10 ? mp + 3 : mp - 9;
+	char buf[16];
+	sprintf_s(buf, "%04ld-%02u-%02u", y + (m <= 2), m, d);
+	return buf;
+}
+
 namespace {
 // max(2, span+1): inclusive-end width with a 2-unit floor (engine: max(2, endX-x+1)).
 long SpanWidthDays(const std::string& start, const std::string& end) {

@@ -51,6 +51,9 @@ static const wchar_t* kRibbonXml =
 	L"          <button id='ppPull' label='Pull from slide' size='large'"
 	L"                  imageMso='Refresh' onAction='OnPullGantt'"
 	L"                  screentip='Pull from slide' supertip='Read the PowerPlanner chart embedded on the current slide back into a document.'/>"
+	L"          <button id='ppReflow' label='Reflow' size='large'"
+	L"                  imageMso='RecurrenceEdit' onAction='OnReflowGantt'"
+	L"                  screentip='Reflow from edits' supertip='Read moved/resized task bars back into dates and reflow the chart (dependencies, summary, and embedded data stay in sync).'/>"
 	L"        </group>"
 	L"      </tab>"
 	L"    </tabs>"
@@ -101,6 +104,7 @@ STDMETHODIMP CConnect::GetIDsOfNames(REFIID riid, LPOLESTR* rgszNames, UINT cNam
 		if (_wcsicmp(rgszNames[0], L"OnRibbonLoad") == 0) { rgDispId[0] = DISPID_PP_ONLOAD; return S_OK; }
 		if (_wcsicmp(rgszNames[0], L"OnInsertGantt") == 0) { rgDispId[0] = DISPID_PP_INSERT_GANTT; return S_OK; }
 		if (_wcsicmp(rgszNames[0], L"OnPullGantt") == 0) { rgDispId[0] = DISPID_PP_PULL_GANTT; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnReflowGantt") == 0) { rgDispId[0] = DISPID_PP_REFLOW_GANTT; return S_OK; }
 	}
 	return ExtBase::GetIDsOfNames(riid, rgszNames, cNames, lcid, rgDispId);
 }
@@ -122,6 +126,10 @@ STDMETHODIMP CConnect::Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD 
 
 	case DISPID_PP_PULL_GANTT:
 		DoPullGantt();
+		return S_OK;
+
+	case DISPID_PP_REFLOW_GANTT:
+		DoReflowGantt();
 		return S_OK;
 	}
 	return ExtBase::Invoke(dispIdMember, riid, lcid, wFlags, pDispParams, pVarResult, pExcepInfo, puArgErr);
@@ -176,5 +184,26 @@ void CConnect::DoPullGantt()
 	}
 	catch (const std::exception&) {
 		::MessageBoxW(NULL, L"The chart on this slide has an invalid PP_DOC tag.", L"PowerPlanner", MB_OK | MB_ICONERROR);
+	}
+}
+
+void CConnect::DoReflowGantt()
+{
+	PpLog(L"DoReflowGantt — ribbon button clicked");
+	if (!m_pApp) {
+		::MessageBoxW(NULL, L"PowerPoint application is not available.", L"PowerPlanner", MB_OK | MB_ICONWARNING);
+		return;
+	}
+	bool changed = false;
+	HRESULT hr = ReflowFromSlide(m_pApp, &changed);
+	if (hr == S_FALSE) {
+		::MessageBoxW(NULL, L"No PowerPlanner chart found on this slide.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+	} else if (FAILED(hr)) {
+		::MessageBoxW(NULL, L"Could not reflow the chart.", L"PowerPlanner", MB_OK | MB_ICONERROR);
+	} else if (changed) {
+		PpLog(L"DoReflowGantt — reflowed (dates updated from moved bars)");
+		::MessageBoxW(NULL, L"Reflowed: moved/resized bars were read back into dates, and the chart was rebuilt.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+	} else {
+		::MessageBoxW(NULL, L"Nothing to reflow — no bar positions changed.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
 	}
 }

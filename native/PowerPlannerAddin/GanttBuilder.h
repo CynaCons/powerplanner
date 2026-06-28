@@ -16,3 +16,8 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount);
 // Read the embedded document JSON back from the active slide's chart group
 // (PP_DOC on the CHART_ROOT). Returns "" if no PowerPlanner chart is present.
 std::string ReadGanttFromSlide(IDispatch* pApp);
+
+// N5: read each task shape's position back into dates (inverse projection via
+// the PP_PROJ tag), update the document, and reflow the chart (re-emit) so
+// dependent connectors/summary and PP_DOC stay in sync. Sets *outChanged.
+HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged);
