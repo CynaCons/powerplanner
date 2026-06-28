@@ -436,12 +436,16 @@ fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md)
 - [x] Ribbon callbacks routed through hand-implemented `IDispatch`
 - [x] `build.bat`/`build.ps1` (compile/register/unregister); DLL loads in PowerPoint, button reaches native code (verified: ribbon tab renders, click fires `DoInsertGantt`)
 
-### N2 — Native Shape Emission — IN PROGRESS
-- [x] Emit tasks/milestones/dependencies/row-labels/title as native shapes (`GanttBuilder.cpp`)
-- [ ] Re-ground the C++ data model + layout on `spec/data-model.md` + `spec/layout.md`
-      (split `GanttModel` / `GanttLayout` out of the freehand port)
-- [ ] C++ conformance check passes `spec/fixtures/` at `ptPerDay = 1`
-- [ ] Group emitted shapes under a tagged root; verify in PowerPoint
+### N2 — Native Shape Emission — COMPLETE
+- [x] Split `GanttModel` (UTF-8 data) + `GanttLayout` (pure spec/layout.md in abstract
+      day/row-slot units, no COM) out of the freehand port
+- [x] C++ conformance harness passes `spec/fixtures/` at scale = 1 — matches the web golden
+      exactly (`native/conformance/`, `build-conformance.bat`)
+- [x] Emitter maps abstract layout → slide points; emits tasks (rounded rects), summary
+      bars, milestones (diamonds), brackets, dependency elbows, row labels + title as native shapes
+- [x] Shapes grouped under a tagged `CHART_ROOT`; tagged `PP_KIND`/`PP_ID`
+- [x] Verified end-to-end: render harness (`native/render/`) drives PowerPoint via automation,
+      emits the chart, exports the slide to PNG (19 shapes, correct layout)
 
 ### N3 — Data Model + Round-Trip
 - [ ] Parse a `GanttDocument` JSON (validated against `spec/schema`) instead of the built-in sample

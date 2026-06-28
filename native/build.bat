@@ -28,12 +28,18 @@ cl %CLFLAGS% /Fo"Connect.obj" "%SRC%\Connect.cpp" || ( popd & exit /b 1 )
 echo [build] compiling dllmain.cpp
 cl %CLFLAGS% /Fo"dllmain.obj" "%SRC%\dllmain.cpp" || ( popd & exit /b 1 )
 
+echo [build] compiling GanttLayout.cpp
+cl %CLFLAGS% /Fo"GanttLayout.obj" "%SRC%\GanttLayout.cpp" || ( popd & exit /b 1 )
+
+echo [build] compiling GanttBuilder.cpp
+cl %CLFLAGS% /Fo"GanttBuilder.obj" "%SRC%\GanttBuilder.cpp" || ( popd & exit /b 1 )
+
 echo [build] compiling resources
 rc /nologo /I"%SRC%" /fo "PowerPlannerAddin.res" "%SRC%\PowerPlannerAddin.rc" || ( popd & exit /b 1 )
 
 echo [build] linking PowerPlannerAddin.dll
 link /nologo /DLL /MACHINE:X64 /DEF:"%SRC%\PowerPlannerAddin.def" /OUT:"PowerPlannerAddin.dll" ^
-	Connect.obj dllmain.obj PowerPlannerAddin.res || ( popd & exit /b 1 )
+	Connect.obj dllmain.obj GanttLayout.obj GanttBuilder.obj PowerPlannerAddin.res || ( popd & exit /b 1 )
 
 popd
 echo [build] OK -^> "%OUT%\PowerPlannerAddin.dll"

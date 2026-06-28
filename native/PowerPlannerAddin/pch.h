@@ -2,6 +2,7 @@
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX  // don't define min/max macros — they break std::min/std::max
 #define _ATL_APARTMENT_THREADED
 #define _ATL_CSTRING_EXPLICIT_CONSTRUCTORS
 #define STRICT
@@ -25,6 +26,14 @@
 #import "libid:2DF8D04C-5BFA-101B-BDE5-00AA0044DE52" raw_interfaces_only \
     rename_namespace("Office") rename("RGB", "OfficeRGB") rename("DocumentProperties", "OfficeDocumentProperties")
 
-// Microsoft PowerPoint Object Library
-#import "libid:91493440-5A91-11CF-8700-00AA0060263B" raw_interfaces_only \
+// Microsoft Visual Basic for Applications Extensibility (VBIDE). The PowerPoint
+// typelib references VBE / VBProject from here; importing it first lets those
+// cross-typelib references resolve (namespace VBIDE).
+#import "libid:0002E157-0000-0000-C000-000000000046" raw_interfaces_only \
+    rename_namespace("VBIDE")
+
+// Microsoft PowerPoint Object Library.
+// We CONSUME this (drive the object model), so we keep the smart wrappers
+// (no raw_interfaces_only) for clean Get*/Put* property access.
+#import "libid:91493440-5A91-11CF-8700-00AA0060263B" \
     rename_namespace("PowerPoint") rename("RGB", "PpRGB")

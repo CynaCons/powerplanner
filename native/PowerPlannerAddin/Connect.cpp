@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "Connect.h"
+#include "GanttBuilder.h"
 
 // Type-library GUIDs used by the IDispatchImpl bases (named_guids is omitted in
 // the #import to avoid duplicate-COMDAT; see pch.h).
@@ -118,9 +119,24 @@ STDMETHODIMP CConnect::Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD 
 
 void CConnect::DoInsertGantt()
 {
-	// N1: prove the ribbon -> native callback loop. Real shape emission is N2.
 	PpLog(L"DoInsertGantt — ribbon button clicked");
-	::MessageBoxW(NULL,
-		L"PowerPlanner native add-in is live.\n\nNext: emit the Gantt chart as native PowerPoint shapes (N2).",
-		L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+	if (!m_pApp) {
+		::MessageBoxW(NULL, L"PowerPoint application is not available.", L"PowerPlanner", MB_OK | MB_ICONWARNING);
+		return;
+	}
+
+	int shapeCount = 0;
+	HRESULT hr = InsertGantt(m_pApp, MakeSampleDocument(), &shapeCount);
+	if (SUCCEEDED(hr)) {
+		wchar_t msg[160];
+		::swprintf_s(msg, 160, L"Inserted a Gantt chart: %d native shapes on the current slide.", shapeCount);
+		PpLog(msg);
+		// No dialog on success — the shapes on the slide are the feedback.
+	}
+	else {
+		wchar_t msg[200];
+		::swprintf_s(msg, 200, L"Could not insert the chart (hr=0x%08lX after %d shapes).\n\nOpen a slide in Normal view and try again.", (unsigned long)hr, shapeCount);
+		PpLog(msg);
+		::MessageBoxW(NULL, msg, L"PowerPlanner", MB_OK | MB_ICONERROR);
+	}
 }
