@@ -11,7 +11,7 @@ if not exist "%OUT%" mkdir "%OUT%"
 pushd "%OUT%"
 echo [conf] compiling conformance harness
 cl /nologo /EHsc /MT /std:c++17 /bigobj /DUNICODE /D_UNICODE /DWIN32 ^
-	"%SRC%conformance\conformance.cpp" "%SRC%PowerPlannerAddin\GanttLayout.cpp" ^
+	"%SRC%conformance\conformance.cpp" "%SRC%PowerPlannerAddin\GanttLayout.cpp" "%SRC%PowerPlannerAddin\GanttJson.cpp" ^
 	/Fe"ppconf.exe" || ( popd & exit /b 1 )
 popd
 

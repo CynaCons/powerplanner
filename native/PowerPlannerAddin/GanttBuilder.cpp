@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "GanttBuilder.h"
 #include "GanttLayout.h"
+#include "GanttJson.h"
 #include <algorithm>
 #include <map>
 #include <string>
@@ -14,6 +15,15 @@ static std::wstring Widen(const std::string& s) {
 	std::wstring w(n, L'\0');
 	::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
 	return w;
+}
+
+static std::string Narrow(const wchar_t* w) {
+	if (!w || !*w) return "";
+	int len = (int)::wcslen(w);
+	int n = ::WideCharToMultiByte(CP_UTF8, 0, w, len, NULL, 0, NULL, NULL);
+	std::string s(n, '\0');
+	::WideCharToMultiByte(CP_UTF8, 0, w, len, &s[0], n, NULL, NULL);
+	return s;
 }
 
 // "#RRGGBB" -> PowerPoint BGR (Office::MsoRGBType). Falls back on bad input.
@@ -317,6 +327,8 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 			PowerPoint::ShapeRangePtr range = shapes->Range(idx);
 			PowerPoint::ShapePtr group = range->Group();
 			group->GetTags()->Add(_bstr_t(L"PP_KIND"), _bstr_t(L"CHART_ROOT"));
+			group->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
+			group->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
 			// SAFEARRAY freed by _variant_t destructor.
 		}
 	}
@@ -327,4 +339,25 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 
 	if (outShapeCount) *outShapeCount = count;
 	return S_OK;
+}
+
+std::string ReadGanttFromSlide(IDispatch* pApp) {
+	if (!pApp) return "";
+	try {
+		PowerPoint::_ApplicationPtr app(pApp);
+		PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+		long n = shapes->GetCount();
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") {
+				_bstr_t doc = sh->GetTags()->Item(_bstr_t(L"PP_DOC"));
+				return Narrow((const wchar_t*)doc);
+			}
+		}
+	} catch (const _com_error&) {
+		return "";
+	}
+	return "";
 }

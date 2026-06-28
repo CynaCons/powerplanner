@@ -13,6 +13,7 @@ using namespace ATL;
 // DISPIDs for our ribbon callbacks (above any inherited dispinterface ids).
 #define DISPID_PP_ONLOAD        0x1001
 #define DISPID_PP_INSERT_GANTT  0x1002
+#define DISPID_PP_PULL_GANTT    0x1003
 
 // LIBIDs (we omit named_guids in the #import — see pch.h). Defined in Connect.cpp.
 extern const GUID LIBID_AddInDesigner_PP;
@@ -64,6 +65,7 @@ public:
 
 private:
 	void DoInsertGantt();
+	void DoPullGantt();
 
 	CComPtr<IDispatch> m_pApp;     // PowerPoint.Application
 	CComPtr<IDispatch> m_pRibbon;  // Office.IRibbonUI (from onLoad)

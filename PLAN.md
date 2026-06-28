@@ -419,6 +419,11 @@ traceable to it. See [spec/README.md](spec/README.md).
 - [ ] More fixtures: empty doc, collapsed groups, all four dependency types, multi-row brackets, baseline drift
 - [ ] Generate `src/types/document.ts` types from the JSON Schema (or assert equivalence in a test)
 - [ ] Wire the JSON Schema into web persistence validation (replace/augment hand-written `schema.ts`)
+- [ ] **Visual-vocabulary parity (web ↔ native):** layout already conforms, but rendering
+      diverges — web shows week ticks + weekend stripes and skips the summary bar; native
+      shows month-only gridlines + a grey summary bar; brackets differ (web line vs native box).
+      Reconcile against `visual-vocabulary.md`. Track via side-by-side renders
+      (`scripts/rasterize-visual.mjs` web, `native/build-render.bat` native, both on `sample-q3`).
 
 ---
 
@@ -447,9 +452,13 @@ fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md)
 - [x] Verified end-to-end: render harness (`native/render/`) drives PowerPoint via automation,
       emits the chart, exports the slide to PNG (19 shapes, correct layout)
 
-### N3 — Data Model + Round-Trip
-- [ ] Parse a `GanttDocument` JSON (validated against `spec/schema`) instead of the built-in sample
-- [ ] Embed/read document JSON in a shape tag (`PP_DOC`); re-layout (round-trip)
+### N3 — Data Model + Round-Trip — COMPLETE
+- [x] Shared JSON layer (`GanttJson`): canonical serialize + parse; round-trip stable
+      (conformance harness asserts `canonical(parse(canonical)) == canonical`; nlohmann/json)
+- [x] Insert embeds the serialized document on the chart root (`PP_DOC` + `PP_VERSION` tags)
+- [x] `ReadGanttFromSlide` reads `PP_DOC` back; "Pull from slide" ribbon button parses + reports it
+- [x] Verified: render-harness slide round-trip PASS (insert → read `PP_DOC` → parse → re-serialize == original, 1756 chars)
+- [ ] (follow-on) Load an external document via a file picker instead of the built-in sample
 
 ### N4 — On-Slide Contextual UI
 - [ ] Layered child window overlay aligned to the slide-edit pane

@@ -8,6 +8,7 @@
 #include "../third_party/json.hpp"
 #include "../PowerPlannerAddin/GanttModel.h"
 #include "../PowerPlannerAddin/GanttLayout.h"
+#include "../PowerPlannerAddin/GanttJson.h"
 
 #include <filesystem>
 #include <fstream>
@@ -16,64 +17,6 @@
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
-
-static std::string getStr(const json& j, const char* key) {
-	auto it = j.find(key);
-	if (it == j.end() || !it->is_string()) return "";
-	return it->get<std::string>();
-}
-
-static PpDocument ParseDocument(const json& d) {
-	PpDocument doc;
-	doc.title = getStr(d, "title");
-	for (const auto& r : d.value("rows", json::array())) {
-		PpRow row;
-		row.id = getStr(r, "id");
-		row.label = getStr(r, "label");
-		row.groupId = getStr(r, "groupId");  // null/absent -> ""
-		row.collapsed = r.value("collapsed", false);
-		doc.rows.push_back(row);
-	}
-	for (const auto& t : d.value("tasks", json::array())) {
-		PpTask task;
-		task.id = getStr(t, "id");
-		task.rowId = getStr(t, "rowId");
-		task.label = getStr(t, "label");
-		task.start = getStr(t, "start");
-		task.end = getStr(t, "end");
-		task.color = getStr(t, "color");
-		task.percent = t.value("percentComplete", 0);
-		doc.tasks.push_back(task);
-	}
-	for (const auto& m : d.value("milestones", json::array())) {
-		PpMilestone ms;
-		ms.id = getStr(m, "id");
-		ms.rowId = getStr(m, "rowId");
-		ms.label = getStr(m, "label");
-		ms.date = getStr(m, "date");
-		ms.color = getStr(m, "color");
-		doc.milestones.push_back(ms);
-	}
-	for (const auto& b : d.value("brackets", json::array())) {
-		PpBracket br;
-		br.id = getStr(b, "id");
-		br.label = getStr(b, "label");
-		br.start = getStr(b, "start");
-		br.end = getStr(b, "end");
-		br.color = getStr(b, "color");
-		for (const auto& rid : b.value("rowIds", json::array())) br.rowIds.push_back(rid.get<std::string>());
-		doc.brackets.push_back(br);
-	}
-	for (const auto& dp : d.value("dependencies", json::array())) {
-		PpDependency dep;
-		dep.id = getStr(dp, "id");
-		dep.from = getStr(dp, "from");
-		dep.to = getStr(dp, "to");
-		dep.type = getStr(dp, "type");
-		doc.deps.push_back(dep);
-	}
-	return doc;
-}
 
 static json ToAbstractJson(const GanttLayoutResult& R) {
 	json j;
@@ -125,15 +68,24 @@ int main(int argc, char** argv) {
 		}
 		expected.erase("_note");
 
-		PpDocument doc = ParseDocument(fixture["document"]);
+		std::string docStr = fixture["document"].dump();
+		PpDocument doc = DocumentFromJson(docStr);
 		std::string viewStart = fixture["view"].value("viewStart", "2026-01-01");
 		json got = ToAbstractJson(LayoutGantt(doc, viewStart));
 
-		if (got == expected) {
+		// JSON round-trip must be stable: canonical(parse(canonical)) == canonical (SRS-PPT-020/021).
+		std::string canon1 = DocumentToJson(doc);
+		std::string canon2 = DocumentToJson(DocumentFromJson(canon1));
+		bool roundTripOk = (canon1 == canon2);
+
+		if (got == expected && roundTripOk) {
 			std::cout << "[PASS] " << name << "\n";
 			++passed;
 		} else {
-			std::cout << "[FAIL] " << name << "\n  expected: " << expected.dump() << "\n  got:      " << got.dump() << "\n";
+			if (got != expected)
+				std::cout << "[FAIL] " << name << " (layout)\n  expected: " << expected.dump() << "\n  got:      " << got.dump() << "\n";
+			if (!roundTripOk)
+				std::cout << "[FAIL] " << name << " (json round-trip not stable)\n";
 		}
 	}
 

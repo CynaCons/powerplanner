@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Connect.h"
 #include "GanttBuilder.h"
+#include "GanttJson.h"
 
 // Type-library GUIDs used by the IDispatchImpl bases (named_guids is omitted in
 // the #import to avoid duplicate-COMDAT; see pch.h).
@@ -46,6 +47,9 @@ static const wchar_t* kRibbonXml =
 	L"          <button id='ppInsert' label='Insert Gantt' size='large'"
 	L"                  imageMso='ChartTypeColumnInsertGallery' onAction='OnInsertGantt'"
 	L"                  screentip='Insert a Gantt chart' supertip='Emit a Gantt chart as native PowerPoint shapes on the current slide.'/>"
+	L"          <button id='ppPull' label='Pull from slide' size='large'"
+	L"                  imageMso='Refresh' onAction='OnPullGantt'"
+	L"                  screentip='Pull from slide' supertip='Read the PowerPlanner chart embedded on the current slide back into a document.'/>"
 	L"        </group>"
 	L"      </tab>"
 	L"    </tabs>"
@@ -93,6 +97,7 @@ STDMETHODIMP CConnect::GetIDsOfNames(REFIID riid, LPOLESTR* rgszNames, UINT cNam
 	{
 		if (_wcsicmp(rgszNames[0], L"OnRibbonLoad") == 0) { rgDispId[0] = DISPID_PP_ONLOAD; return S_OK; }
 		if (_wcsicmp(rgszNames[0], L"OnInsertGantt") == 0) { rgDispId[0] = DISPID_PP_INSERT_GANTT; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnPullGantt") == 0) { rgDispId[0] = DISPID_PP_PULL_GANTT; return S_OK; }
 	}
 	return ExtBase::GetIDsOfNames(riid, rgszNames, cNames, lcid, rgDispId);
 }
@@ -110,6 +115,10 @@ STDMETHODIMP CConnect::Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD 
 
 	case DISPID_PP_INSERT_GANTT:
 		DoInsertGantt();
+		return S_OK;
+
+	case DISPID_PP_PULL_GANTT:
+		DoPullGantt();
 		return S_OK;
 	}
 	return ExtBase::Invoke(dispIdMember, riid, lcid, wFlags, pDispParams, pVarResult, pExcepInfo, puArgErr);
@@ -138,5 +147,31 @@ void CConnect::DoInsertGantt()
 		::swprintf_s(msg, 200, L"Could not insert the chart (hr=0x%08lX after %d shapes).\n\nOpen a slide in Normal view and try again.", (unsigned long)hr, shapeCount);
 		PpLog(msg);
 		::MessageBoxW(NULL, msg, L"PowerPlanner", MB_OK | MB_ICONERROR);
+	}
+}
+
+void CConnect::DoPullGantt()
+{
+	PpLog(L"DoPullGantt — ribbon button clicked");
+	if (!m_pApp) {
+		::MessageBoxW(NULL, L"PowerPoint application is not available.", L"PowerPlanner", MB_OK | MB_ICONWARNING);
+		return;
+	}
+	std::string json = ReadGanttFromSlide(m_pApp);
+	if (json.empty()) {
+		::MessageBoxW(NULL, L"No PowerPlanner chart found on this slide.\n\nInsert one first, then Pull.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	try {
+		PpDocument doc = DocumentFromJson(json);
+		wchar_t msg[256];
+		::swprintf_s(msg, 256,
+			L"Pulled the chart from the slide:\n\n  %zu tasks\n  %zu milestones\n  %zu dependencies\n  %zu rows",
+			doc.tasks.size(), doc.milestones.size(), doc.deps.size(), doc.rows.size());
+		PpLog(L"DoPullGantt — parsed PP_DOC successfully");
+		::MessageBoxW(NULL, msg, L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+	}
+	catch (const std::exception&) {
+		::MessageBoxW(NULL, L"The chart on this slide has an invalid PP_DOC tag.", L"PowerPlanner", MB_OK | MB_ICONERROR);
 	}
 }
