@@ -27,6 +27,16 @@ static Office::MsoRGBType HexToBgr(const std::string& hex, long fallback) {
 	return (Office::MsoRGBType)((b << 16) | (g << 8) | r);
 }
 
+// Darken a BGR colour by a factor (0..1) for the percent-complete inset.
+static Office::MsoRGBType DarkenBgr(Office::MsoRGBType bgr, double f) {
+	long v = (long)bgr;
+	long b = (v >> 16) & 0xFF, g = (v >> 8) & 0xFF, r = v & 0xFF;
+	r = (long)(r * f); g = (long)(g * f); b = (long)(b * f);
+	return (Office::MsoRGBType)((b << 16) | (g << 8) | r);
+}
+
+static const char* kMonthNames[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" };
+
 // ---- sample document -------------------------------------------------------
 
 PpDocument MakeSampleDocument() {
@@ -115,12 +125,42 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 		std::vector<PowerPoint::ShapePtr> emitted;
 		auto track = [&](PowerPoint::ShapePtr s) { emitted.push_back(s); ++count; };
 
+		const float chartBottom = chartTop + (float)L.chartRows * ROW_HEIGHT;
+
 		// Title.
 		{
-			auto title = shapes->AddTextbox(Office::msoTextOrientationHorizontal, MARGIN, MARGIN - 20.0f, chartW, 18.0f);
+			auto title = shapes->AddTextbox(Office::msoTextOrientationHorizontal, MARGIN, MARGIN - 22.0f, chartW, 20.0f);
 			title->GetTextFrame()->GetTextRange()->PutText(_bstr_t(Widen(doc.title).c_str()));
 			SetTag(title, L"PP_KIND", L"TITLE");
 			track(title);
+		}
+
+		// Time axis: month gridlines + labels (emitted first so bars draw on top).
+		{
+			int y0 = 0, m0 = 0, dd = 0, y1 = 0, m1 = 0;
+			sscanf_s(minD.c_str(), "%d-%d-%d", &y0, &m0, &dd);
+			sscanf_s(maxD.c_str(), "%d-%d-%d", &y1, &m1, &dd);
+			int yy = y0, mm = m0;
+			while (yy < y1 || (yy == y1 && mm <= m1)) {
+				char iso[16]; sprintf_s(iso, "%04d-%02d-01", yy, mm);
+				float x = xToPt(DateToDays(iso) - DateToDays(minD));
+				if (x >= MARGIN + ROW_GUTTER - 1.0f) {
+					auto line = shapes->AddConnector(Office::msoConnectorStraight, x, chartTop, x, chartBottom);
+					line->GetLine()->GetForeColor()->PutPpRGB((Office::MsoRGBType)0x00E5E5E5);
+					line->GetLine()->PutWeight(0.5f);
+					SetTag(line, L"PP_KIND", L"AXIS_GRID");
+					track(line);
+					char lbl[24]; sprintf_s(lbl, "%s %d", kMonthNames[(mm - 1) % 12], yy);
+					auto t = shapes->AddTextbox(Office::msoTextOrientationHorizontal, x + 2.0f, chartTop - 16.0f, 64.0f, 13.0f);
+					auto tr = t->GetTextFrame()->GetTextRange();
+					tr->PutText(_bstr_t(lbl));
+					tr->GetFont()->PutSize(10.0f);
+					tr->GetFont()->GetColor()->PutPpRGB((Office::MsoRGBType)0x00909090);
+					SetTag(t, L"PP_KIND", L"AXIS_LABEL");
+					track(t);
+				}
+				if (++mm > 12) { mm = 1; ++yy; }
+			}
 		}
 
 		// Row labels (visible rows, in layout order).
@@ -139,7 +179,6 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 		}
 
 		// Summary bars (thin).
-		std::map<std::string, std::string> rowColor;  // unused placeholder for future
 		for (const auto& s : L.summaries) {
 			float left = xToPt(s.xDay), width = std::max(2.0f, s.widthDays * ptPerDay);
 			float top = slotTop(s.rowIndex) + ROW_HEIGHT / 2.0f - 3.0f;
@@ -172,6 +211,19 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 			SetTag(bar, L"PP_KIND", L"TASK");
 			SetTag(bar, L"PP_ID", Widen(t->id));
 			track(bar);
+
+			// Percent-complete: a darker strip along the bottom (label stays readable).
+			if (t->percent > 0) {
+				float pw = width * (float)t->percent / 100.0f;
+				if (pw > 1.5f) {
+					auto prog = shapes->AddShape(Office::msoShapeRectangle, left, top + height - 3.5f, pw, 3.5f);
+					prog->GetFill()->GetForeColor()->PutPpRGB(DarkenBgr(HexToBgr(t->color, 0x00F88C81), 0.6));
+					prog->GetLine()->PutVisible(Office::msoFalse);
+					SetTag(prog, L"PP_KIND", L"TASK_PROGRESS");
+					SetTag(prog, L"PP_ID", Widen(t->id));
+					track(prog);
+				}
+			}
 		}
 
 		// Milestones (diamonds, centered in the row).
@@ -180,22 +232,33 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 			float cy = slotTop(L.rowOffsets[m.rowIndex]) + ROW_HEIGHT / 2.0f;
 			float sz = 14.0f;
 			auto dia = shapes->AddShape(Office::msoShapeDiamond, cx - sz / 2.0f, cy - sz / 2.0f, sz, sz);
-			std::string color;
-			for (const auto& md : doc.milestones) if (md.id == m.id) color = md.color;
+			std::string color, label;
+			for (const auto& md : doc.milestones) if (md.id == m.id) { color = md.color; label = md.label; }
 			dia->GetFill()->GetForeColor()->PutPpRGB(HexToBgr(color, 0x0024BFFB));
 			dia->GetLine()->GetForeColor()->PutPpRGB((Office::MsoRGBType)0x00000000);
 			dia->GetLine()->PutWeight(0.5f);
 			SetTag(dia, L"PP_KIND", L"MILESTONE");
 			SetTag(dia, L"PP_ID", Widen(m.id));
 			track(dia);
+
+			// Milestone label beside the diamond.
+			if (!label.empty()) {
+				auto ml = shapes->AddTextbox(Office::msoTextOrientationHorizontal, cx + sz / 2.0f + 2.0f, cy - 8.0f, 90.0f, 14.0f);
+				auto tr = ml->GetTextFrame()->GetTextRange();
+				tr->PutText(_bstr_t(Widen(label).c_str()));
+				tr->GetFont()->PutSize(10.0f);
+				tr->GetFont()->GetColor()->PutPpRGB((Office::MsoRGBType)0x00404040);
+				SetTag(ml, L"PP_KIND", L"MILESTONE_LABEL");
+				track(ml);
+			}
 		}
 
 		// Brackets (outline rectangle over the spanned rows).
 		for (const auto& b : L.brackets) {
 			float left = xToPt(b.xDay), width = std::max(2.0f, b.widthDays * ptPerDay);
 			float top = slotTop(L.rowOffsets[b.topRow]) + 2.0f;
-			float bottomSlot = L.rowOffsets[b.bottomRow] + L.rowSlots[b.bottomRow];
-			float height = std::max(8.0f, slotTop((int)bottomSlot) - top - 2.0f);
+			int bottomSlot = L.rowOffsets[b.bottomRow] + L.rowSlots[b.bottomRow];
+			float height = std::max(8.0f, slotTop(bottomSlot) - top - 2.0f);
 			auto br = shapes->AddShape(Office::msoShapeRectangle, left, top, width, height);
 			br->GetFill()->PutVisible(Office::msoFalse);
 			br->GetLine()->GetForeColor()->PutPpRGB((Office::MsoRGBType)0x00B89A4F);
@@ -203,6 +266,19 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 			SetTag(br, L"PP_KIND", L"BRACKET");
 			SetTag(br, L"PP_ID", Widen(b.id));
 			track(br);
+
+			// Bracket label.
+			std::string label;
+			for (const auto& bd : doc.brackets) if (bd.id == b.id) label = bd.label;
+			if (!label.empty()) {
+				auto bl = shapes->AddTextbox(Office::msoTextOrientationHorizontal, left + 3.0f, top + 1.0f, width - 6.0f, 14.0f);
+				auto tr = bl->GetTextFrame()->GetTextRange();
+				tr->PutText(_bstr_t(Widen(label).c_str()));
+				tr->GetFont()->PutSize(10.0f);
+				tr->GetFont()->GetColor()->PutPpRGB((Office::MsoRGBType)0x00B89A4F);
+				SetTag(bl, L"PP_KIND", L"BRACKET_LABEL");
+				track(bl);
+			}
 		}
 
 		// Dependencies (elbow connectors, arrow at successor).

@@ -18,7 +18,7 @@ static long DaysFromCivil(int y, int m, int d) {
 
 long DateToDays(const std::string& iso) {
 	int y = 0, m = 0, d = 0;
-	if (std::sscanf(iso.c_str(), "%d-%d-%d", &y, &m, &d) != 3) return 0;
+	if (sscanf_s(iso.c_str(), "%d-%d-%d", &y, &m, &d) != 3) return 0;
 	return DaysFromCivil(y, m, d);
 }
 
