@@ -460,10 +460,13 @@ fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md)
 - [x] Verified: render-harness slide round-trip PASS (insert → read `PP_DOC` → parse → re-serialize == original, 1756 chars)
 - [ ] (follow-on) Load an external document via a file picker instead of the built-in sample
 
-### N4 — On-Slide Contextual UI
-- [ ] Layered child window overlay aligned to the slide-edit pane
-- [ ] Hook `WindowSelectionChange` / mouse; draw handles over chart shapes
-- [ ] Contextual buttons rendered on-slide (add task, drag dates)
+### N4 — On-Slide Contextual UI — COMPLETE (core)
+- [x] Layered, click-through overlay window (`Overlay.cpp`) drawn over the slide
+- [x] Aligned to the selected chart via `DocumentWindow::PointsToScreenPixelsX/Y` (zoom/scroll-correct)
+- [x] Selection-driven via a 150ms polling timer: shows our frame + handles + "PowerPlanner" badge for a
+      selected PowerPlanner shape (PP_KIND), inert/hidden otherwise; re-syncs (tracks zoom/scroll/selection)
+- [x] Verified: `overlay-test` harness drives PowerPoint, selects the chart, screen-captures the overlay
+- [ ] (→ N5) Contextual *interactive* controls (clickable add-task / drag-dates) — needs hit-testing + editing
 
 ### N5 — Live Linkage ("Agents")
 - [ ] Watch shape edits; keep chart consistent; reflow

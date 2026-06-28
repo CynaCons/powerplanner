@@ -2,6 +2,7 @@
 #include "Connect.h"
 #include "GanttBuilder.h"
 #include "GanttJson.h"
+#include "Overlay.h"
 
 // Type-library GUIDs used by the IDispatchImpl bases (named_guids is omitted in
 // the #import to avoid duplicate-COMDAT; see pch.h).
@@ -64,11 +65,13 @@ STDMETHODIMP CConnect::OnConnection(IDispatch* Application,
 {
 	m_pApp = Application;  // PowerPoint.Application — used from N2 onward
 	PpLog(L"OnConnection — add-in loaded into PowerPoint");
+	OverlayStart(m_pApp);  // N4: on-slide selection overlay (polling timer)
 	return S_OK;
 }
 
 STDMETHODIMP CConnect::OnDisconnection(AddInDesignerObjects::ext_DisconnectMode /*RemoveMode*/, SAFEARRAY** /*custom*/)
 {
+	OverlayStop();
 	m_pRibbon.Release();
 	m_pApp.Release();
 	return S_OK;
