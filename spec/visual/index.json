@@ -6,6 +6,12 @@
       "fixture": "basic-chart.json",
       "width": 920,
       "height": 260
+    },
+    {
+      "figure": "sample-q3.svg",
+      "fixture": "sample-q3.json",
+      "width": 920,
+      "height": 368
     }
   ]
 }

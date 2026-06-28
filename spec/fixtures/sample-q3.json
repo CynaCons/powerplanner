@@ -1,0 +1,39 @@
+{
+  "name": "sample-q3",
+  "description": "The shared demo document used by the native render harness (MakeSampleDocument) and the web renderer, so web vs native output can be compared 1:1.",
+  "view": { "viewStart": "2026-06-01", "scale": 1 },
+  "document": {
+    "schemaVersion": 1,
+    "title": "Q3 Launch Plan",
+    "calendar": { "scale": "week", "fiscalYearStart": 1, "workingDays": [1, 2, 3, 4, 5], "holidays": [] },
+    "rows": [
+      { "id": "r_phase", "label": "Phase 1", "groupId": null },
+      { "id": "r_research", "label": "Research", "groupId": "r_phase" },
+      { "id": "r_design", "label": "Design", "groupId": "r_phase" },
+      { "id": "r_build", "label": "Build", "groupId": null },
+      { "id": "r_launch", "label": "Launch", "groupId": null }
+    ],
+    "tasks": [
+      { "id": "t1", "rowId": "r_research", "label": "Discovery", "start": "2026-06-01", "end": "2026-06-12", "color": "#818CF8", "percentComplete": 100 },
+      { "id": "t2", "rowId": "r_research", "label": "Interviews", "start": "2026-06-08", "end": "2026-06-19", "color": "#818CF8", "percentComplete": 60 },
+      { "id": "t3", "rowId": "r_design", "label": "Wireframes", "start": "2026-06-15", "end": "2026-06-26", "color": "#34D399", "percentComplete": 40 },
+      { "id": "t4", "rowId": "r_design", "label": "Visual design", "start": "2026-06-22", "end": "2026-07-10", "color": "#34D399", "percentComplete": 10 },
+      { "id": "t5", "rowId": "r_build", "label": "Implementation", "start": "2026-07-06", "end": "2026-07-31", "color": "#F472B6", "percentComplete": 0 },
+      { "id": "t6", "rowId": "r_build", "label": "QA + polish", "start": "2026-07-27", "end": "2026-08-07", "color": "#F472B6", "percentComplete": 0 }
+    ],
+    "milestones": [
+      { "id": "m1", "rowId": "r_design", "label": "Design freeze", "date": "2026-07-10", "color": "#FBBF24" },
+      { "id": "m2", "rowId": "r_launch", "label": "Ship", "date": "2026-08-10", "color": "#FBBF24" }
+    ],
+    "brackets": [
+      { "id": "b1", "label": "Delivery", "start": "2026-07-06", "end": "2026-08-07", "rowIds": ["r_build"] }
+    ],
+    "dependencies": [
+      { "id": "d1", "from": "t1", "to": "t3", "type": "finish-to-start" },
+      { "id": "d2", "from": "t3", "to": "t5", "type": "finish-to-start" },
+      { "id": "d3", "from": "t5", "to": "t6", "type": "finish-to-start" }
+    ],
+    "markers": [],
+    "style": { "theme": "light", "preset": "default" }
+  }
+}
