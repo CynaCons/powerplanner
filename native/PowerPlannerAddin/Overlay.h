@@ -1,11 +1,11 @@
 // N4: on-slide contextual overlay (think-cell style).
 //
 // A layered, click-through top-level window drawn OVER PowerPoint's slide-edit
-// pane. A polling timer reads the current selection each tick; when a
-// PowerPlanner shape (one carrying a PP_KIND tag) is selected, the overlay is
-// positioned via DocumentWindow::PointsToScreenPixelsX/Y (which accounts for
-// zoom + scroll) and paints a selection frame, handles, and a badge. It is
-// inert/hidden when nothing relevant is selected.
+// pane. A polling timer finds the CHART_ROOT on the active slide each tick and
+// positions the overlay over the whole chart via DocumentWindow::
+// PointsToScreenPixelsX/Y (which accounts for zoom + scroll). Selection chrome
+// is painted only when a PowerPlanner shape is selected; the overlay hides only
+// when no chart root is present.
 #pragma once
 
 #include <windows.h>

@@ -30,10 +30,16 @@ bool     g_mutating = false;
 std::string g_lastKind;       // last shown PP_KIND (to log on change)
 std::string g_selId;          // current selected PowerPlanner PP_ID
 std::string g_selKind;        // current selected PowerPlanner PP_KIND
+std::string g_chartProj;      // current CHART_ROOT PP_PROJ payload
 std::wstring g_badge = L"PowerPlanner";
 RECT g_buttonRects[BUTTON_COUNT] = {};
 RECT g_frameRect = {};
+RECT g_chartScreenRect = {};
+RECT g_selScreenRect = {};
+int g_windowOriginX = 0;
+int g_windowOriginY = 0;
 bool g_buttonsValid = false;
+bool g_hasSelectionChrome = false;
 
 enum OverlayButton {
 	BTN_ADD = 0,
@@ -107,21 +113,27 @@ bool IsTaskKind(const std::string& kind) {
 void ClearSelectionState() {
 	g_selId.clear();
 	g_selKind.clear();
+	g_hasSelectionChrome = false;
+	g_buttonsValid = false;
+	::SetRectEmpty(&g_selScreenRect);
+	::SetRectEmpty(&g_frameRect);
 }
 
 void LayoutToolbarButtons(int width, int height) {
 	g_buttonsValid = false;
 	for (int i = 0; i < BUTTON_COUNT; ++i) ::SetRectEmpty(&g_buttonRects[i]);
-	if (width <= 0 || height <= 0) return;
+	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect) || width <= 0 || height <= 0) return;
 
 	const int buttonW = 32;
 	const int buttonH = 20;
 	const int gap = 4;
 	const int totalW = BUTTON_COUNT * buttonW + (BUTTON_COUNT - 1) * gap;
-	int x = INFL + 6;
-	int y = height - TOOLBAR_H + (TOOLBAR_H - buttonH) / 2;
+	int x = g_frameRect.left + 6;
+	int y = g_frameRect.bottom + INFL;
 	if (x + totalW + 6 > width) x = std::max(INFL, width - totalW - INFL - 6);
-	if (y < BADGE_H + INFL) y = BADGE_H + INFL;
+	if (x < INFL) x = INFL;
+	if (y + buttonH + 3 > height) y = height - TOOLBAR_H + (TOOLBAR_H - buttonH) / 2;
+	if (y < INFL) y = INFL;
 	for (int i = 0; i < BUTTON_COUNT; ++i) {
 		g_buttonRects[i] = { x + i * (buttonW + gap), y, x + i * (buttonW + gap) + buttonW, y + buttonH };
 	}
@@ -134,6 +146,38 @@ int ButtonFromClientPoint(POINT pt) {
 		if (::PtInRect(&g_buttonRects[i], pt)) return i;
 	}
 	return -1;
+}
+
+void NormalizeRect(RECT& rc) {
+	if (rc.left > rc.right) std::swap(rc.left, rc.right);
+	if (rc.top > rc.bottom) std::swap(rc.top, rc.bottom);
+}
+
+void UpdateSelectionFrameFromScreen() {
+	::SetRectEmpty(&g_frameRect);
+	g_buttonsValid = false;
+	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_selScreenRect)) return;
+	g_frameRect = {
+		g_selScreenRect.left - g_windowOriginX,
+		g_selScreenRect.top - g_windowOriginY,
+		g_selScreenRect.right - g_windowOriginX,
+		g_selScreenRect.bottom - g_windowOriginY
+	};
+	if (g_frameRect.right < g_frameRect.left + 8) g_frameRect.right = g_frameRect.left + 8;
+	if (g_frameRect.bottom < g_frameRect.top + 8) g_frameRect.bottom = g_frameRect.top + 8;
+}
+
+PowerPoint::ShapePtr FindChartRoot(PowerPoint::_SlidePtr slide) {
+	if (!slide) return nullptr;
+	PowerPoint::ShapesPtr shapes = slide->GetShapes();
+	if (!shapes) return nullptr;
+	long n = shapes->GetCount();
+	for (long i = 1; i <= n; ++i) {
+		PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+		_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+		if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") return sh;
+	}
+	return nullptr;
 }
 
 // Append a debug line (shared with Connect's log).
@@ -215,15 +259,15 @@ void FillSquare(HDC hdc, int cx, int cy, int r, HBRUSH fill, HPEN borderPen, HPE
 
 void PaintOverlay(HDC hdc, const RECT& rc) {
 	const int W = rc.right, H = rc.bottom;
-	LayoutToolbarButtons(W, H);
 	// transparent background
 	HBRUSH keyBrush = ::CreateSolidBrush(KEY);
 	::FillRect(hdc, &rc, keyBrush);
 	::DeleteObject(keyBrush);
 
-	// the shape frame lives below the badge strip and above the toolbar strip.
-	RECT frame = ::IsRectEmpty(&g_frameRect) ? RECT{ INFL, BADGE_H + INFL, W - INFL, H - INFL - TOOLBAR_H } : g_frameRect;
-	if (frame.bottom < frame.top + 8) frame.bottom = frame.top + 8;
+	LayoutToolbarButtons(W, H);
+	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
+
+	RECT frame = g_frameRect;
 
 	HPEN pen = ::CreatePen(PS_SOLID, 2, ACCENT);
 	HGDIOBJ oldPen = ::SelectObject(hdc, pen);
@@ -251,7 +295,8 @@ void PaintOverlay(HDC hdc, const RECT& rc) {
 
 	// badge: filled Material chip with white label at top-left
 	int bw = 96, bh = BADGE_H - 4;
-	RECT badge = { INFL, 2, INFL + bw, 2 + bh };
+	int badgeTop = std::max(2, (int)frame.top - BADGE_H - 3);
+	RECT badge = { frame.left, badgeTop, frame.left + bw, badgeTop + bh };
 	HBRUSH abr = ::CreateSolidBrush(ACCENT);
 	HGDIOBJ ob = ::SelectObject(hdc, abr);
 	HGDIOBJ op = ::SelectObject(hdc, ::GetStockObject(NULL_PEN));
@@ -316,16 +361,21 @@ void PaintOverlay(HDC hdc, const RECT& rc) {
 void HideOverlay() {
 	if (g_shown && g_hwnd) { ::ShowWindow(g_hwnd, SW_HIDE); g_shown = false; }
 	g_buttonsValid = false;
-	::SetRectEmpty(&g_frameRect);
 	ClearSelectionState();
+	::SetRectEmpty(&g_chartScreenRect);
+	g_chartProj.clear();
 }
 
-void ShowOverlayForScreenRect(int x1, int y1, int x2, int y2) {
+void ShowOverlayForChartRect(const RECT& chart) {
 	EnsureWindow();
 	if (!g_hwnd) return;
-	int wx = x1 - INFL, wy = y1 - INFL - BADGE_H;
-	int ww = (x2 - x1) + INFL * 2, wh = (y2 - y1) + INFL * 2 + BADGE_H + TOOLBAR_H;
-	g_frameRect = { INFL, BADGE_H + INFL, INFL + (x2 - x1), BADGE_H + INFL + (y2 - y1) };
+	int chartW = chart.right - chart.left;
+	int chartH = chart.bottom - chart.top;
+	int wx = chart.left - INFL, wy = chart.top - INFL - BADGE_H;
+	int ww = chartW + INFL * 2, wh = chartH + INFL * 2 + BADGE_H + TOOLBAR_H;
+	g_windowOriginX = wx;
+	g_windowOriginY = wy;
+	UpdateSelectionFrameFromScreen();
 	const int toolbarMinW = 2 * (INFL + 6) + BUTTON_COUNT * 32 + (BUTTON_COUNT - 1) * 4;
 	if (ww < toolbarMinW) ww = toolbarMinW;
 	if (wh < BADGE_H + TOOLBAR_H + INFL * 2 + 8) wh = BADGE_H + TOOLBAR_H + INFL * 2 + 8;
@@ -407,48 +457,81 @@ void HandleToolbarButton(int button) {
 	g_mutating = false;
 }
 
-// Poll the selection; show/position handles or hide.
+// Poll the slide; keep the overlay over the chart while selection chrome follows
+// the selected PowerPlanner child shape.
 void Tick() {
 	if (g_mutating) return;
 	if (!g_app) { HideOverlay(); return; }
 	try {
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
 		if (!win) { HideOverlay(); return; }
-		PowerPoint::SelectionPtr sel = win->GetSelection();
-		if (!sel || sel->GetType() != PowerPoint::ppSelectionShapes) { HideOverlay(); return; }
-		PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
-		if (!sr || sr->GetCount() < 1) { HideOverlay(); return; }
-		PowerPoint::ShapePtr sh = sr->Item(_variant_t(1L));
-		_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
-		if (!kind.length()) { HideOverlay(); return; }
-		_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
-		g_selKind = Narrow((const wchar_t*)kind);
-		g_selId = Narrow((const wchar_t*)id);
 
-		bool mouseUp = !(::GetKeyState(VK_LBUTTON) & 0x8000);
-		if (mouseUp) {
-			std::string kStr = g_selKind;
-			if (kStr == "TASK" || kStr == "MILESTONE") {
-				bool changed = false;
-				ReflowFromSlide(g_app, &changed);
-				if (changed) {
-					return;
+		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
+		PowerPoint::ShapePtr chart = FindChartRoot(slide);
+		if (!chart) {
+			HideOverlay();
+			return;
+		}
+
+		float chartLeft = chart->GetLeft(), chartTop = chart->GetTop();
+		float chartWidth = chart->GetWidth(), chartHeight = chart->GetHeight();
+		g_chartScreenRect = {
+			win->PointsToScreenPixelsX(chartLeft),
+			win->PointsToScreenPixelsY(chartTop),
+			win->PointsToScreenPixelsX(chartLeft + chartWidth),
+			win->PointsToScreenPixelsY(chartTop + chartHeight)
+		};
+		NormalizeRect(g_chartScreenRect);
+		g_chartProj = Narrow((const wchar_t*)chart->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+
+		ClearSelectionState();
+		PowerPoint::SelectionPtr sel = win->GetSelection();
+		if (sel && sel->GetType() == PowerPoint::ppSelectionShapes) {
+			PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
+			if (sr && sr->GetCount() >= 1) {
+				PowerPoint::ShapePtr sh = sr->Item(_variant_t(1L));
+				_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (kind.length()) {
+					_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
+					g_selKind = Narrow((const wchar_t*)kind);
+					g_selId = Narrow((const wchar_t*)id);
+					float left = sh->GetLeft(), top = sh->GetTop(), w = sh->GetWidth(), h = sh->GetHeight();
+					g_selScreenRect = {
+						win->PointsToScreenPixelsX(left),
+						win->PointsToScreenPixelsY(top),
+						win->PointsToScreenPixelsX(left + w),
+						win->PointsToScreenPixelsY(top + h)
+					};
+					NormalizeRect(g_selScreenRect);
+					g_hasSelectionChrome = true;
 				}
 			}
 		}
 
-		float left = sh->GetLeft(), top = sh->GetTop(), w = sh->GetWidth(), h = sh->GetHeight();
-		int x1 = win->PointsToScreenPixelsX(left);
-		int y1 = win->PointsToScreenPixelsY(top);
-		int x2 = win->PointsToScreenPixelsX(left + w);
-		int y2 = win->PointsToScreenPixelsY(top + h);
-		ShowOverlayForScreenRect(x1, y1, x2, y2);
+		if (g_hasSelectionChrome) {
+			bool mouseUp = !(::GetKeyState(VK_LBUTTON) & 0x8000);
+			if (mouseUp) {
+				std::string kStr = g_selKind;
+				if (kStr == "TASK" || kStr == "MILESTONE") {
+					bool changed = false;
+					ReflowFromSlide(g_app, &changed);
+					if (changed) {
+						ClearSelectionState();
+						ShowOverlayForChartRect(g_chartScreenRect);
+						return;
+					}
+				}
+			}
+		}
+
+		ShowOverlayForChartRect(g_chartScreenRect);
 
 		std::string k = g_selKind;
 		if (k != g_lastKind) {
 			g_lastKind = k;
 			wchar_t buf[160];
-			::swprintf_s(buf, 160, L"shown for PP_KIND=%hs at screen (%d,%d)-(%d,%d)", k.c_str(), x1, y1, x2, y2);
+			::swprintf_s(buf, 160, L"shown for chart (%ld,%ld)-(%ld,%ld), selection PP_KIND=%hs",
+				g_chartScreenRect.left, g_chartScreenRect.top, g_chartScreenRect.right, g_chartScreenRect.bottom, k.c_str());
 			OvLog(buf);
 		}
 	} catch (const _com_error&) {
