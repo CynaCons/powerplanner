@@ -264,7 +264,7 @@ int wmain() {
 		int candidate = FindCandidate(records);
 		WriteRecords(records, candidate);
 
-		if (createdPresentation || launched) {
+		if (createdPresentation) {
 			try { pres->PutSaved(Office::msoTrue); } catch (...) {}
 			try { pres->Close(); } catch (...) {}
 		}
@@ -273,7 +273,7 @@ int wmain() {
 		}
 	} catch (...) {
 		WriteFallback();
-		if (createdPresentation || launched) {
+		if (createdPresentation) {
 			try { if (pres) pres->PutSaved(Office::msoTrue); } catch (...) {}
 			try { if (pres) pres->Close(); } catch (...) {}
 		}
@@ -281,6 +281,8 @@ int wmain() {
 			try { if (app) app->Quit(); } catch (...) {}
 		}
 	}
+	pres = nullptr;
+	app = nullptr;
 	if (coInitialized) ::CoUninitialize();
 	wprintf(L"WINDOW PROBE OK\n");
 	return 0;
