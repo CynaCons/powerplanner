@@ -53,5 +53,15 @@ Every native unit also re-runs `build-conformance.bat` (`1/1 fixtures passed`) a
   in GetIDsOfNames; MutateChart->GanttOps->re-emit verified real, not hollow) → dbed209.
   This delivers on-slide right-click editing: Add Task/Row, Delete, Nudge +/-1, % +/-10,
   Change Scale. (ctx-menu edits only Connect.*, outside conformance/reflow link sets.)
-- cycle 4 — overlay lane (serial on Overlay.cpp). Dispatching overlay-toolbar
-  (interactive floating mini-toolbar) + fix-window-probe-com-teardown (disjoint).
+- cycle 4 — overlay lane + fix, validated serially:
+  - overlay-toolbar → [build] OK + overlay harness links; inspected real (WM_NCHITTEST
+    gates buttons, MA_NOACTIVATE keeps selection, g_mutating re-entrancy guard vs Tick,
+    no throw out of WndProc) → 7f87aa9
+  - fix-window-probe-com-teardown → WINDOW PROBE OK exit 0 → 54376c4
+  Status: 7 units done. Remaining: hover-rowband, inline-edit (both serial on Overlay.cpp).
+- self-review #3 (cycle4-review) dispatched over the overlay-toolbar diff + the two
+  remaining specs (held next dispatch until findings land, since both build on the
+  freshly-rewritten interactive Overlay.cpp). Known design risks to confirm: (a) overlay
+  window currently covers only the selected shape's bounds, so a whole-chart row-hover
+  band may need a larger/second window; (b) a child EDIT on a WS_EX_NOACTIVATE window may
+  not get keyboard focus — inline-edit needs a focusable approach.
