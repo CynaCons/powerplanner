@@ -80,3 +80,34 @@ Every native unit also re-runs `build-conformance.bat` (`1/1 fixtures passed`) a
     making label regions HTCLIENT. Now depends on overlay-chart-surface.
 - cycle 5 — dispatched overlay-chart-surface (serial on Overlay.cpp). Then fix-percent-noop,
   hover-rowband, inline-edit remain.
+
+## Completion summary (all units green)
+
+13/13 todos done. Full gate suite passes from a clean rebuild:
+`native\build.bat` [build] OK · `build-conformance.bat` 1/1 fixtures passed ·
+`build-ops.bat` OPS HARNESS OK · `build-overlay.bat` compiles ·
+`build-reflow.bat`+`ppreflow.exe` REFLOW PASS.
+
+Shipped commits (each gated, [todo: id] in message):
+- 007038d disco-ops-harness · ecb8130 overlay-material · 279c9c7 disco-slide-window
+- bfecf63 ops-model-mutations · dbed209 ctx-menu-actions · 7f87aa9 overlay-toolbar
+- 54376c4 fix-window-probe-com-teardown · 7a42e80 overlay-chart-surface
+- 07c89ad hover-rowband · 4ba1cce inline-edit · c4f2238 fix-percent-noop-undo
+- 88718b5 regression-final-reflow-link (caught by the final full-suite gate: reflow
+  harness missing GanttOps link)
+- 31b627d regression-reflow-exception (caught by final-review: std::exception from a
+  malformed PP_DOC escaped the 150ms WM_TIMER auto-reflow callback → PowerPoint crash;
+  hardened ReflowFromSlide with catch(std::exception)+catch(...))
+
+Self-reviews run: backlog (pre-dispatch), cycle1 diffs, cycle4 (overlay-toolbar + the two
+remaining specs — produced the chart-wide-surface restructure), and final subsystem review.
+
+Delivered on-slide UX (native C++ COM, no task pane): right-click editing menu
+(add/delete/nudge/%/scale), interactive floating mini-toolbar, row-hover highlight + "+"
+insert, double-click inline title/row-label editing, Material chart-wide overlay, pure
+document-ops engine with a headless test seam, auto-reflow on drag.
+
+NOTE for the user: the rebuilt DLL is registered at native/build/PowerPlannerAddin.dll;
+RESTART PowerPoint to load the latest build. Remaining future work (not blocking): true
+per-pixel-alpha translucent hover band (current is opaque-thin due to color-key), editable
+task-bar labels, dark-mode theme, MSI/WiX installer (N6).
