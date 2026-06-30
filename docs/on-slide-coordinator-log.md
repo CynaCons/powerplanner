@@ -42,4 +42,16 @@ Every native unit also re-runs `build-conformance.bat` (`1/1 fixtures passed`) a
   overlay window + the 150ms Tick() poller (GetCursorPos mapped via PP_PROJ), never by
   subclassing PowerPoint. hover-rowband / inline-edit / overlay-toolbar specs updated.
   Skipped reflow regression for these two (neither touched layout/json/builder logic).
-- cycle 2 — next ready: ops-model-mutations (critical path → unblocks ctx-menu-actions).
+- cycle 2 — ops-model-mutations validated (OPS HARNESS OK, 1/1 fixtures passed,
+  [build] OK, REFLOW PASS) → bfecf63.
+- self-review #2 (cycle1-review, code-review) — Overlay.cpp CLEAN (no per-paint GDI
+  leak, transparency + Tick/auto-reflow preserved); build scripts do not fake markers;
+  scale/conformance round-trip safe. Found 1 latent bug in the discovery harness
+  window-probe.cpp (COM pointers Released after CoUninitialize; Close gate too wide) →
+  logged as low-priority fix-window-probe-com-teardown (no dependents).
+- cycle 3 — ctx-menu-actions validated ([build] OK; all 12 onAction callbacks resolve
+  in GetIDsOfNames; MutateChart->GanttOps->re-emit verified real, not hollow) → dbed209.
+  This delivers on-slide right-click editing: Add Task/Row, Delete, Nudge +/-1, % +/-10,
+  Change Scale. (ctx-menu edits only Connect.*, outside conformance/reflow link sets.)
+- cycle 4 — overlay lane (serial on Overlay.cpp). Dispatching overlay-toolbar
+  (interactive floating mini-toolbar) + fix-window-probe-com-teardown (disjoint).
