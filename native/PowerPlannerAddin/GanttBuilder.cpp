@@ -445,4 +445,6 @@ HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 		return S_OK;
 	}
 	catch (const _com_error&) { return E_FAIL; }
+	catch (const std::exception&) { return E_FAIL; }
+	catch (...) { return E_FAIL; }
 }
