@@ -872,8 +872,13 @@ void HandleToolbarButton(int button) {
 		} else if (button == BTN_PCT_MINUS || button == BTN_PCT_PLUS) {
 			if (const PpTask* task = FindTask(doc, selId)) {
 				int delta = (button == BTN_PCT_PLUS) ? 10 : -10;
-				changed = SetTaskPercent(doc, selId, task->percent + delta);
-				if (changed) selectId = selId;
+				int newPct = task->percent + delta;
+				if (newPct < 0) newPct = 0;
+				if (newPct > 100) newPct = 100;
+				if (newPct != task->percent) {
+					changed = SetTaskPercent(doc, selId, newPct);
+					if (changed) selectId = selId;
+				}
 			}
 		}
 

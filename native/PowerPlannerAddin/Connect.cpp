@@ -488,7 +488,10 @@ void CConnect::DoCtxPctPlus()
 	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
 		const PpTask* task = FindTask(doc, m_ctxId);
 		if (!task) return false;
-		if (!SetTaskPercent(doc, m_ctxId, task->percent + 10)) return false;
+		int newPct = task->percent + 10;
+		if (newPct > 100) newPct = 100;
+		if (newPct == task->percent) return false;
+		if (!SetTaskPercent(doc, m_ctxId, newPct)) return false;
 		outSelectId = m_ctxId;
 		return true;
 	});
@@ -500,7 +503,10 @@ void CConnect::DoCtxPctMinus()
 	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
 		const PpTask* task = FindTask(doc, m_ctxId);
 		if (!task) return false;
-		if (!SetTaskPercent(doc, m_ctxId, task->percent - 10)) return false;
+		int newPct = task->percent - 10;
+		if (newPct < 0) newPct = 0;
+		if (newPct == task->percent) return false;
+		if (!SetTaskPercent(doc, m_ctxId, newPct)) return false;
 		outSelectId = m_ctxId;
 		return true;
 	});
