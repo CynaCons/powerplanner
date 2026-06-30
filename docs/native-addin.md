@@ -55,6 +55,12 @@ with `LoadBehavior=3`.
 | **N5** | Live "agents": watch shape edits and reflow the chart automatically |
 | **N6** | WiX/MSI installer, signed registration, ribbon icons |
 
+## Install / test on another PC
+
+See [native-addin-install.md](native-addin-install.md) — build from source, or
+copy the prebuilt DLL + `register.bat` to any 64-bit-PowerPoint machine (no admin,
+no Visual Studio needed to register).
+
 ## Build & register
 
 ```powershell
