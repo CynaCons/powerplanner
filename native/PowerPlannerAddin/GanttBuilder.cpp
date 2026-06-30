@@ -90,6 +90,10 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 	auto xToPt = [&](long xDay) { return MARGIN + ROW_GUTTER + (float)(xDay + pad) * ptPerDay; };
 	auto slotTop = [&](int slot) { return chartTop + (float)slot * ROW_HEIGHT; };
 
+	// Timeline header band (Material table-header strip; its bottom border is the
+	// first row divider drawn below).
+	{ Style s; s.fill = true; s.fillBgr = Bgr(0xFAFBFC); sc.prims.push_back(scene::rect(MARGIN, chartTop - AXIS_H, chartW, AXIS_H, s)); }
+
 	// Left navigation rail + its right-edge divider.
 	{ Style s; s.fill = true; s.fillBgr = Bgr(th.railSurface); sc.prims.push_back(scene::rect(MARGIN, chartTop, ROW_GUTTER, chartBottom - chartTop, s)); }
 	{ Style s; s.line = true; s.lineBgr = Bgr(th.divider); s.lineWeight = 1.0f; sc.prims.push_back(scene::line(MARGIN + ROW_GUTTER, chartTop, MARGIN + ROW_GUTTER, chartBottom, s)); }
@@ -176,8 +180,9 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 		Style br; br.line = true; br.lineBgr = Bgr(th.bracket); br.lineWeight = 1.0f;
 		Prim p = scene::rect(left, top, width, h, br); p.tagKind = "BRACKET"; p.tagId = b.id; sc.prims.push_back(p);
 		std::string label; for (const auto& bd : doc.brackets) if (bd.id == b.id) label = bd.label;
-		Style bl; bl.textBgr = Bgr(th.bracket); bl.fontSize = 10.0f; bl.align = TextAlign::Left;
-		Prim t = scene::text(left + 4.0f, top + 1.0f, width - 8.0f, 14.0f, Widen(label), bl); t.tagKind = "BRACKET_LABEL"; sc.prims.push_back(t);
+		Style bl; bl.textBgr = Bgr(th.bracket); bl.fontSize = 10.0f; bl.align = TextAlign::Center;
+		// Label centered just above the bracket box so it doesn't sit on the bars.
+		Prim t = scene::text(left, top - 13.0f, width, 12.0f, Widen(label), bl); t.tagKind = "BRACKET_LABEL"; sc.prims.push_back(t);
 	}
 
 	// Dependencies (elbow connectors).
