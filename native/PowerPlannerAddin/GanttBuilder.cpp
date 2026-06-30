@@ -90,8 +90,9 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 	auto xToPt = [&](long xDay) { return MARGIN + ROW_GUTTER + (float)(xDay + pad) * ptPerDay; };
 	auto slotTop = [&](int slot) { return chartTop + (float)slot * ROW_HEIGHT; };
 
-	// Left navigation rail.
+	// Left navigation rail + its right-edge divider.
 	{ Style s; s.fill = true; s.fillBgr = Bgr(th.railSurface); sc.prims.push_back(scene::rect(MARGIN, chartTop, ROW_GUTTER, chartBottom - chartTop, s)); }
+	{ Style s; s.line = true; s.lineBgr = Bgr(th.divider); s.lineWeight = 1.0f; sc.prims.push_back(scene::line(MARGIN + ROW_GUTTER, chartTop, MARGIN + ROW_GUTTER, chartBottom, s)); }
 
 	// Month gridlines + labels (behind bars).
 	{

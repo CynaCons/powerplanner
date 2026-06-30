@@ -29,6 +29,7 @@ std::vector<PowerPoint::ShapePtr> RenderScene(PowerPoint::ShapesPtr shapes, cons
 		case PrimKind::Text:      sh = shapes->AddTextbox(Office::msoTextOrientationHorizontal, p.x, p.y, p.w, p.h); break;
 		}
 		if (!sh) continue;
+		sh->GetShadow()->PutVisible(Office::msoFalse);  // flat, Material-style
 		const Style& s = p.style;
 
 		if (p.kind == PrimKind::Line || p.kind == PrimKind::Connector) {
