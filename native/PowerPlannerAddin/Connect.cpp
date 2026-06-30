@@ -2,7 +2,10 @@
 #include "Connect.h"
 #include "GanttBuilder.h"
 #include "GanttJson.h"
+#include "GanttOps.h"
 #include "Overlay.h"
+#include <functional>
+#include <string>
 
 // Type-library GUIDs used by the IDispatchImpl bases (named_guids is omitted in
 // the #import to avoid duplicate-COMDAT; see pch.h).
@@ -37,6 +40,61 @@ static void PpLog(const wchar_t* msg)
 	::CloseHandle(h);
 }
 
+static std::string Narrow(const wchar_t* w) {
+	if (!w || !*w) return "";
+	int len = (int)::wcslen(w);
+	int n = ::WideCharToMultiByte(CP_UTF8, 0, w, len, NULL, 0, NULL, NULL);
+	std::string s(n, '\0');
+	::WideCharToMultiByte(CP_UTF8, 0, w, len, &s[0], n, NULL, NULL);
+	return s;
+}
+
+static const PpTask* FindTask(const PpDocument& doc, const std::string& id) {
+	for (const auto& task : doc.tasks) {
+		if (task.id == id) return &task;
+	}
+	return nullptr;
+}
+
+static std::string FirstRowId(const PpDocument& doc) {
+	return doc.rows.empty() ? "" : doc.rows.front().id;
+}
+
+static std::string RowForSelection(const PpDocument& doc, const std::string& kind, const std::string& id) {
+	if (kind == "TASK" || kind == "TASK_PROGRESS") {
+		const PpTask* task = FindTask(doc, id);
+		if (task) return task->rowId;
+	}
+	if (kind == "ROW_LABEL") {
+		for (const auto& row : doc.rows) {
+			if (row.id == id) return row.id;
+		}
+	}
+	return FirstRowId(doc);
+}
+
+static void DefaultTaskDates(const PpDocument& doc, const std::string& rowId, const std::string& selectedTaskId, std::string& start, std::string& end) {
+	if (const PpTask* selected = FindTask(doc, selectedTaskId)) {
+		start = selected->start;
+		end = selected->end;
+		return;
+	}
+	for (const auto& task : doc.tasks) {
+		if (task.rowId == rowId) {
+			start = task.start;
+			end = task.end;
+			return;
+		}
+	}
+	if (!doc.tasks.empty()) {
+		start = doc.tasks.front().start;
+		end = doc.tasks.front().end;
+		return;
+	}
+	start = "2026-01-01";
+	end = "2026-01-08";
+}
+
 // The Fluent ribbon: a "PowerPlanner" tab with one "Insert Gantt" button.
 // onLoad caches the IRibbonUI; the button's onAction reaches DoInsertGantt().
 static const wchar_t* kRibbonXml =
@@ -58,6 +116,24 @@ static const wchar_t* kRibbonXml =
 	L"      </tab>"
 	L"    </tabs>"
 	L"  </ribbon>"
+	L"  <contextMenus>"
+	L"    <contextMenu idMso='ContextMenuShape'>"
+	L"      <button id='ppCtxAddTask' label='Add Task' onAction='OnCtxAddTask'/>"
+	L"      <button id='ppCtxAddRow' label='Add Row Below' onAction='OnCtxAddRow'/>"
+	L"      <button id='ppCtxDelete' label='Delete Selected' onAction='OnCtxDelete'/>"
+	L"      <button id='ppCtxNudgePlus' label='Nudge +1 Day' onAction='OnCtxNudgePlus'/>"
+	L"      <button id='ppCtxNudgeMinus' label='Nudge -1 Day' onAction='OnCtxNudgeMinus'/>"
+	L"      <button id='ppCtxPctPlus' label='Increase %' onAction='OnCtxPctPlus'/>"
+	L"      <button id='ppCtxPctMinus' label='Decrease %' onAction='OnCtxPctMinus'/>"
+	L"      <menu id='ppCtxScale' label='Change Scale'>"
+	L"        <button id='ppScaleDay' label='Day' onAction='OnCtxScaleDay'/>"
+	L"        <button id='ppScaleWeek' label='Week' onAction='OnCtxScaleWeek'/>"
+	L"        <button id='ppScaleMonth' label='Month' onAction='OnCtxScaleMonth'/>"
+	L"        <button id='ppScaleQuarter' label='Quarter' onAction='OnCtxScaleQuarter'/>"
+	L"        <button id='ppScaleYear' label='Year' onAction='OnCtxScaleYear'/>"
+	L"      </menu>"
+	L"    </contextMenu>"
+	L"  </contextMenus>"
 	L"</customUI>";
 
 // ---- IDTExtensibility2 -----------------------------------------------------
@@ -105,6 +181,18 @@ STDMETHODIMP CConnect::GetIDsOfNames(REFIID riid, LPOLESTR* rgszNames, UINT cNam
 		if (_wcsicmp(rgszNames[0], L"OnInsertGantt") == 0) { rgDispId[0] = DISPID_PP_INSERT_GANTT; return S_OK; }
 		if (_wcsicmp(rgszNames[0], L"OnPullGantt") == 0) { rgDispId[0] = DISPID_PP_PULL_GANTT; return S_OK; }
 		if (_wcsicmp(rgszNames[0], L"OnReflowGantt") == 0) { rgDispId[0] = DISPID_PP_REFLOW_GANTT; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxAddTask") == 0) { rgDispId[0] = DISPID_PP_CTX_ADD_TASK; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxAddRow") == 0) { rgDispId[0] = DISPID_PP_CTX_ADD_ROW; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxDelete") == 0) { rgDispId[0] = DISPID_PP_CTX_DELETE; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxNudgePlus") == 0) { rgDispId[0] = DISPID_PP_CTX_NUDGE_PLUS; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxNudgeMinus") == 0) { rgDispId[0] = DISPID_PP_CTX_NUDGE_MINUS; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxPctPlus") == 0) { rgDispId[0] = DISPID_PP_CTX_PCT_PLUS; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxPctMinus") == 0) { rgDispId[0] = DISPID_PP_CTX_PCT_MINUS; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxScaleDay") == 0) { rgDispId[0] = DISPID_PP_CTX_SCALE_DAY; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxScaleWeek") == 0) { rgDispId[0] = DISPID_PP_CTX_SCALE_WEEK; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxScaleMonth") == 0) { rgDispId[0] = DISPID_PP_CTX_SCALE_MONTH; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxScaleQuarter") == 0) { rgDispId[0] = DISPID_PP_CTX_SCALE_QUARTER; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnCtxScaleYear") == 0) { rgDispId[0] = DISPID_PP_CTX_SCALE_YEAR; return S_OK; }
 	}
 	return ExtBase::GetIDsOfNames(riid, rgszNames, cNames, lcid, rgDispId);
 }
@@ -130,6 +218,54 @@ STDMETHODIMP CConnect::Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD 
 
 	case DISPID_PP_REFLOW_GANTT:
 		DoReflowGantt();
+		return S_OK;
+
+	case DISPID_PP_CTX_ADD_TASK:
+		DoCtxAddTask();
+		return S_OK;
+
+	case DISPID_PP_CTX_ADD_ROW:
+		DoCtxAddRow();
+		return S_OK;
+
+	case DISPID_PP_CTX_DELETE:
+		DoCtxDelete();
+		return S_OK;
+
+	case DISPID_PP_CTX_NUDGE_PLUS:
+		DoCtxNudgePlus();
+		return S_OK;
+
+	case DISPID_PP_CTX_NUDGE_MINUS:
+		DoCtxNudgeMinus();
+		return S_OK;
+
+	case DISPID_PP_CTX_PCT_PLUS:
+		DoCtxPctPlus();
+		return S_OK;
+
+	case DISPID_PP_CTX_PCT_MINUS:
+		DoCtxPctMinus();
+		return S_OK;
+
+	case DISPID_PP_CTX_SCALE_DAY:
+		DoCtxScaleDay();
+		return S_OK;
+
+	case DISPID_PP_CTX_SCALE_WEEK:
+		DoCtxScaleWeek();
+		return S_OK;
+
+	case DISPID_PP_CTX_SCALE_MONTH:
+		DoCtxScaleMonth();
+		return S_OK;
+
+	case DISPID_PP_CTX_SCALE_QUARTER:
+		DoCtxScaleQuarter();
+		return S_OK;
+
+	case DISPID_PP_CTX_SCALE_YEAR:
+		DoCtxScaleYear();
 		return S_OK;
 	}
 	return ExtBase::Invoke(dispIdMember, riid, lcid, wFlags, pDispParams, pVarResult, pExcepInfo, puArgErr);
@@ -206,4 +342,211 @@ void CConnect::DoReflowGantt()
 	} else {
 		::MessageBoxW(NULL, L"Nothing to reflow — no bar positions changed.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
 	}
+}
+
+void CConnect::MutateChart(const std::function<bool(PpDocument&, std::string& outSelectId)>& op)
+{
+	if (!m_pApp) {
+		::MessageBoxW(NULL, L"PowerPoint application is not available.", L"PowerPlanner", MB_OK | MB_ICONWARNING);
+		return;
+	}
+
+	m_ctxKind.clear();
+	m_ctxId.clear();
+	m_ctxSuppressNoChangeMessage = false;
+
+	try {
+		PowerPoint::_ApplicationPtr app(m_pApp.p);
+		PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+		if (win) {
+			PowerPoint::SelectionPtr sel = win->GetSelection();
+			if (sel && sel->GetType() == PowerPoint::ppSelectionShapes) {
+				PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
+				if (sr && sr->GetCount() >= 1) {
+					PowerPoint::ShapePtr sh = sr->Item(_variant_t(1L));
+					_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+					_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
+					m_ctxKind = Narrow((const wchar_t*)kind);
+					m_ctxId = Narrow((const wchar_t*)id);
+				}
+			}
+		}
+
+		std::string json = ReadGanttFromSlide(m_pApp);
+		if (json.empty()) {
+			::MessageBoxW(NULL, L"No PowerPlanner chart on this slide.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+			return;
+		}
+
+		PpDocument doc = DocumentFromJson(json);
+		std::string selectId;
+		if (!op(doc, selectId)) {
+			if (!m_ctxSuppressNoChangeMessage) {
+				if (m_ctxId.empty()) {
+					::MessageBoxW(NULL, L"Select a PowerPlanner chart item and try again.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+				} else {
+					::MessageBoxW(NULL, L"That action is not available for the selected chart item.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+				}
+			}
+			return;
+		}
+
+		PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+		long n = shapes->GetCount();
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") {
+				sh->Delete();
+				break;
+			}
+		}
+
+		int cnt = 0;
+		HRESULT hr = InsertGantt(m_pApp, doc, &cnt, selectId);
+		if (FAILED(hr)) {
+			::MessageBoxW(NULL, L"Could not rebuild the chart after the edit.", L"PowerPlanner", MB_OK | MB_ICONERROR);
+		}
+	}
+	catch (const std::exception&) {
+		::MessageBoxW(NULL, L"The chart on this slide has an invalid PP_DOC tag.", L"PowerPlanner", MB_OK | MB_ICONERROR);
+	}
+	catch (const _com_error&) {
+		::MessageBoxW(NULL, L"Could not edit the selected PowerPlanner chart.", L"PowerPlanner", MB_OK | MB_ICONERROR);
+	}
+}
+
+void CConnect::DoCtxAddTask()
+{
+	PpLog(L"DoCtxAddTask — context menu clicked");
+	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
+		std::string rowId = RowForSelection(doc, m_ctxKind, m_ctxId);
+		if (rowId.empty()) return false;
+		std::string start, end;
+		DefaultTaskDates(doc, rowId, (m_ctxKind == "TASK" || m_ctxKind == "TASK_PROGRESS") ? m_ctxId : "", start, end);
+		outSelectId = AddTask(doc, rowId, "New Task", start, end);
+		return !outSelectId.empty();
+	});
+}
+
+void CConnect::DoCtxAddRow()
+{
+	PpLog(L"DoCtxAddRow — context menu clicked");
+	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
+		std::string afterRowId;
+		if (m_ctxKind == "ROW_LABEL") {
+			afterRowId = m_ctxId;
+		} else if (m_ctxKind == "TASK" || m_ctxKind == "TASK_PROGRESS") {
+			if (const PpTask* task = FindTask(doc, m_ctxId)) afterRowId = task->rowId;
+		}
+		std::string rowId = AddRow(doc, "New Row", afterRowId);
+		outSelectId.clear();
+		return !rowId.empty();
+	});
+}
+
+void CConnect::DoCtxDelete()
+{
+	PpLog(L"DoCtxDelete — context menu clicked");
+	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
+		if (m_ctxKind == "CHART_ROOT" || m_ctxId.empty()) {
+			::MessageBoxW(NULL, L"Select a task or milestone to delete.", L"PowerPlanner", MB_OK | MB_ICONINFORMATION);
+			m_ctxSuppressNoChangeMessage = true;
+			return false;
+		}
+		outSelectId.clear();
+		return DeleteById(doc, m_ctxId);
+	});
+}
+
+void CConnect::DoCtxNudgePlus()
+{
+	PpLog(L"DoCtxNudgePlus — context menu clicked");
+	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
+		if (m_ctxId.empty()) return false;
+		if (!NudgeTask(doc, m_ctxId, 1)) return false;
+		outSelectId = m_ctxId;
+		return true;
+	});
+}
+
+void CConnect::DoCtxNudgeMinus()
+{
+	PpLog(L"DoCtxNudgeMinus — context menu clicked");
+	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
+		if (m_ctxId.empty()) return false;
+		if (!NudgeTask(doc, m_ctxId, -1)) return false;
+		outSelectId = m_ctxId;
+		return true;
+	});
+}
+
+void CConnect::DoCtxPctPlus()
+{
+	PpLog(L"DoCtxPctPlus — context menu clicked");
+	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
+		const PpTask* task = FindTask(doc, m_ctxId);
+		if (!task) return false;
+		if (!SetTaskPercent(doc, m_ctxId, task->percent + 10)) return false;
+		outSelectId = m_ctxId;
+		return true;
+	});
+}
+
+void CConnect::DoCtxPctMinus()
+{
+	PpLog(L"DoCtxPctMinus — context menu clicked");
+	MutateChart([this](PpDocument& doc, std::string& outSelectId) {
+		const PpTask* task = FindTask(doc, m_ctxId);
+		if (!task) return false;
+		if (!SetTaskPercent(doc, m_ctxId, task->percent - 10)) return false;
+		outSelectId = m_ctxId;
+		return true;
+	});
+}
+
+void CConnect::DoCtxScaleDay()
+{
+	PpLog(L"DoCtxScaleDay — context menu clicked");
+	MutateChart([](PpDocument& doc, std::string& outSelectId) {
+		outSelectId.clear();
+		return SetScale(doc, "day");
+	});
+}
+
+void CConnect::DoCtxScaleWeek()
+{
+	PpLog(L"DoCtxScaleWeek — context menu clicked");
+	MutateChart([](PpDocument& doc, std::string& outSelectId) {
+		outSelectId.clear();
+		return SetScale(doc, "week");
+	});
+}
+
+void CConnect::DoCtxScaleMonth()
+{
+	PpLog(L"DoCtxScaleMonth — context menu clicked");
+	MutateChart([](PpDocument& doc, std::string& outSelectId) {
+		outSelectId.clear();
+		return SetScale(doc, "month");
+	});
+}
+
+void CConnect::DoCtxScaleQuarter()
+{
+	PpLog(L"DoCtxScaleQuarter — context menu clicked");
+	MutateChart([](PpDocument& doc, std::string& outSelectId) {
+		outSelectId.clear();
+		return SetScale(doc, "quarter");
+	});
+}
+
+void CConnect::DoCtxScaleYear()
+{
+	PpLog(L"DoCtxScaleYear — context menu clicked");
+	MutateChart([](PpDocument& doc, std::string& outSelectId) {
+		outSelectId.clear();
+		return SetScale(doc, "year");
+	});
 }

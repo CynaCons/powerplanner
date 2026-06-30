@@ -7,14 +7,30 @@
 
 #include "pch.h"
 #include "resource.h"
+#include <functional>
+#include <string>
 
 using namespace ATL;
+
+struct PpDocument;
 
 // DISPIDs for our ribbon callbacks (above any inherited dispinterface ids).
 #define DISPID_PP_ONLOAD        0x1001
 #define DISPID_PP_INSERT_GANTT  0x1002
 #define DISPID_PP_PULL_GANTT    0x1003
 #define DISPID_PP_REFLOW_GANTT  0x1004
+#define DISPID_PP_CTX_ADD_TASK      0x1005
+#define DISPID_PP_CTX_ADD_ROW       0x1006
+#define DISPID_PP_CTX_DELETE        0x1007
+#define DISPID_PP_CTX_NUDGE_PLUS    0x1008
+#define DISPID_PP_CTX_NUDGE_MINUS   0x1009
+#define DISPID_PP_CTX_PCT_PLUS      0x100A
+#define DISPID_PP_CTX_PCT_MINUS     0x100B
+#define DISPID_PP_CTX_SCALE_DAY     0x100C
+#define DISPID_PP_CTX_SCALE_WEEK    0x100D
+#define DISPID_PP_CTX_SCALE_MONTH   0x100E
+#define DISPID_PP_CTX_SCALE_QUARTER 0x100F
+#define DISPID_PP_CTX_SCALE_YEAR    0x1010
 
 // LIBIDs (we omit named_guids in the #import — see pch.h). Defined in Connect.cpp.
 extern const GUID LIBID_AddInDesigner_PP;
@@ -68,9 +84,25 @@ private:
 	void DoInsertGantt();
 	void DoPullGantt();
 	void DoReflowGantt();
+	void DoCtxAddTask();
+	void DoCtxAddRow();
+	void DoCtxDelete();
+	void DoCtxNudgePlus();
+	void DoCtxNudgeMinus();
+	void DoCtxPctPlus();
+	void DoCtxPctMinus();
+	void DoCtxScaleDay();
+	void DoCtxScaleWeek();
+	void DoCtxScaleMonth();
+	void DoCtxScaleQuarter();
+	void DoCtxScaleYear();
+	void MutateChart(const std::function<bool(PpDocument&, std::string& outSelectId)>& op);
 
 	CComPtr<IDispatch> m_pApp;     // PowerPoint.Application
 	CComPtr<IDispatch> m_pRibbon;  // Office.IRibbonUI (from onLoad)
+	std::string m_ctxKind;
+	std::string m_ctxId;
+	bool m_ctxSuppressNoChangeMessage = false;
 };
 
 OBJECT_ENTRY_AUTO(__uuidof(CConnect), CConnect)
