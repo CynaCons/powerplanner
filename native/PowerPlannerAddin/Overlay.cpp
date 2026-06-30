@@ -5,6 +5,7 @@
 #include "GanttOps.h"
 #include <algorithm>
 #include <string>
+#include <vector>
 
 // ---- module state ----------------------------------------------------------
 
@@ -20,6 +21,7 @@ const int INFL = 5;                         // frame inset from shape edge (px)
 const int BADGE_H = 20;                     // badge strip height (px)
 const int TOOLBAR_H = 28;                   // floating action toolbar height (px)
 const int BUTTON_COUNT = 4;
+const int ROW_INSERT_BUTTON = 16;
 
 PowerPoint::_ApplicationPtr g_app;
 HWND     g_hwnd = NULL;
@@ -41,6 +43,19 @@ int g_windowOriginY = 0;
 bool g_buttonsValid = false;
 bool g_hasSelectionChrome = false;
 
+struct RowBand {
+	std::string rowId;
+	RECT screenRect;
+	int screenLeftGutter;
+};
+
+std::vector<RowBand> g_rowBands;
+std::string g_hoverRowId;
+RECT g_hoverBandRect = {};
+RECT g_hoverInsertRect = {};
+bool g_hoverInsertValid = false;
+bool g_lastLeftButtonDown = false;
+
 enum OverlayButton {
 	BTN_ADD = 0,
 	BTN_DEL = 1,
@@ -51,6 +66,7 @@ enum OverlayButton {
 // Forward
 void PaintOverlay(HDC hdc, const RECT& rc);
 void HandleToolbarButton(int button);
+void HandleHoverInsertRow();
 
 std::string Narrow(const wchar_t* w) {
 	if (!w || !*w) return "";
@@ -119,6 +135,21 @@ void ClearSelectionState() {
 	::SetRectEmpty(&g_frameRect);
 }
 
+bool SameRect(const RECT& a, const RECT& b) {
+	return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
+}
+
+bool SameSelectionState(bool hasSelection, const RECT& selRect, const std::string& selId, const std::string& selKind) {
+	return g_hasSelectionChrome == hasSelection && SameRect(g_selScreenRect, selRect) && g_selId == selId && g_selKind == selKind;
+}
+
+void ClearHoverState() {
+	g_hoverRowId.clear();
+	::SetRectEmpty(&g_hoverBandRect);
+	::SetRectEmpty(&g_hoverInsertRect);
+	g_hoverInsertValid = false;
+}
+
 void LayoutToolbarButtons(int width, int height) {
 	g_buttonsValid = false;
 	for (int i = 0; i < BUTTON_COUNT; ++i) ::SetRectEmpty(&g_buttonRects[i]);
@@ -146,6 +177,31 @@ int ButtonFromClientPoint(POINT pt) {
 		if (::PtInRect(&g_buttonRects[i], pt)) return i;
 	}
 	return -1;
+}
+
+void LayoutHoverInsertHotspot() {
+	g_hoverInsertValid = false;
+	::SetRectEmpty(&g_hoverInsertRect);
+	if (g_hoverRowId.empty() || ::IsRectEmpty(&g_hoverBandRect)) return;
+	if (::GetKeyState(VK_LBUTTON) & 0x8000) return;
+
+	int bandTop = g_hoverBandRect.top - g_windowOriginY;
+	int bandBottom = g_hoverBandRect.bottom - g_windowOriginY;
+	int cy = (bandTop + bandBottom) / 2;
+	int left = g_chartScreenRect.left - g_windowOriginX + 6;
+	for (const auto& band : g_rowBands) {
+		if (band.rowId == g_hoverRowId) {
+			left = std::max((int)(g_chartScreenRect.left - g_windowOriginX + 4), band.screenLeftGutter - g_windowOriginX - ROW_INSERT_BUTTON - 4);
+			break;
+		}
+	}
+	g_hoverInsertRect = { left, cy - ROW_INSERT_BUTTON / 2, left + ROW_INSERT_BUTTON, cy + ROW_INSERT_BUTTON / 2 };
+	g_hoverInsertValid = true;
+}
+
+bool HoverInsertFromClientPoint(POINT pt) {
+	if (!g_hoverInsertValid) LayoutHoverInsertHotspot();
+	return g_hoverInsertValid && ::PtInRect(&g_hoverInsertRect, pt);
 }
 
 void NormalizeRect(RECT& rc) {
@@ -180,6 +236,67 @@ PowerPoint::ShapePtr FindChartRoot(PowerPoint::_SlidePtr slide) {
 	return nullptr;
 }
 
+void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win) {
+	g_rowBands.clear();
+	if (!chart || !win) return;
+	try {
+		PowerPoint::GroupShapesPtr items = chart->GetGroupItems();
+		if (!items) return;
+		long n = items->GetCount();
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+			_bstr_t kind = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!kind.length() || Narrow((const wchar_t*)kind) != "ROW_LABEL") continue;
+			_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+			std::string rowId = Narrow((const wchar_t*)id);
+			if (rowId.empty()) continue;
+			float left = ch->GetLeft(), top = ch->GetTop(), w = ch->GetWidth(), h = ch->GetHeight();
+			RECT rr = {
+				win->PointsToScreenPixelsX(left),
+				win->PointsToScreenPixelsY(top),
+				win->PointsToScreenPixelsX(left + w),
+				win->PointsToScreenPixelsY(top + h)
+			};
+			NormalizeRect(rr);
+			if (rr.bottom <= rr.top) continue;
+			g_rowBands.push_back({ rowId, { g_chartScreenRect.left, rr.top, g_chartScreenRect.right, rr.bottom }, rr.left });
+		}
+		std::sort(g_rowBands.begin(), g_rowBands.end(), [](const RowBand& a, const RowBand& b) {
+			return a.screenRect.top < b.screenRect.top;
+		});
+	}
+	catch (const _com_error&) {
+		g_rowBands.clear();
+	}
+}
+
+bool UpdateHoverFromCursor() {
+	std::string oldId = g_hoverRowId;
+	RECT oldRect = g_hoverBandRect;
+	ClearHoverState();
+
+	POINT pt = {};
+	if (!::GetCursorPos(&pt) || !::PtInRect(&g_chartScreenRect, pt)) {
+		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect);
+	}
+
+	for (const auto& band : g_rowBands) {
+		if (pt.y >= band.screenRect.top && pt.y <= band.screenRect.bottom) {
+			g_hoverRowId = band.rowId;
+			g_hoverBandRect = band.screenRect;
+			break;
+		}
+	}
+	LayoutHoverInsertHotspot();
+	return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect);
+}
+
+void RequestOverlayRepaint() {
+	if (!g_hwnd) return;
+	::InvalidateRect(g_hwnd, NULL, TRUE);
+	::UpdateWindow(g_hwnd);
+}
+
 // Append a debug line (shared with Connect's log).
 void OvLog(const wchar_t* msg) {
 	wchar_t path[MAX_PATH];
@@ -197,17 +314,25 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	if (msg == WM_NCHITTEST) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		::ScreenToClient(hwnd, &pt);
-		return ButtonFromClientPoint(pt) >= 0 ? HTCLIENT : HTTRANSPARENT;
+		return (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt)) ? HTCLIENT : HTTRANSPARENT;
 	}
 	if (msg == WM_MOUSEACTIVATE) {
 		return MA_NOACTIVATE;
 	}
 	if (msg == WM_LBUTTONDOWN) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
-		if (ButtonFromClientPoint(pt) >= 0) return 0;
+		if (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt)) return 0;
 	}
 	if (msg == WM_LBUTTONUP) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		if (HoverInsertFromClientPoint(pt)) {
+			try {
+				HandleHoverInsertRow();
+			} catch (...) {
+				OvLog(L"hover row insert failed");
+			}
+			return 0;
+		}
 		int button = ButtonFromClientPoint(pt);
 		if (button >= 0) {
 			try {
@@ -265,6 +390,53 @@ void PaintOverlay(HDC hdc, const RECT& rc) {
 	::DeleteObject(keyBrush);
 
 	LayoutToolbarButtons(W, H);
+	LayoutHoverInsertHotspot();
+
+	if (!g_hoverRowId.empty() && !::IsRectEmpty(&g_hoverBandRect) && !(::GetKeyState(VK_LBUTTON) & 0x8000)) {
+		RECT band = {
+			g_hoverBandRect.left - g_windowOriginX,
+			g_hoverBandRect.top - g_windowOriginY,
+			g_hoverBandRect.right - g_windowOriginX,
+			g_hoverBandRect.bottom - g_windowOriginY
+		};
+		HPEN rowPen = ::CreatePen(PS_SOLID, 2, ACCENT);
+		HGDIOBJ oldRowPen = ::SelectObject(hdc, rowPen);
+		::MoveToEx(hdc, band.left, band.top, NULL);
+		::LineTo(hdc, band.right, band.top);
+		::MoveToEx(hdc, band.left, band.bottom, NULL);
+		::LineTo(hdc, band.right, band.bottom);
+		::SelectObject(hdc, oldRowPen);
+		::DeleteObject(rowPen);
+
+		RECT bar = { band.left, band.top, band.left + 3, band.bottom };
+		HBRUSH barBrush = ::CreateSolidBrush(ACCENT);
+		::FillRect(hdc, &bar, barBrush);
+		::DeleteObject(barBrush);
+
+		if (g_hoverInsertValid) {
+			HBRUSH plusFill = ::CreateSolidBrush(SURFACE);
+			HPEN plusPen = ::CreatePen(PS_SOLID, 1, ACCENT);
+			HGDIOBJ oldPlusBrush = ::SelectObject(hdc, plusFill);
+			HGDIOBJ oldPlusPen = ::SelectObject(hdc, plusPen);
+			::Ellipse(hdc, g_hoverInsertRect.left, g_hoverInsertRect.top, g_hoverInsertRect.right, g_hoverInsertRect.bottom);
+			::SelectObject(hdc, oldPlusBrush);
+			::SelectObject(hdc, oldPlusPen);
+			::DeleteObject(plusFill);
+			::DeleteObject(plusPen);
+
+			HPEN glyphPen = ::CreatePen(PS_SOLID, 2, ACCENT);
+			HGDIOBJ oldGlyphPen = ::SelectObject(hdc, glyphPen);
+			int cx = (g_hoverInsertRect.left + g_hoverInsertRect.right) / 2;
+			int cy = (g_hoverInsertRect.top + g_hoverInsertRect.bottom) / 2;
+			::MoveToEx(hdc, cx - 4, cy, NULL);
+			::LineTo(hdc, cx + 5, cy);
+			::MoveToEx(hdc, cx, cy - 4, NULL);
+			::LineTo(hdc, cx, cy + 5);
+			::SelectObject(hdc, oldGlyphPen);
+			::DeleteObject(glyphPen);
+		}
+	}
+
 	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
 
 	RECT frame = g_frameRect;
@@ -362,6 +534,9 @@ void HideOverlay() {
 	if (g_shown && g_hwnd) { ::ShowWindow(g_hwnd, SW_HIDE); g_shown = false; }
 	g_buttonsValid = false;
 	ClearSelectionState();
+	ClearHoverState();
+	g_lastLeftButtonDown = false;
+	g_rowBands.clear();
 	::SetRectEmpty(&g_chartScreenRect);
 	g_chartProj.clear();
 }
@@ -380,10 +555,14 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	if (ww < toolbarMinW) ww = toolbarMinW;
 	if (wh < BADGE_H + TOOLBAR_H + INFL * 2 + 8) wh = BADGE_H + TOOLBAR_H + INFL * 2 + 8;
 	LayoutToolbarButtons(ww, wh);
+	RECT oldWindow = {};
+	bool wasShown = g_shown;
+	bool hadWindow = ::GetWindowRect(g_hwnd, &oldWindow) != FALSE;
 	::SetWindowPos(g_hwnd, HWND_TOPMOST, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-	::InvalidateRect(g_hwnd, NULL, TRUE);
-	::UpdateWindow(g_hwnd);
 	g_shown = true;
+	if (!wasShown || !hadWindow || oldWindow.left != wx || oldWindow.top != wy || oldWindow.right - oldWindow.left != ww || oldWindow.bottom - oldWindow.top != wh) {
+		RequestOverlayRepaint();
+	}
 }
 
 void RebuildChart(PpDocument& doc, const std::string& selectId) {
@@ -457,12 +636,51 @@ void HandleToolbarButton(int button) {
 	g_mutating = false;
 }
 
+void HandleHoverInsertRow() {
+	if (!g_app || g_mutating || g_hoverRowId.empty()) return;
+	const std::string afterRowId = g_hoverRowId;
+
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (json.empty()) { g_mutating = false; return; }
+
+		PpDocument doc = DocumentFromJson(json);
+		std::string rowId = AddRow(doc, "New Row", afterRowId);
+		if (!rowId.empty()) {
+			RebuildChart(doc, "");
+			wchar_t buf[128];
+			::swprintf_s(buf, 128, L"hover insert row after %hs", afterRowId.c_str());
+			OvLog(buf);
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error during hover row insert");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error during hover row insert");
+	}
+	catch (...) {
+		OvLog(L"unknown error during hover row insert");
+	}
+	g_mutating = false;
+}
+
 // Poll the slide; keep the overlay over the chart while selection chrome follows
 // the selected PowerPlanner child shape.
 void Tick() {
 	if (g_mutating) return;
 	if (!g_app) { HideOverlay(); return; }
 	try {
+		RECT oldChartRect = g_chartScreenRect;
+		RECT oldSelRect = g_selScreenRect;
+		bool oldHasSelectionChrome = g_hasSelectionChrome;
+		std::string oldSelId = g_selId;
+		std::string oldSelKind = g_selKind;
+		bool leftButtonDown = (::GetKeyState(VK_LBUTTON) & 0x8000) != 0;
+		bool mouseStateChanged = leftButtonDown != g_lastLeftButtonDown;
+		g_lastLeftButtonDown = leftButtonDown;
+
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
 		if (!win) { HideOverlay(); return; }
 
@@ -483,6 +701,9 @@ void Tick() {
 		};
 		NormalizeRect(g_chartScreenRect);
 		g_chartProj = Narrow((const wchar_t*)chart->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+		bool chartChanged = !SameRect(oldChartRect, g_chartScreenRect);
+		BuildRowBands(chart, win);
+		bool hoverChanged = UpdateHoverFromCursor();
 
 		ClearSelectionState();
 		PowerPoint::SelectionPtr sel = win->GetSelection();
@@ -518,6 +739,7 @@ void Tick() {
 					if (changed) {
 						ClearSelectionState();
 						ShowOverlayForChartRect(g_chartScreenRect);
+						RequestOverlayRepaint();
 						return;
 					}
 				}
@@ -525,6 +747,9 @@ void Tick() {
 		}
 
 		ShowOverlayForChartRect(g_chartScreenRect);
+		if (chartChanged || hoverChanged || mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
+			RequestOverlayRepaint();
+		}
 
 		std::string k = g_selKind;
 		if (k != g_lastKind) {
