@@ -11,7 +11,7 @@ if not exist "%OUT%" mkdir "%OUT%"
 pushd "%OUT%"
 echo [render] compiling
 cl /nologo /EHsc /MT /std:c++17 /bigobj /DUNICODE /D_UNICODE /DWIN32 /D_WINDLL /I"%SRC%PowerPlannerAddin" ^
-	"%SRC%render\render-harness.cpp" "%SRC%PowerPlannerAddin\GanttBuilder.cpp" "%SRC%PowerPlannerAddin\GanttLayout.cpp" "%SRC%PowerPlannerAddin\GanttJson.cpp" ^
+	"%SRC%render\render-harness.cpp" "%SRC%PowerPlannerAddin\GanttBuilder.cpp" "%SRC%PowerPlannerAddin\GanttLayout.cpp" "%SRC%PowerPlannerAddin\GanttJson.cpp" "%SRC%PowerPlannerAddin\PptRenderer.cpp" ^
 	/Fe"pprender.exe" || ( popd & exit /b 1 )
 popd
 echo [render] built "%OUT%\pprender.exe"
