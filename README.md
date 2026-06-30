@@ -6,6 +6,32 @@ PowerPlanner is a presentation-grade Gantt chart authoring tool — task bars, m
 
 It ships as a **single-file portable HTML app** — no install, no account, no server. Open the file in any modern browser and start planning. Press <kbd>Ctrl+S</kbd> to save; your chart is embedded back into the same HTML file.
 
+## Gallery
+
+### Web app
+
+![PowerPlanner web app — switching time scales](docs/media/web-demo.gif)
+
+*The single-file web app, switching time scales (week → month → quarter → year → fit).*
+
+![PowerPlanner web app](docs/media/web-app.png)
+
+### PowerPoint add-in (native)
+
+A native C++ COM add-in (think-cell style) that emits the chart as **real, editable PowerPoint shapes** — not an image — with a clean Material look:
+
+![Native Material Gantt in PowerPoint](docs/media/native-material.png)
+
+On-slide contextual overlay (selection frame, handles, and a badge) tracking the selection over the live slide:
+
+![Native on-slide overlay](docs/media/native-overlay.png)
+
+Live linkage — drag a bar, hit **Reflow**, and the move is read back into dates with dependencies/summary reflowed and the embedded data kept in sync:
+
+![Native reflow](docs/media/native-reflow.png)
+
+> Build the DLL and test it in PowerPoint on any 64-bit-Office PC — see **[docs/native-addin-install.md](docs/native-addin-install.md)** (prebuilt DLL + `register.bat`, no admin or Visual Studio needed to register).
+
 ## Get started
 
 1. Download **`PowerPlanner.html`** from the [latest release](https://github.com/CynaCons/powerplanner/releases/latest).
