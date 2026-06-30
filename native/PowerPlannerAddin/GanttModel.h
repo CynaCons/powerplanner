@@ -16,6 +16,9 @@ struct PpMilestone {
 struct PpDependency {
 	std::string id, from, to, type;  // type: finish-to-start | start-to-start | finish-to-finish | start-to-finish
 };
+struct PpMarker {
+	std::string id, type, label, date, color;  // type: deadline | today
+};
 struct PpBracket {
 	std::string id, label, start, end, color;
 	std::vector<std::string> rowIds;
@@ -31,4 +34,5 @@ struct PpDocument {
 	std::vector<PpMilestone> milestones;
 	std::vector<PpBracket> brackets;
 	std::vector<PpDependency> deps;
+	std::vector<PpMarker> markers;
 };

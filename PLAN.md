@@ -475,7 +475,8 @@ fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md)
 - [x] "Reflow" ribbon button (`OnReflowGantt`)
 - [x] Verified: `reflow-test` moves a bar +14 days → dates shift exactly +14 days, connectors
       reflow, `PP_DOC` updated (REFLOW PASS); reflowed chart exported
-- [ ] (follow-on) Auto-reflow on the polling timer (detect a committed edit and reflow without the button)
+- [x] (follow-on) Auto-reflow on the polling timer (detect a committed edit and reflow without the button)
+- [x] (UI Polish) Think-cell style U-brackets, zero margins, Segoe UI typography, and deadline/today line markers in native renderer
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons

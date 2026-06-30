@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "Overlay.h"
+#include "GanttBuilder.h"
 #include <string>
 
 // ---- module state ----------------------------------------------------------
@@ -149,6 +150,18 @@ void Tick() {
 		PowerPoint::ShapePtr sh = sr->Item(_variant_t(1L));
 		_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
 		if (!kind.length()) { HideOverlay(); return; }
+
+		bool mouseUp = !(::GetKeyState(VK_LBUTTON) & 0x8000);
+		if (mouseUp) {
+			std::string kStr = (const char*)kind;
+			if (kStr == "TASK" || kStr == "MILESTONE") {
+				bool changed = false;
+				ReflowFromSlide(g_app, &changed);
+				if (changed) {
+					return;
+				}
+			}
+		}
 
 		float left = sh->GetLeft(), top = sh->GetTop(), w = sh->GetWidth(), h = sh->GetHeight();
 		int x1 = win->PointsToScreenPixelsX(left);

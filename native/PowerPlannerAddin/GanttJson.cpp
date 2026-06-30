@@ -44,6 +44,11 @@ std::string DocumentToJson(const PpDocument& d) {
 	for (const auto& dp : d.deps)
 		j["dependencies"].push_back({ {"id", dp.id}, {"from", dp.from}, {"to", dp.to}, {"type", dp.type} });
 	j["markers"] = json::array();
+	for (const auto& m : d.markers) {
+		json mm = { {"id", m.id}, {"type", m.type}, {"label", m.label}, {"date", m.date} };
+		if (!m.color.empty()) mm["color"] = m.color;
+		j["markers"].push_back(mm);
+	}
 	j["style"] = { {"theme", "light"}, {"preset", "default"} };
 	return j.dump();
 }
@@ -97,6 +102,15 @@ PpDocument DocumentFromJson(const std::string& jsonStr) {
 		dep.to = getStr(dp, "to");
 		dep.type = getStr(dp, "type");
 		doc.deps.push_back(dep);
+	}
+	for (const auto& m : d.value("markers", json::array())) {
+		PpMarker marker;
+		marker.id = getStr(m, "id");
+		marker.type = getStr(m, "type");
+		marker.label = getStr(m, "label");
+		marker.date = getStr(m, "date");
+		marker.color = getStr(m, "color");
+		doc.markers.push_back(marker);
 	}
 	return doc;
 }

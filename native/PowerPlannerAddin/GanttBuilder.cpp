@@ -72,6 +72,10 @@ PpDocument MakeSampleDocument() {
 		{ "d2", "t3", "t5", "finish-to-start" },
 		{ "d3", "t5", "t6", "finish-to-start" },
 	};
+	doc.markers = {
+		{ "mk1", "deadline", "Board review", "2026-07-30", "" },
+		{ "mk2", "today",    "Today",        "2026-06-25", "" }
+	};
 	return doc;
 }
 
@@ -174,15 +178,62 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 	// Brackets (+ labels).
 	for (const auto& b : L.brackets) {
 		float left = xToPt(b.xDay), width = std::max(2.0f, b.widthDays * ptPerDay);
-		float top = slotTop(L.rowOffsets[b.topRow]) + 2.0f;
+		float top = slotTop(L.rowOffsets[b.topRow]) - 12.0f;
 		int bottomSlot = L.rowOffsets[b.bottomRow] + L.rowSlots[b.bottomRow];
-		float h = std::max(8.0f, slotTop(bottomSlot) - top - 2.0f);
-		Style br; br.line = true; br.lineBgr = Bgr(th.bracket); br.lineWeight = 1.0f;
-		Prim p = scene::rect(left, top, width, h, br); p.tagKind = "BRACKET"; p.tagId = b.id; sc.prims.push_back(p);
+		float bottom = slotTop(bottomSlot) - 12.0f;
+
+		Style br; br.line = true; br.lineBgr = Bgr(th.bracket); br.lineWeight = 1.5f;
+
+		// 1. Top horizontal line
+		Prim pTop = scene::line(left, top, left + width, top, br);
+		pTop.tagKind = "BRACKET"; pTop.tagId = b.id; sc.prims.push_back(pTop);
+
+		// 2. Left vertical tick pointing DOWN (tick size 6pt)
+		Prim pLeft = scene::line(left, top, left, top + 6.0f, br);
+		pLeft.tagKind = "BRACKET_TICK"; pLeft.tagId = b.id; sc.prims.push_back(pLeft);
+
+		// 3. Right vertical tick pointing DOWN (tick size 6pt)
+		Prim pRight = scene::line(left + width, top, left + width, top + 6.0f, br);
+		pRight.tagKind = "BRACKET_TICK"; pRight.tagId = b.id; sc.prims.push_back(pRight);
+
+		// 4. Bottom horizontal line (thin/lighter, matching web's 0.4 opacity)
+		Style brBot; brBot.line = true; brBot.lineBgr = Bgr(th.divider); brBot.lineWeight = 1.0f;
+		Prim pBot = scene::line(left, bottom, left + width, bottom, brBot);
+		pBot.tagKind = "BRACKET_BOTTOM"; pBot.tagId = b.id; sc.prims.push_back(pBot);
+
 		std::string label; for (const auto& bd : doc.brackets) if (bd.id == b.id) label = bd.label;
 		Style bl; bl.textBgr = Bgr(th.bracket); bl.fontSize = 10.0f; bl.align = TextAlign::Center;
 		// Label centered just above the bracket box so it doesn't sit on the bars.
-		Prim t = scene::text(left, top - 13.0f, width, 12.0f, Widen(label), bl); t.tagKind = "BRACKET_LABEL"; sc.prims.push_back(t);
+		Prim t = scene::text(left, top - 13.0f, width, 12.0f, Widen(label), bl); t.tagKind = "BRACKET_LABEL"; t.tagId = b.id; sc.prims.push_back(t);
+	}
+
+	// Markers (Today line / Deadline lines).
+	for (const auto& m : doc.markers) {
+		float mx = xToPt(DateToDays(m.date) - vs);
+		if (mx >= MARGIN + ROW_GUTTER && mx <= chartRight) {
+			Style ms; ms.line = true;
+			if (m.type == "deadline") {
+				ms.lineBgr = Bgr(0xD93025); // Material Red
+				ms.lineWeight = 1.25f;
+			} else {
+				ms.lineBgr = Bgr(th.primary); // Material Blue (Today line)
+				ms.lineWeight = 1.25f;
+			}
+			Prim ln = scene::line(mx, chartTop - AXIS_H, mx, chartBottom, ms);
+			ln.tagKind = m.type == "deadline" ? "DEADLINE" : "TODAY_LINE";
+			ln.tagId = m.id;
+			sc.prims.push_back(ln);
+
+			Style ml;
+			ml.textBgr = m.type == "deadline" ? Bgr(0xD93025) : Bgr(th.primary);
+			ml.fontSize = 9.0f;
+			ml.align = TextAlign::Left;
+			ml.bold = true;
+			Prim t = scene::text(mx + 4.0f, chartTop - AXIS_H + 2.0f, 96.0f, 12.0f, Widen(m.label), ml);
+			t.tagKind = m.type == "deadline" ? "DEADLINE_LABEL" : "TODAY_LABEL";
+			t.tagId = m.id;
+			sc.prims.push_back(t);
+		}
 	}
 
 	// Dependencies (elbow connectors).
@@ -221,7 +272,7 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 
 // ---- emission --------------------------------------------------------------
 
-HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) {
+HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, const std::string& selectId) {
 	if (!pApp) return E_POINTER;
 	int count = 0;
 	try {
@@ -269,6 +320,19 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount) 
 			::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
 				DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
 			group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+
+			if (!selectId.empty()) {
+				PowerPoint::GroupShapesPtr items = group->GetGroupItems();
+				long m = items->GetCount();
+				for (long i = 1; i <= m; ++i) {
+					PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+					_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+					if (id.length() && Narrow((const wchar_t*)id) == selectId) {
+						ch->Select(Office::msoTrue);
+						break;
+					}
+				}
+			}
 		}
 	}
 	catch (const _com_error& e) {
@@ -322,17 +386,25 @@ HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 
 		PpDocument doc = DocumentFromJson(docJson);
 		std::map<std::string, std::pair<float, float>> pos;
+		std::map<std::string, float> posMilestone;
 		PowerPoint::GroupShapesPtr items = group->GetGroupItems();
 		long m = items->GetCount();
 		for (long i = 1; i <= m; ++i) {
 			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
 			_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
-			if (!k.length() || Narrow((const wchar_t*)k) != "TASK") continue;
+			if (!k.length()) continue;
+			std::string kindStr = Narrow((const wchar_t*)k);
 			_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
-			pos[Narrow((const wchar_t*)id)] = { ch->GetLeft(), ch->GetWidth() };
+			if (kindStr == "TASK") {
+				pos[Narrow((const wchar_t*)id)] = { ch->GetLeft(), ch->GetWidth() };
+			} else if (kindStr == "MILESTONE") {
+				posMilestone[Narrow((const wchar_t*)id)] = ch->GetLeft();
+			}
 		}
 
 		bool changed = false;
+		std::string changedId;
+
 		for (auto& t : doc.tasks) {
 			auto it = pos.find(t.id);
 			if (it == pos.end()) continue;
@@ -341,10 +413,34 @@ HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 			long widthDays = (long)::llround(width / ptPerDay);
 			if (widthDays < 1) widthDays = 1;
 			std::string ns = DaysToDate(startDay), ne = DaysToDate(startDay + widthDays - 1);
-			if (ns != t.start || ne != t.end) { t.start = ns; t.end = ne; changed = true; }
+			if (ns != t.start || ne != t.end) {
+				t.start = ns;
+				t.end = ne;
+				changed = true;
+				changedId = t.id;
+			}
 		}
 
-		if (changed) { group->Delete(); int cnt = 0; InsertGantt(pApp, doc, &cnt); }
+		for (auto& ms : doc.milestones) {
+			auto it = posMilestone.find(ms.id);
+			if (it == posMilestone.end()) continue;
+			const float left = it->second;
+			float sz = 13.0f;
+			float targetX = left + sz / 2.0f - ptPerDay / 2.0f;
+			long mDay = minDay - pad + (long)::llround((targetX - originX) / ptPerDay);
+			std::string nd = DaysToDate(mDay);
+			if (nd != ms.date) {
+				ms.date = nd;
+				changed = true;
+				changedId = ms.id;
+			}
+		}
+
+		if (changed) {
+			group->Delete();
+			int cnt = 0;
+			InsertGantt(pApp, doc, &cnt, changedId);
+		}
 		if (outChanged) *outChanged = changed;
 		return S_OK;
 	}

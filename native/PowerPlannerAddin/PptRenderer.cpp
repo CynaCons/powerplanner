@@ -4,12 +4,17 @@
 static void ApplyText(PowerPoint::ShapePtr sh, const Prim& p) {
 	if (p.text.empty()) return;
 	PowerPoint::TextFramePtr tf = sh->GetTextFrame();
+	tf->PutMarginLeft(0.0f);
+	tf->PutMarginRight(0.0f);
+	tf->PutMarginTop(0.0f);
+	tf->PutMarginBottom(0.0f);
 	PowerPoint::TextRangePtr tr = tf->GetTextRange();
 	tr->PutText(_bstr_t(p.text.c_str()));
 	PowerPoint::FontPtr font = tr->GetFont();
 	font->PutSize(p.style.fontSize);
 	font->PutBold(p.style.bold ? Office::msoTrue : Office::msoFalse);
 	font->GetColor()->PutPpRGB((Office::MsoRGBType)p.style.textBgr);
+	font->PutName(_bstr_t(L"Segoe UI"));
 	long a = (p.style.align == TextAlign::Center) ? 2 : (p.style.align == TextAlign::Right) ? 3 : 1;
 	tr->GetParagraphFormat()->PutAlignment((PowerPoint::PpParagraphAlignment)a);
 	tf->PutVerticalAnchor(Office::msoAnchorMiddle);
@@ -37,6 +42,9 @@ std::vector<PowerPoint::ShapePtr> RenderScene(PowerPoint::ShapesPtr shapes, cons
 			lf->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.lineBgr);
 			lf->PutWeight(s.lineWeight);
 			if (s.arrowEnd) lf->PutEndArrowheadStyle(Office::msoArrowheadTriangle);
+			if (p.tagKind == "DEADLINE" || p.tagKind == "TODAY_LINE" || p.tagKind == "AXIS_GRID") {
+				lf->PutDashStyle(p.tagKind == "AXIS_GRID" ? Office::msoLineDashDot : Office::msoLineDash);
+			}
 		} else {
 			if (s.fill) sh->GetFill()->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.fillBgr);
 			else        sh->GetFill()->PutVisible(Office::msoFalse);
