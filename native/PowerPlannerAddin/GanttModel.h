@@ -29,6 +29,7 @@ struct PpRow {
 };
 struct PpDocument {
 	std::string title;
+	std::string scale = "week";
 	std::vector<PpRow> rows;
 	std::vector<PpTask> tasks;
 	std::vector<PpMilestone> milestones;

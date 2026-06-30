@@ -13,7 +13,7 @@ std::string DocumentToJson(const PpDocument& d) {
 	json j;
 	j["schemaVersion"] = 1;
 	j["title"] = d.title;
-	j["calendar"] = { {"scale", "week"}, {"fiscalYearStart", 1}, {"workingDays", {1, 2, 3, 4, 5}}, {"holidays", json::array()} };
+	j["calendar"] = { {"scale", d.scale.empty() ? "week" : d.scale}, {"fiscalYearStart", 1}, {"workingDays", {1, 2, 3, 4, 5}}, {"holidays", json::array()} };
 
 	j["rows"] = json::array();
 	for (const auto& r : d.rows) {
@@ -57,6 +57,12 @@ PpDocument DocumentFromJson(const std::string& jsonStr) {
 	PpDocument doc;
 	json d = json::parse(jsonStr);
 	doc.title = getStr(d, "title");
+	doc.scale = "week";
+	auto cal = d.find("calendar");
+	if (cal != d.end() && cal->is_object()) {
+		std::string scale = getStr(*cal, "scale");
+		if (!scale.empty()) doc.scale = scale;
+	}
 	for (const auto& r : d.value("rows", json::array())) {
 		PpRow row;
 		row.id = getStr(r, "id");

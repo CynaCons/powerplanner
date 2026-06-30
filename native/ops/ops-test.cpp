@@ -1,15 +1,88 @@
 #include "../PowerPlannerAddin/GanttModel.h"
+#include "../PowerPlannerAddin/GanttLayout.h"
+#include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttOps.h"
 
 #include <cstdio>
+#include <string>
+
+static bool Check(bool cond, const char* msg) {
+	if (!cond) {
+		std::printf("OPS HARNESS FAIL: %s\n", msg);
+		return false;
+	}
+	return true;
+}
 
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
+	doc.scale = "week";
 	doc.rows.push_back(PpRow{"row-1", "Row 1", "", false});
+	doc.rows.push_back(PpRow{"row-2", "Row 2", "", false});
 	doc.tasks.push_back(PpTask{"task-1", "Task 1", "2026-01-01", "2026-01-02", "row-1", "#4472c4", 50});
+	doc.tasks.push_back(PpTask{"task-2", "Task 2", "2026-02-01", "2026-02-04", "row-2", "#70ad47", 10});
+	doc.milestones.push_back(PpMilestone{"ms-1", "Milestone 1", "2026-01-03", "row-1", "#ffc000"});
+	doc.brackets.push_back(PpBracket{"br-1", "Bracket 1", "2026-01-01", "2026-01-03", "#000000", {"row-1"}});
+	doc.brackets.push_back(PpBracket{"br-2", "Bracket 2", "2026-01-01", "2026-02-04", "#000000", {"row-1", "row-2"}});
+	doc.deps.push_back(PpDependency{"dep-1", "task-1", "task-2", "finish-to-start"});
 
-	if (OpsSelfTest() != 0 || doc.tasks.size() != 1) {
+	bool ok = true;
+	ok = Check(OpsSelfTest() == 0, "OpsSelfTest returns 0") && ok;
+	ok = Check(doc.tasks.size() == 2, "model sanity keeps initial tasks") && ok;
+
+	const std::string addedRow = AddRow(doc, "Inserted Row", "row-1");
+	ok = Check(!addedRow.empty() && addedRow != "row-1" && addedRow != "row-2", "AddRow returns fresh id") && ok;
+	ok = Check(doc.rows.size() == 3 && doc.rows[1].id == addedRow && doc.rows[1].label == "Inserted Row", "AddRow inserts after requested row") && ok;
+
+	const std::string appendedRow = AddRow(doc, "Appended Row", "missing-row");
+	ok = Check(doc.rows.back().id == appendedRow, "AddRow appends when afterRowId missing") && ok;
+
+	const std::string taskId = AddTask(doc, addedRow, "Added Task", "2026-03-01", "2026-03-05");
+	bool foundTask = false;
+	for (const auto& task : doc.tasks) foundTask = foundTask || (task.id == taskId && task.rowId == addedRow && task.label == "Added Task");
+	ok = Check(foundTask, "AddTask adds task and returns id") && ok;
+
+	long startBefore = DateToDays(doc.tasks.back().start);
+	long endBefore = DateToDays(doc.tasks.back().end);
+	ok = Check(NudgeTask(doc, taskId, 14), "NudgeTask returns true for existing task") && ok;
+	ok = Check(DateToDays(doc.tasks.back().start) == startBefore + 14 && DateToDays(doc.tasks.back().end) == endBefore + 14, "NudgeTask shifts start and end by delta days") && ok;
+
+	ok = Check(MoveTaskToRow(doc, taskId, "row-2"), "MoveTaskToRow returns true for existing task/row") && ok;
+	ok = Check(doc.tasks.back().rowId == "row-2", "MoveTaskToRow updates rowId") && ok;
+	ok = Check(!MoveTaskToRow(doc, taskId, "missing-row"), "MoveTaskToRow rejects missing row") && ok;
+
+	ok = Check(SetTaskPercent(doc, taskId, 150) && doc.tasks.back().percent == 100, "SetTaskPercent clamps high values") && ok;
+	ok = Check(SetTaskPercent(doc, taskId, -5) && doc.tasks.back().percent == 0, "SetTaskPercent clamps low values") && ok;
+
+	ok = Check(SetTitle(doc, "Updated title") && doc.title == "Updated title", "SetTitle updates title") && ok;
+
+	ok = Check(SetScale(doc, "month") && doc.scale == "month", "SetScale accepts month") && ok;
+	ok = Check(!SetScale(doc, "nonsense") && doc.scale == "month", "SetScale rejects invalid values without changing scale") && ok;
+
+	const std::string json = DocumentToJson(doc);
+	PpDocument roundTrip = DocumentFromJson(json);
+	ok = Check(roundTrip.scale == "month", "JSON round-trip preserves calendar.scale") && ok;
+	ok = Check(DocumentFromJson("{\"title\":\"No calendar\"}").scale == "week", "JSON defaults missing calendar.scale to week") && ok;
+
+	ok = Check(DeleteById(doc, taskId), "DeleteById removes task") && ok;
+	for (const auto& task : doc.tasks) ok = Check(task.id != taskId, "deleted task is absent") && ok;
+
+	ok = Check(DeleteById(doc, "row-1"), "DeleteById removes row") && ok;
+	bool rowCascadeOk = true;
+	for (const auto& row : doc.rows) rowCascadeOk = rowCascadeOk && row.id != "row-1";
+	for (const auto& task : doc.tasks) rowCascadeOk = rowCascadeOk && task.rowId != "row-1";
+	for (const auto& ms : doc.milestones) rowCascadeOk = rowCascadeOk && ms.rowId != "row-1";
+	for (const auto& dep : doc.deps) rowCascadeOk = rowCascadeOk && dep.from != "task-1" && dep.to != "task-1";
+	for (const auto& br : doc.brackets) {
+		rowCascadeOk = rowCascadeOk && br.id != "br-1";
+		for (const auto& rowId : br.rowIds) rowCascadeOk = rowCascadeOk && rowId != "row-1";
+	}
+	ok = Check(rowCascadeOk, "DeleteById row cascades tasks, milestones, dependent deps, and row-only brackets") && ok;
+
+	ok = Check(DeleteById(doc, "dep-1") == false, "DeleteById returns false for already cascaded dependency") && ok;
+
+	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
 	}
