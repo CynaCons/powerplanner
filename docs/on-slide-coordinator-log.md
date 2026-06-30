@@ -23,5 +23,23 @@ Every native unit also re-runs `build-conformance.bat` (`1/1 fixtures passed`) a
 ## Cycle log
 
 - bootstrap — seeded 8 units + 9 dep edges; schema extended with structured columns;
-  integrity clean (0 missing deps, 3 ready). Next: self-review, then dispatch the
-  three ready no-dep units (discovery first).
+  integrity clean (0 missing deps, 3 ready).
+- self-review (rubber-duck) — folded fixes: GanttOps DLL-link edit moved into
+  ops-model-mutations (owns native/build.bat for the link); ctx-menu no longer edits
+  build.bat + must verify no dead onAction callbacks; disco-slide-window gate hardened
+  (delete stale txt, print WINDOW PROBE OK, require class records or
+  FALLBACK_POLLING_ONLY); ops gate also re-runs conformance+reflow. Overlay lane runs
+  SERIALLY (shared Overlay.cpp) per skill default. COM-backed gates (reflow/probe) run
+  with a timeout + PowerPoint cleanup to avoid hanging the loop; pure-visual overlay
+  smoke screenshots are best-effort, not hard gates (user gives visual feedback).
+- cycle 1 — dispatched in parallel (disjoint allowed_paths): disco-ops-harness,
+  disco-slide-window, overlay-material. All three validated from clean builds + committed:
+  - disco-ops-harness → `OPS HARNESS OK` → 007038d
+  - overlay-material → `[build] OK` → ecb8130
+  - disco-slide-window → `WINDOW PROBE OK` → 279c9c7
+  KEY FINDING: window probe = FALLBACK_POLLING_ONLY (no per-slide child window to
+  subclass). Architecture decision recorded: all on-slide interaction goes through OUR
+  overlay window + the 150ms Tick() poller (GetCursorPos mapped via PP_PROJ), never by
+  subclassing PowerPoint. hover-rowband / inline-edit / overlay-toolbar specs updated.
+  Skipped reflow regression for these two (neither touched layout/json/builder logic).
+- cycle 2 — next ready: ops-model-mutations (critical path → unblocks ctx-menu-actions).
