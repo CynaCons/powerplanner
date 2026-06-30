@@ -11,6 +11,7 @@
 
 namespace {
 const wchar_t* kClass = L"PowerPlannerOverlay";
+const wchar_t* kEditorClass = L"PowerPlannerInlineEditor";
 const COLORREF KEY = RGB(255, 0, 255);     // transparent color key
 const COLORREF ACCENT = RGB(26, 115, 232); // Material primary blue
 const COLORREF HANDLE_INNER = RGB(138, 180, 248);
@@ -56,6 +57,20 @@ RECT g_hoverInsertRect = {};
 bool g_hoverInsertValid = false;
 bool g_lastLeftButtonDown = false;
 
+struct EditRegion {
+	std::string kind;
+	std::string id;
+	RECT screenRect;
+};
+
+std::vector<EditRegion> g_editRegions;
+HWND g_editorHwnd = NULL;
+HWND g_editHwnd = NULL;
+WNDPROC g_oldEditProc = NULL;
+bool g_editClosing = false;
+std::string g_editKind;
+std::string g_editId;
+
 enum OverlayButton {
 	BTN_ADD = 0,
 	BTN_DEL = 1,
@@ -67,6 +82,13 @@ enum OverlayButton {
 void PaintOverlay(HDC hdc, const RECT& rc);
 void HandleToolbarButton(int button);
 void HandleHoverInsertRow();
+void RebuildChart(PpDocument& doc, const std::string& selectId);
+void OvLog(const wchar_t* msg);
+void OpenInlineEditor(const EditRegion& region);
+void CommitInlineEdit();
+void CancelInlineEdit();
+LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
 std::string Narrow(const wchar_t* w) {
 	if (!w || !*w) return "";
@@ -75,6 +97,14 @@ std::string Narrow(const wchar_t* w) {
 	std::string s(n, '\0');
 	if (n > 0) ::WideCharToMultiByte(CP_UTF8, 0, w, len, &s[0], n, NULL, NULL);
 	return s;
+}
+
+std::wstring Widen(const std::string& s) {
+	if (s.empty()) return L"";
+	int n = ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
+	std::wstring w(n, L'\0');
+	if (n > 0) ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+	return w;
 }
 
 const PpTask* FindTask(const PpDocument& doc, const std::string& id) {
@@ -148,6 +178,18 @@ void ClearHoverState() {
 	::SetRectEmpty(&g_hoverBandRect);
 	::SetRectEmpty(&g_hoverInsertRect);
 	g_hoverInsertValid = false;
+}
+
+const EditRegion* EditRegionFromScreenPoint(POINT pt) {
+	for (const auto& region : g_editRegions) {
+		if (::PtInRect(&region.screenRect, pt)) return &region;
+	}
+	return nullptr;
+}
+
+const EditRegion* EditRegionFromClientPoint(POINT pt) {
+	POINT screenPt = { pt.x + g_windowOriginX, pt.y + g_windowOriginY };
+	return EditRegionFromScreenPoint(screenPt);
 }
 
 void LayoutToolbarButtons(int width, int height) {
@@ -238,6 +280,7 @@ PowerPoint::ShapePtr FindChartRoot(PowerPoint::_SlidePtr slide) {
 
 void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win) {
 	g_rowBands.clear();
+	g_editRegions.clear();
 	if (!chart || !win) return;
 	try {
 		PowerPoint::GroupShapesPtr items = chart->GetGroupItems();
@@ -246,10 +289,9 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		for (long i = 1; i <= n; ++i) {
 			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
 			_bstr_t kind = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
-			if (!kind.length() || Narrow((const wchar_t*)kind) != "ROW_LABEL") continue;
-			_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
-			std::string rowId = Narrow((const wchar_t*)id);
-			if (rowId.empty()) continue;
+			if (!kind.length()) continue;
+			std::string kindStr = Narrow((const wchar_t*)kind);
+			if (kindStr != "ROW_LABEL" && kindStr != "TITLE") continue;
 			float left = ch->GetLeft(), top = ch->GetTop(), w = ch->GetWidth(), h = ch->GetHeight();
 			RECT rr = {
 				win->PointsToScreenPixelsX(left),
@@ -259,7 +301,15 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			};
 			NormalizeRect(rr);
 			if (rr.bottom <= rr.top) continue;
+			if (kindStr == "TITLE") {
+				g_editRegions.push_back({ "TITLE", "", rr });
+				continue;
+			}
+			_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+			std::string rowId = Narrow((const wchar_t*)id);
+			if (rowId.empty()) continue;
 			g_rowBands.push_back({ rowId, { g_chartScreenRect.left, rr.top, g_chartScreenRect.right, rr.bottom }, rr.left });
+			g_editRegions.push_back({ "ROW_LABEL", rowId, rr });
 		}
 		std::sort(g_rowBands.begin(), g_rowBands.end(), [](const RowBand& a, const RowBand& b) {
 			return a.screenRect.top < b.screenRect.top;
@@ -267,6 +317,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 	}
 	catch (const _com_error&) {
 		g_rowBands.clear();
+		g_editRegions.clear();
 	}
 }
 
@@ -297,6 +348,168 @@ void RequestOverlayRepaint() {
 	::UpdateWindow(g_hwnd);
 }
 
+std::string CurrentEditText(const EditRegion& region) {
+	std::string json = ReadGanttFromSlide(g_app);
+	if (json.empty()) return "";
+	PpDocument doc = DocumentFromJson(json);
+	if (region.kind == "TITLE") return doc.title;
+	if (region.kind == "ROW_LABEL") {
+		for (const auto& row : doc.rows) {
+			if (row.id == region.id) return row.label;
+		}
+	}
+	return "";
+}
+
+void FocusPowerPoint() {
+	try {
+		if (!g_app) return;
+		HWND ppt = (HWND)(INT_PTR)g_app->GetHWND();
+		if (ppt) ::SetForegroundWindow(ppt);
+	}
+	catch (...) {
+	}
+}
+
+void ClearEditTarget() {
+	g_editKind.clear();
+	g_editId.clear();
+}
+
+void HideInlineEditor() {
+	g_editClosing = true;
+	if (g_editorHwnd) ::ShowWindow(g_editorHwnd, SW_HIDE);
+	g_editClosing = false;
+}
+
+void DestroyInlineEditor() {
+	g_editClosing = true;
+	if (g_editHwnd && g_oldEditProc) {
+		::SetWindowLongPtrW(g_editHwnd, GWLP_WNDPROC, (LONG_PTR)g_oldEditProc);
+		g_oldEditProc = NULL;
+	}
+	if (g_editorHwnd) {
+		::DestroyWindow(g_editorHwnd);
+		g_editorHwnd = NULL;
+	}
+	g_editHwnd = NULL;
+	g_editClosing = false;
+	ClearEditTarget();
+}
+
+void EnsureEditorWindow() {
+	if (g_editorHwnd && g_editHwnd) return;
+
+	WNDCLASSEXW wc = { sizeof(wc) };
+	wc.lpfnWndProc = EditorWndProc;
+	wc.hInstance = g_inst;
+	wc.hCursor = ::LoadCursor(NULL, IDC_IBEAM);
+	wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+	wc.lpszClassName = kEditorClass;
+	::RegisterClassExW(&wc);
+
+	g_editorHwnd = ::CreateWindowExW(
+		WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+		kEditorClass, L"", WS_POPUP | WS_BORDER,
+		0, 0, 100, 24, NULL, NULL, g_inst, NULL);
+	if (!g_editorHwnd) return;
+
+	g_editHwnd = ::CreateWindowExW(
+		0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+		0, 0, 100, 24, g_editorHwnd, (HMENU)1, g_inst, NULL);
+	if (g_editHwnd) {
+		::SendMessageW(g_editHwnd, WM_SETFONT, (WPARAM)::GetStockObject(DEFAULT_GUI_FONT), TRUE);
+		g_oldEditProc = (WNDPROC)::SetWindowLongPtrW(g_editHwnd, GWLP_WNDPROC, (LONG_PTR)InlineEditProc);
+	}
+}
+
+void OpenInlineEditor(const EditRegion& region) {
+	if (!g_app || g_mutating) return;
+	try {
+		std::string value = CurrentEditText(region);
+		EnsureEditorWindow();
+		if (!g_editorHwnd || !g_editHwnd) return;
+
+		RECT rc = region.screenRect;
+		NormalizeRect(rc);
+		int w = std::max(80, (int)(rc.right - rc.left));
+		int h = std::max(22, (int)(rc.bottom - rc.top));
+		::SetWindowPos(g_editorHwnd, HWND_TOPMOST, rc.left, rc.top, w, h, SWP_SHOWWINDOW);
+		::MoveWindow(g_editHwnd, 0, 0, w, h, TRUE);
+		std::wstring text = Widen(value);
+		::SetWindowTextW(g_editHwnd, text.c_str());
+		g_editKind = region.kind;
+		g_editId = region.id;
+		::SendMessageW(g_editHwnd, EM_SETSEL, 0, -1);
+		::SetForegroundWindow(g_editorHwnd);
+		::SetFocus(g_editHwnd);
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error opening inline editor");
+		HideInlineEditor();
+		ClearEditTarget();
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error opening inline editor");
+		HideInlineEditor();
+		ClearEditTarget();
+	}
+	catch (...) {
+		OvLog(L"unknown error opening inline editor");
+		HideInlineEditor();
+		ClearEditTarget();
+	}
+}
+
+void CommitInlineEdit() {
+	if (!g_editHwnd || g_editKind.empty() || g_mutating) return;
+	std::string kind = g_editKind;
+	std::string id = g_editId;
+	try {
+		int len = ::GetWindowTextLengthW(g_editHwnd);
+		std::vector<wchar_t> buf((size_t)len + 1);
+		::GetWindowTextW(g_editHwnd, buf.data(), len + 1);
+		std::string text = Narrow(buf.data());
+
+		HideInlineEditor();
+		ClearEditTarget();
+
+		g_mutating = true;
+		try {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) {
+				PpDocument doc = DocumentFromJson(json);
+				bool changed = (kind == "TITLE") ? SetTitle(doc, text) : SetEntityLabel(doc, id, text);
+				if (changed) RebuildChart(doc, kind == "ROW_LABEL" ? id : "");
+			}
+		}
+		catch (const _com_error&) {
+			OvLog(L"COM error committing inline edit");
+		}
+		catch (const std::exception&) {
+			OvLog(L"document error committing inline edit");
+		}
+		catch (...) {
+			OvLog(L"unknown error committing inline edit");
+		}
+		g_mutating = false;
+		FocusPowerPoint();
+	}
+	catch (...) {
+		g_mutating = false;
+		HideInlineEditor();
+		ClearEditTarget();
+		FocusPowerPoint();
+		OvLog(L"inline edit commit failed");
+	}
+}
+
+void CancelInlineEdit() {
+	HideInlineEditor();
+	ClearEditTarget();
+	FocusPowerPoint();
+}
+
 // Append a debug line (shared with Connect's log).
 void OvLog(const wchar_t* msg) {
 	wchar_t path[MAX_PATH];
@@ -312,9 +525,10 @@ void OvLog(const wchar_t* msg) {
 
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	if (msg == WM_NCHITTEST) {
-		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		POINT screenPt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		POINT pt = screenPt;
 		::ScreenToClient(hwnd, &pt);
-		return (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt)) ? HTCLIENT : HTTRANSPARENT;
+		return (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || EditRegionFromScreenPoint(screenPt)) ? HTCLIENT : HTTRANSPARENT;
 	}
 	if (msg == WM_MOUSEACTIVATE) {
 		return MA_NOACTIVATE;
@@ -343,6 +557,13 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			return 0;
 		}
 	}
+	if (msg == WM_LBUTTONDBLCLK) {
+		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		if (const EditRegion* region = EditRegionFromClientPoint(pt)) {
+			OpenInlineEditor(*region);
+			return 0;
+		}
+	}
 	if (msg == WM_PAINT) {
 		PAINTSTRUCT ps;
 		HDC hdc = ::BeginPaint(hwnd, &ps);
@@ -354,11 +575,49 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	return ::DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (msg == WM_CLOSE) {
+		CancelInlineEdit();
+		return 0;
+	}
+	if (msg == WM_SIZE && g_editHwnd) {
+		RECT rc;
+		::GetClientRect(hwnd, &rc);
+		::MoveWindow(g_editHwnd, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+		return 0;
+	}
+	if (msg == WM_DESTROY && hwnd == g_editorHwnd) {
+		g_editorHwnd = NULL;
+		g_editHwnd = NULL;
+		g_oldEditProc = NULL;
+	}
+	return ::DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (msg == WM_KEYDOWN) {
+		if (wp == VK_RETURN) {
+			CommitInlineEdit();
+			return 0;
+		}
+		if (wp == VK_ESCAPE) {
+			CancelInlineEdit();
+			return 0;
+		}
+	}
+	if (msg == WM_KILLFOCUS && !g_editClosing) {
+		CommitInlineEdit();
+		return 0;
+	}
+	return g_oldEditProc ? ::CallWindowProcW(g_oldEditProc, hwnd, msg, wp, lp) : ::DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 void EnsureWindow() {
 	if (g_hwnd) return;
 	WNDCLASSEXW wc = { sizeof(wc) };
 	wc.lpfnWndProc = OverlayWndProc;
 	wc.hInstance = g_inst;
+	wc.style = CS_DBLCLKS;
 	wc.hCursor = ::LoadCursor(NULL, IDC_ARROW);
 	wc.lpszClassName = kClass;
 	::RegisterClassExW(&wc);
@@ -537,6 +796,7 @@ void HideOverlay() {
 	ClearHoverState();
 	g_lastLeftButtonDown = false;
 	g_rowBands.clear();
+	g_editRegions.clear();
 	::SetRectEmpty(&g_chartScreenRect);
 	g_chartProj.clear();
 }
@@ -778,13 +1038,18 @@ void OverlayStart(IDispatch* app) {
 
 void OverlayStop() {
 	if (g_timer) { ::KillTimer(NULL, g_timer); g_timer = 0; }
+	DestroyInlineEditor();
 	if (g_hwnd) { ::DestroyWindow(g_hwnd); g_hwnd = NULL; }
 	g_app = nullptr;
 	g_shown = false;
 	g_lastKind.clear();
 	ClearSelectionState();
+	ClearHoverState();
 	g_buttonsValid = false;
+	g_rowBands.clear();
+	g_editRegions.clear();
 	::SetRectEmpty(&g_frameRect);
+	::SetRectEmpty(&g_chartScreenRect);
 }
 
 HWND OverlayHwnd() { return g_hwnd; }

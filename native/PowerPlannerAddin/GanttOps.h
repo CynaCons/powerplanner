@@ -10,5 +10,6 @@ bool MoveTaskToRow(PpDocument& doc, const std::string& taskId, const std::string
 bool SetTaskPercent(PpDocument& doc, const std::string& taskId, int pct);
 bool NudgeTask(PpDocument& doc, const std::string& taskId, long deltaDays);
 bool SetTitle(PpDocument& doc, const std::string& title);
+bool SetEntityLabel(PpDocument& doc, const std::string& id, const std::string& label);
 bool SetScale(PpDocument& doc, const std::string& scale);
 int OpsSelfTest();

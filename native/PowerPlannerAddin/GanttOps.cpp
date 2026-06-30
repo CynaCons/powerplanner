@@ -138,6 +138,34 @@ bool SetTitle(PpDocument& doc, const std::string& title) {
 	return true;
 }
 
+bool SetEntityLabel(PpDocument& doc, const std::string& id, const std::string& label) {
+	for (auto& row : doc.rows) {
+		if (row.id == id) {
+			row.label = label;
+			return true;
+		}
+	}
+	for (auto& milestone : doc.milestones) {
+		if (milestone.id == id) {
+			milestone.label = label;
+			return true;
+		}
+	}
+	for (auto& bracket : doc.brackets) {
+		if (bracket.id == id) {
+			bracket.label = label;
+			return true;
+		}
+	}
+	for (auto& task : doc.tasks) {
+		if (task.id == id) {
+			task.label = label;
+			return true;
+		}
+	}
+	return false;
+}
+
 bool SetScale(PpDocument& doc, const std::string& scale) {
 	if (scale != "day" && scale != "week" && scale != "month" && scale != "quarter" && scale != "year") return false;
 	doc.scale = scale;
