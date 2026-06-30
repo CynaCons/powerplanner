@@ -8,7 +8,8 @@
 namespace {
 const wchar_t* kClass = L"PowerPlannerOverlay";
 const COLORREF KEY = RGB(255, 0, 255);     // transparent color key
-const COLORREF ACCENT = RGB(99, 102, 241); // indigo
+const COLORREF ACCENT = RGB(26, 115, 232); // Material primary blue
+const COLORREF HANDLE_INNER = RGB(138, 180, 248);
 const int INFL = 5;                         // frame inset from shape edge (px)
 const int BADGE_H = 20;                     // badge strip height (px)
 
@@ -51,11 +52,14 @@ void EnsureWindow() {
 	if (g_hwnd) ::SetLayeredWindowAttributes(g_hwnd, KEY, 0, LWA_COLORKEY);
 }
 
-void FillSquare(HDC hdc, int cx, int cy, int r, HBRUSH fill, HPEN pen) {
+void FillSquare(HDC hdc, int cx, int cy, int r, HBRUSH fill, HPEN borderPen, HPEN innerPen) {
 	RECT s = { cx - r, cy - r, cx + r + 1, cy + r + 1 };
-	HGDIOBJ ob = ::SelectObject(hdc, pen);
+	HGDIOBJ ob = ::SelectObject(hdc, borderPen);
 	HGDIOBJ of = ::SelectObject(hdc, fill);
-	::Rectangle(hdc, s.left, s.top, s.right, s.bottom);
+	::RoundRect(hdc, s.left, s.top, s.right, s.bottom, 3, 3);
+	::SelectObject(hdc, innerPen);
+	::SelectObject(hdc, ::GetStockObject(NULL_BRUSH));
+	::RoundRect(hdc, s.left + 1, s.top + 1, s.right - 1, s.bottom - 1, 2, 2);
 	::SelectObject(hdc, ob);
 	::SelectObject(hdc, of);
 }
@@ -73,26 +77,28 @@ void PaintOverlay(HDC hdc, const RECT& rc) {
 	HPEN pen = ::CreatePen(PS_SOLID, 2, ACCENT);
 	HGDIOBJ oldPen = ::SelectObject(hdc, pen);
 	HGDIOBJ oldBr = ::SelectObject(hdc, ::GetStockObject(NULL_BRUSH));
-	::Rectangle(hdc, frame.left, frame.top, frame.right, frame.bottom);
+	::RoundRect(hdc, frame.left, frame.top, frame.right, frame.bottom, 6, 6);
 	::SelectObject(hdc, oldBr);
 	::SelectObject(hdc, oldPen);
 	::DeleteObject(pen);
 
-	// 8 handles (white fill, indigo border)
+	// 8 handles (white fill, accent border)
 	HBRUSH white = ::CreateSolidBrush(RGB(255, 255, 255));
 	HPEN hpen = ::CreatePen(PS_SOLID, 1, ACCENT);
+	HPEN innerPen = ::CreatePen(PS_SOLID, 1, HANDLE_INNER);
 	int mx = (frame.left + frame.right) / 2, my = (frame.top + frame.bottom) / 2;
 	int xs[3] = { frame.left, mx, frame.right };
 	int ys[3] = { frame.top, my, frame.bottom };
 	for (int i = 0; i < 3; ++i)
 		for (int j = 0; j < 3; ++j) {
 			if (i == 1 && j == 1) continue;
-			FillSquare(hdc, xs[i], ys[j], 3, white, hpen);
+			FillSquare(hdc, xs[i], ys[j], 3, white, hpen, innerPen);
 		}
 	::DeleteObject(white);
 	::DeleteObject(hpen);
+	::DeleteObject(innerPen);
 
-	// badge: filled indigo pill with white label at top-left
+	// badge: filled Material chip with white label at top-left
 	int bw = 96, bh = BADGE_H - 4;
 	RECT badge = { INFL, 2, INFL + bw, 2 + bh };
 	HBRUSH abr = ::CreateSolidBrush(ACCENT);
@@ -102,9 +108,17 @@ void PaintOverlay(HDC hdc, const RECT& rc) {
 	::SelectObject(hdc, ob);
 	::SelectObject(hdc, op);
 	::DeleteObject(abr);
-	::SetBkMode(hdc, TRANSPARENT);
-	::SetTextColor(hdc, RGB(255, 255, 255));
+	HFONT font = ::CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+		DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+	HGDIOBJ oldFont = font ? ::SelectObject(hdc, font) : NULL;
+	int oldBk = ::SetBkMode(hdc, TRANSPARENT);
+	COLORREF oldText = ::SetTextColor(hdc, RGB(255, 255, 255));
 	::DrawTextW(hdc, g_badge.c_str(), -1, &badge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+	::SetTextColor(hdc, oldText);
+	::SetBkMode(hdc, oldBk);
+	if (oldFont) ::SelectObject(hdc, oldFont);
+	if (font) ::DeleteObject(font);
 }
 
 void HideOverlay() {
