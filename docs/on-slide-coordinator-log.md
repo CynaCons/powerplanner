@@ -65,3 +65,18 @@ Every native unit also re-runs `build-conformance.bat` (`1/1 fixtures passed`) a
   window currently covers only the selected shape's bounds, so a whole-chart row-hover
   band may need a larger/second window; (b) a child EDIT on a WS_EX_NOACTIVATE window may
   not get keyboard focus — inline-edit needs a focusable approach.
+- self-review #3 result (cycle4-review): overlay-toolbar CLEAN (hit-testing, re-entrancy
+  guard, leaks, selection all verified). One Low nit → fix-percent-noop-undo todo (no-op
+  percent rebuilds spurious undo at 0/100%, same in ctx-menu). Part B was decisive: both
+  remaining units would dead-end as written. Restructured backlog:
+  - NEW overlay-chart-surface (keystone): make the overlay cover the whole CHART_ROOT and
+    persist regardless of selection (today it is sized to the selected shape + hidden when
+    nothing selected — no surface to draw hover on).
+  - hover-rowband: subclassing language DELETED (FALLBACK confirmed sole path); draw on the
+    chart-wide surface; row geometry from layout constants/ROW_LABEL Ys (PP_PROJ has x only);
+    "+" hotspot HTCLIENT, rest click-through. Now depends on overlay-chart-surface.
+  - inline-edit: use a SEPARATE focusable top-level editor window (main overlay is
+    NOACTIVATE so a child EDIT cannot get keyboard focus); dbl-click via chart-wide surface
+    making label regions HTCLIENT. Now depends on overlay-chart-surface.
+- cycle 5 — dispatched overlay-chart-surface (serial on Overlay.cpp). Then fix-percent-noop,
+  hover-rowband, inline-edit remain.
