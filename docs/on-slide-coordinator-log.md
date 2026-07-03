@@ -153,3 +153,24 @@ concurrently with each other or with ppoverlay/ppreflow.
   alpha-overlay precedes capture-surface (paint plumbing before interaction code
   builds ghosts on it); suppression precedes own-selection-model (side-channel
   mirror feeds it).
+- self-review (pre-dispatch, rubber-duck) — 11 findings folded into the DB:
+  (1) capture-surface gains build-overlay.bat + build-reflow.bat in allowed_paths +
+  gate (hard-coded source lists would strand harness links — V1 88718b5 class);
+  (2) keyboard-and-cursors prints 'KEYS PASS (cursors only…)' in the NONE branch so
+  the pass signal is satisfiable in both branches; (3) COM hygiene: taskkill wrapped
+  around every PowerPoint gate; first overlay-test toucher adds a 120s watchdog +
+  always-cleanup (today it leaks POWERPNT on _com_error); disco-undo-entry corrected
+  (window-probe is NOT a kill/timeout exemplar, only its COM-teardown order);
+  (4) added dep dpi→capture-surface (GanttHitTest doesn't exist before it);
+  (5) harness stage rule: fixed order, print FAIL + exit nonzero immediately;
+  coordinator requires exit code 0 AND marker; (6) drag-row runs CREATE last, both
+  markers verified; (7/8) vacuous gates fixed: alpha-overlay now gated on a real
+  ALPHA PASS harness stage (LWA_COLORKEY absent/ULW in use), dpi gated on new
+  DPI HELPER OK marker with the helper pinned into COM-free GanttHitTest;
+  (9) PROTOCOL: coordinator holds a global PowerPoint mutex — never dispatch two
+  units that drive POWERPNT concurrently; gates + regressions run serially by the
+  coordinator. (10/11) description drift fixed (Esc deferral, AddTask already takes
+  row+dates, RebuildChart not Connect.cpp's MutateChart, per-tick COM cost note).
+- cycle 1 — dispatched in parallel (disjoint paths, PowerPoint mutex respected):
+  alpha-overlay (sole POWERPNT user) + disco-keyboard-focus (no PowerPoint).
+  disco-undo-entry deferred to next slot (would contend for POWERPNT).
