@@ -200,3 +200,10 @@ concurrently with each other or with ppoverlay/ppreflow.
 - cycle 2 — dispatched in parallel: capture-surface (Overlay lane; forbidden from
   running POWERPNT — its gate is compile+ops only) + disco-undo-entry (owns the
   POWERPNT mutex this cycle).
+- disco-undo-entry → UNDO PROBE OK, coordinator re-ran from deleted artifacts,
+  fresh stamp → 29e209d. KEY FINDING — VERDICT: GROUPING_WORKS (PowerPoint 16.0):
+  ONE StartNewUndoEntry call before a batch of automation edits collapses ALL of
+  them (move+move+retitle 3/3; even delete+recreate) into ONE undo entry; no
+  trailing/sealing call needed (trailing call harmless). Undo executed via
+  late-bound CommandBars.ExecuteMso("Undo"). rebuild-in-place can therefore make
+  one gesture == exactly one undo step, including full re-emits.
