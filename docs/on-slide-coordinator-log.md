@@ -174,3 +174,13 @@ concurrently with each other or with ppoverlay/ppreflow.
 - cycle 1 — dispatched in parallel (disjoint paths, PowerPoint mutex respected):
   alpha-overlay (sole POWERPNT user) + disco-keyboard-focus (no PowerPoint).
   disco-undo-entry deferred to next slot (would contend for POWERPNT).
+- disco-keyboard-focus → KEYS PROBE OK, coordinator re-ran gate from deleted
+  artifact, fresh stamp → 543dc86. KEY FINDING — VERDICT: HOTKEY. RegisterHotKey
+  (Delete/Left/Right) delivers WM_HOTKEY to the unfocused NOACTIVATE overlay; keys
+  are stolen system-wide WHILE registered and recover cleanly on unregister, so the
+  add-in must register only while (internal selection active) AND (PowerPoint
+  foreground), unregister on selection-clear/focus-loss, and check per-key
+  registration failure (another app may own the hotkey). Rejected: LL hook (global
+  footprint, AV risk), focus-switch (visible activation flicker on the host,
+  WM_ACTIVATE round-trip proven). Caveat: probed with SendInput (LLKHF_INJECTED);
+  RegisterHotKey routing should be identical for hardware input.
