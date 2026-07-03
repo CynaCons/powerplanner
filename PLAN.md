@@ -3,7 +3,7 @@
 ## Quick Summary
 
 **Current Version:** v2.3.1 — PowerPoint add-in alpha (Office.js) + landing site + PowerNote integration
-**Next Milestone:** Native PowerPoint add-in (Phase 9) — a C++ COM add-in (think-cell style) with the chart as native shapes and on-slide contextual UI; the Office.js add-in stays as a cross-platform fallback
+**Next Milestone:** N7 — Pure On-Slide Editor (V2): the add-in's overlay captures all input over the chart (no raw shape selection); think-cell-grade drag/create/edit interactions directly on the slide. Plan: [docs/on-slide-ux-plan.md §4](docs/on-slide-ux-plan.md)
 
 ### Recent Achievements
 - ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
@@ -477,6 +477,28 @@ fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md)
       reflow, `PP_DOC` updated (REFLOW PASS); reflowed chart exported
 - [x] (follow-on) Auto-reflow on the polling timer (detect a committed edit and reflow without the button)
 - [x] (UI Polish) Think-cell style U-brackets, zero margins, Segoe UI typography, and deadline/today line markers in native renderer
+
+### N5.5 — On-Slide Contextual Editing (V1) — COMPLETE (2026-06-30)
+Delivered via the `onslide-coordinator` loop (13 gated units, log at
+[docs/on-slide-coordinator-log.md](docs/on-slide-coordinator-log.md)):
+- [x] Native right-click Gantt menu (add/delete/nudge/%/scale), floating mini-toolbar,
+      row-hover highlight + "+" insert, double-click inline title/row-label editing,
+      chart-wide Material overlay, pure document-ops engine (`GanttOps`) with headless
+      test seam, auto-reflow on drag release
+- [x] Key architecture finding: no subclassable per-slide window → all interaction
+      runs through our overlay + 150ms poller (`FALLBACK_POLLING_ONLY`)
+
+### N7 — Pure On-Slide Editor (V2, think-cell interaction capture) — PLANNED
+The chart's shapes become a render target only: the overlay captures ALL mouse input
+over the chart (HTCLIENT), suppresses PowerPoint-native selection of chart internals,
+and provides semantic drag interactions (move/resize/row-reassign/drag-to-create),
+per-pixel-alpha chrome, floating date/label editors, in-place rebuild with atomic
+undo, and add-in DPI awareness. Full unit breakdown + gates:
+[docs/on-slide-ux-plan.md §4](docs/on-slide-ux-plan.md)
+- [ ] U1 capture-surface · U2 selection-suppression · U3 alpha-overlay
+- [ ] U4 own-selection-model · U5 drag-move-resize · U6 drag-row-and-create
+- [ ] U7 rebuild-in-place (atomic undo) · U8 floating-editor
+- [ ] U9 keyboard-and-cursors · U10 dpi-and-monitors
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons

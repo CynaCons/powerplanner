@@ -86,7 +86,71 @@ The **Coordinator Agent** must oversee all sub-agents and enforce strict validat
 
 ---
 
-## 4. Run Execution Protocol (For Sub-agents)
+## 4. V2 — Pure On-Slide Editor (Interaction Capture)
+
+> Status: PLANNED. Supersedes the V1 interaction model above (V1 shipped 2026-06-30,
+> see `docs/on-slide-coordinator-log.md`). V1 facts that constrain this plan:
+> there is NO subclassable per-slide window (`FALLBACK_POLLING_ONLY`); the
+> chart-wide overlay surface exists and persists (`overlay-chart-surface`); once a
+> mouse-down lands on OUR overlay we receive real `WM_MOUSEMOVE` — drags are
+> event-driven and smooth, polling is only needed to track chart position/zoom.
+
+### 4.1 Vision
+
+The PowerPoint shapes become a **render target only**. The user never selects or
+manipulates a raw square/text box; the add-in's overlay owns every mouse event over
+the chart area and exposes think-cell-grade semantic interactions:
+
+- Click a bar → *our* selection chrome (not PowerPoint's), semantic object = task.
+- Drag bar body → move task (day snapping, live ghost + date tooltip).
+- Drag bar edge → resize (change start/end independently).
+- Drag bar vertically → reassign row.
+- Drag on empty row space → phantom bar → create task.
+- Double-click bar/label/title → floating inline editor (label, start/end dates, %, color).
+- Right-click → our own popup menu (TrackPopupMenu on the overlay — PowerPoint's
+  shape context menu never fires because PowerPoint never sees the click).
+- PowerPoint-native selection of chart internals is actively suppressed.
+
+**Decision record**: keep native shapes as the render target (think-cell parity;
+decks degrade gracefully for viewers without the add-in). Rejected alternative:
+render the chart as a single picture — bulletproof selection-blocking but kills
+the native-shape value prop. Revisit only if suppression (4.2-U2) proves too leaky.
+
+### 4.2 Work units (dependency-ordered)
+
+| id | unit | depends on | gate |
+|---|---|---|---|
+| U1 | `capture-surface` — whole CHART_ROOT area returns HTCLIENT; internal semantic hit-testing (bars, edges ±4px, milestones, labels, row bands, empty cells) computed headlessly from PP_DOC + layout. Extend PP_PROJ with y-projection (row tops/heights) so hit-testing never needs COM. Escape hatch: Alt+click → HTTRANSPARENT pass-through (select/move whole group); small "move chart" grip in chrome. | — | hit-test unit tests in ops harness (pure, COM-free); manual: click on chart never selects a child shape |
+| U2 | `selection-suppression` — Tick watches PowerPoint selection; if a PP_KIND child (not the group) becomes selected via any path we can't intercept (Tab-cycling, Selection Pane, marquee started outside the chart), unselect within one tick and mirror to our selection model. | — | harness: programmatically select a child shape → cleared ≤200ms; normal shapes outside chart unaffected |
+| U3 | `alpha-overlay` — migrate paint path from magenta color-key to `UpdateLayeredWindow` with per-pixel premultiplied alpha (GDI+ back buffer). Unlocks translucent hover bands, ghost bars, soft selection chrome. | — | overlay harness PNG shows real translucency; no magenta fringing; existing chrome renders identically or better |
+| U4 | `own-selection-model` — internal selection state (task/milestone/row/none) driven by our hit-testing; selection chrome (frame, handles, badge) rendered on our surface; Esc clears. Keyboard (Delete, arrows) deferred to U9 pending focus-strategy discovery. | U1, U3 | manual + harness screenshot: clicking a bar shows our chrome, PowerPoint selection stays empty |
+| U5 | `drag-move-resize` — mouse-down on bar/edge starts modal drag (SetCapture on overlay): ghost bar + live date tooltip, snap to whole days via PP_PROJ inverse; drop → GanttOps mutation → rebuild. Suppress Tick/auto-reflow during gesture (g_mutating). | U1, U3, U4 | SendInput-driven harness: drag bar +N px → doc dates shift exactly N/ptPerDay days; REFLOW PASS still green |
+| U6 | `drag-row-and-create` — vertical drag reassigns row (`MoveTaskToRow` op exists); drag on empty slot draws phantom bar and creates a task on drop. | U5 | SendInput harness: vertical drag changes rowId; empty-space drag creates task with correct row+dates |
+| U7 | `rebuild-in-place` — replace delete-group+re-emit with a diff pass: move/resize/retitle existing shapes by PP_ID, add/remove only deltas. Wrap each gesture with `Application.StartNewUndoEntry` so one gesture ≈ one undo step. Kills flicker, selection churn, and undo fragmentation. | U5 | harness: one drag gesture → single undo entry restores prior state; no shape-count churn on no-op |
+| U8 | `floating-editor` — double-click task/milestone → floating card editor (label, start date, end date, %, color) using the focusable top-level window pattern from V1 inline-edit; Enter commits, Esc cancels. Covers task-bar labels (V1 gap). | U1, U4 | harness or manual: edit start date via editor → doc + shapes update; Esc leaves untouched |
+| U9 | `keyboard-and-cursors` — per-zone cursors (move/ew-resize/ns-resize/crosshair); keyboard Delete/arrow-nudge for our selection (discovery: WH_KEYBOARD hook vs focusable overlay mode — decide, then implement). | U4 | manual checklist; no interference with PowerPoint typing outside chart |
+| U10 | `dpi-and-monitors` — make the ADD-IN DPI-aware (V1 gap: only the test harness calls SetProcessDPIAware); verify overlay↔chart alignment at 100/125/150/200% and across monitors. | U3 | manual matrix at 4 scale factors; document results in this file |
+
+Regression gates for every unit: `native\build.bat` [build] OK ·
+`build-conformance.bat` fixtures pass · `build-ops.bat` OPS HARNESS OK ·
+`build-reflow.bat` + `ppreflow.exe` REFLOW PASS.
+
+### 4.3 Risks / known constraints
+
+1. **Suppression is best-effort**: Selection Pane / Tab-cycling can still select
+   internals for up to one tick (150ms). Acceptable; `ReflowFromSlide` remains the
+   reconciliation safety net for edits we didn't mediate.
+2. **Right-click ownership moves to the overlay**: the V1 native `ContextMenuShape`
+   items stop firing over the chart (clicks no longer reach PowerPoint). Reuse the
+   same 12 handlers behind a TrackPopupMenu; keep the ribbon items as backup.
+3. **Keyboard focus on a NOACTIVATE overlay** is unsolved (V1 finding) — U9 starts
+   with a discovery spike, not implementation.
+4. **Z-order**: overlay vs PowerPoint dialogs/flyouts — verify menus/dialogs still
+   appear above the overlay (they are activated windows; expected fine).
+5. **Undo API**: `Application.StartNewUndoEntry` exists in the PowerPoint OM but its
+   grouping semantics with rapid shape edits need a discovery probe inside U7.
+
+## 5. Run Execution Protocol (For Sub-agents)
 
 Specialized agents must be spawned with clear instructions based on this document:
 ```powershell

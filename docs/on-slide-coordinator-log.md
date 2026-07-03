@@ -111,3 +111,45 @@ NOTE for the user: the rebuilt DLL is registered at native/build/PowerPlannerAdd
 RESTART PowerPoint to load the latest build. Remaining future work (not blocking): true
 per-pixel-alpha translucent hover band (current is opaque-thin due to color-key), editable
 task-bar labels, dark-mode theme, MSI/WiX installer (N6).
+
+---
+
+# V2 — Pure On-Slide Editor (interaction capture)
+
+Intent of record: `docs/on-slide-ux-plan.md` §4 (V2). State of record: session SQL
+`coordinator-v2.sqlite` (scratchpad) + git `[todo: <id>]` markers; this log is the
+recovery narrative if the DB is lost.
+
+## Backlog (seeded at V2 bootstrap, 2026-07-03)
+
+| id | depends on | gate |
+|---|---|---|
+| alpha-overlay | — | `build.bat` `[build] OK` + `build-overlay.bat` compiles |
+| disco-undo-entry | — | `ppundoprobe.exe` → `UNDO PROBE OK` + `undo-probe.txt` |
+| disco-keyboard-focus | — | `ppkeysprobe.exe` → `KEYS PROBE OK` + `keys-probe.txt` |
+| capture-surface | alpha-overlay | `build-ops.bat` → `OPS HARNESS OK` (pure hit-test tests) |
+| selection-suppression | capture-surface | `ppoverlay.exe` → `SUPPRESS PASS` |
+| own-selection-model | capture-surface, alpha-overlay, selection-suppression | `ppoverlay.exe` → `OWNSEL PASS` |
+| drag-move-resize | own-selection-model | `ppoverlay.exe` → `DRAG PASS` |
+| drag-row-and-create | drag-move-resize | `ppoverlay.exe` → `DRAGROW PASS` + `CREATE PASS` |
+| rebuild-in-place | drag-move-resize, disco-undo-entry | `ppoverlay.exe` → `INPLACE PASS` + `REFLOW PASS` |
+| floating-editor | own-selection-model | `ppoverlay.exe` → `EDITOR PASS` |
+| keyboard-and-cursors | own-selection-model, disco-keyboard-focus | `KEYS PASS` (or `KEYS SKIPPED` per probe verdict) |
+| dpi-and-monitors | alpha-overlay | `[build] OK` + `OPS HARNESS OK` (dpi helper tests) |
+
+Standing regression on every native unit: `build.bat` `[build] OK` ·
+`build-conformance.bat` fixtures pass · `build-ops.bat` `OPS HARNESS OK` ·
+`build-reflow.bat`+`ppreflow.exe` `REFLOW PASS`. COM-backed gates (ppoverlay,
+ppreflow, probes) require PowerPoint closed before and killed after, with timeouts.
+Overlay.cpp lane is SERIAL (V1 lesson). Discovery probes are parallel-safe with the
+overlay lane (disjoint paths); the two probes must not run their COM gates
+concurrently with each other or with ppoverlay/ppreflow.
+
+## V2 cycle log
+
+- bootstrap-v2 — plan §4 written (10 units) + 2 discovery spikes seeded; schema with
+  structured gate columns; integrity clean (0 missing deps, 3 ready:
+  alpha-overlay, disco-undo-entry, disco-keyboard-focus). Ordering decision:
+  alpha-overlay precedes capture-surface (paint plumbing before interaction code
+  builds ghosts on it); suppression precedes own-selection-model (side-channel
+  mirror feeds it).
