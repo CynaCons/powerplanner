@@ -3,16 +3,38 @@
 #include "GanttBuilder.h"
 #include "GanttJson.h"
 #include "GanttOps.h"
+// GDI+ headers need the min/max macros that pch.h's NOMINMAX removes. Define
+// them only for the header, then drop them so std::min/std::max keep working.
+#ifndef min
+#define min(a, b) (((a) < (b)) ? (a) : (b))
+#define PP_OVERLAY_UNDEF_MIN
+#endif
+#ifndef max
+#define max(a, b) (((a) > (b)) ? (a) : (b))
+#define PP_OVERLAY_UNDEF_MAX
+#endif
+#include <gdiplus.h>
+#ifdef PP_OVERLAY_UNDEF_MIN
+#undef min
+#undef PP_OVERLAY_UNDEF_MIN
+#endif
+#ifdef PP_OVERLAY_UNDEF_MAX
+#undef max
+#undef PP_OVERLAY_UNDEF_MAX
+#endif
 #include <algorithm>
 #include <string>
 #include <vector>
+
+#pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
 
 // ---- module state ----------------------------------------------------------
 
 namespace {
 const wchar_t* kClass = L"PowerPlannerOverlay";
 const wchar_t* kEditorClass = L"PowerPlannerInlineEditor";
-const COLORREF KEY = RGB(255, 0, 255);     // transparent color key
 const COLORREF ACCENT = RGB(26, 115, 232); // Material primary blue
 const COLORREF HANDLE_INNER = RGB(138, 180, 248);
 const COLORREF SURFACE = RGB(255, 255, 255);
@@ -23,6 +45,7 @@ const int BADGE_H = 20;                     // badge strip height (px)
 const int TOOLBAR_H = 28;                   // floating action toolbar height (px)
 const int BUTTON_COUNT = 4;
 const int ROW_INSERT_BUTTON = 16;
+const BYTE HOVER_WASH_ALPHA = 28;           // translucent accent wash over hovered row
 
 PowerPoint::_ApplicationPtr g_app;
 HWND     g_hwnd = NULL;
@@ -30,6 +53,16 @@ HINSTANCE g_inst = NULL;
 UINT_PTR g_timer = 0;
 bool     g_shown = false;
 bool     g_mutating = false;
+bool     g_inTick = false;
+ULONG_PTR g_gdiplusToken = 0;
+
+// 32-bpp premultiplied-alpha back buffer, pushed via UpdateLayeredWindow.
+HDC     g_bufDc = NULL;
+HBITMAP g_bufBmp = NULL;
+HGDIOBJ g_bufOld = NULL;
+void*   g_bufBits = nullptr;
+int     g_bufW = 0;
+int     g_bufH = 0;
 std::string g_lastKind;       // last shown PP_KIND (to log on change)
 std::string g_selId;          // current selected PowerPlanner PP_ID
 std::string g_selKind;        // current selected PowerPlanner PP_KIND
@@ -79,7 +112,8 @@ enum OverlayButton {
 };
 
 // Forward
-void PaintOverlay(HDC hdc, const RECT& rc);
+void PaintOverlay(Gdiplus::Graphics& g, int W, int H);
+void RenderOverlay();
 void HandleToolbarButton(int button);
 void HandleHoverInsertRow();
 void RebuildChart(PpDocument& doc, const std::string& selectId);
@@ -342,10 +376,12 @@ bool UpdateHoverFromCursor() {
 	return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect);
 }
 
+// Single repaint entry point: everything that wants pixels on screen goes
+// through RenderOverlay(). Later units (drag ghosts etc.) should add their
+// drawing inside PaintOverlay so it flows through the same path.
 void RequestOverlayRepaint() {
 	if (!g_hwnd) return;
-	::InvalidateRect(g_hwnd, NULL, TRUE);
-	::UpdateWindow(g_hwnd);
+	RenderOverlay();
 }
 
 std::string CurrentEditText(const EditRegion& region) {
@@ -518,7 +554,9 @@ void OvLog(const wchar_t* msg) {
 	::wcscat_s(path, MAX_PATH, L"powerplanner-addin.log");
 	HANDLE h = ::CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (h == INVALID_HANDLE_VALUE) return;
-	std::wstring line = std::wstring(L"[overlay] ") + msg + L"\r\n";
+	wchar_t pidBuf[48];
+	::swprintf_s(pidBuf, 48, L"[overlay %lu @%lu] ", ::GetCurrentProcessId(), ::GetTickCount());
+	std::wstring line = std::wstring(pidBuf) + msg + L"\r\n";
 	DWORD w = 0; ::WriteFile(h, line.c_str(), (DWORD)(line.size() * sizeof(wchar_t)), &w, NULL);
 	::CloseHandle(h);
 }
@@ -565,11 +603,9 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 	}
 	if (msg == WM_PAINT) {
-		PAINTSTRUCT ps;
-		HDC hdc = ::BeginPaint(hwnd, &ps);
-		RECT rc; ::GetClientRect(hwnd, &rc);
-		PaintOverlay(hdc, rc);
-		::EndPaint(hwnd, &ps);
+		// Content is pushed by UpdateLayeredWindow (RenderOverlay); WM_PAINT
+		// only needs to validate the region so the queue stays quiet.
+		::ValidateRect(hwnd, NULL);
 		return 0;
 	}
 	return ::DefWindowProcW(hwnd, msg, wp, lp);
@@ -622,31 +658,56 @@ void EnsureWindow() {
 	wc.lpszClassName = kClass;
 	::RegisterClassExW(&wc);
 
+	// NOTE: no SetLayeredWindowAttributes here — the window is driven purely by
+	// UpdateLayeredWindow (per-pixel premultiplied alpha). A layered window
+	// without attributes stays invisible until the first RenderOverlay() push.
 	g_hwnd = ::CreateWindowExW(
 		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
 		kClass, L"", WS_POPUP,
 		0, 0, 10, 10, NULL, NULL, g_inst, NULL);
-	if (g_hwnd) ::SetLayeredWindowAttributes(g_hwnd, KEY, 0, LWA_COLORKEY);
 }
 
-void FillSquare(HDC hdc, int cx, int cy, int r, HBRUSH fill, HPEN borderPen, HPEN innerPen) {
-	RECT s = { cx - r, cy - r, cx + r + 1, cy + r + 1 };
-	HGDIOBJ ob = ::SelectObject(hdc, borderPen);
-	HGDIOBJ of = ::SelectObject(hdc, fill);
-	::RoundRect(hdc, s.left, s.top, s.right, s.bottom, 3, 3);
-	::SelectObject(hdc, innerPen);
-	::SelectObject(hdc, ::GetStockObject(NULL_BRUSH));
-	::RoundRect(hdc, s.left + 1, s.top + 1, s.right - 1, s.bottom - 1, 2, 2);
-	::SelectObject(hdc, ob);
-	::SelectObject(hdc, of);
+// ---- premultiplied-alpha painting (GDI+) -----------------------------------
+
+Gdiplus::Color GpColor(BYTE a, COLORREF c) {
+	return Gdiplus::Color(a, GetRValue(c), GetGValue(c), GetBValue(c));
 }
 
-void PaintOverlay(HDC hdc, const RECT& rc) {
-	const int W = rc.right, H = rc.bottom;
-	// transparent background
-	HBRUSH keyBrush = ::CreateSolidBrush(KEY);
-	::FillRect(hdc, &rc, keyBrush);
-	::DeleteObject(keyBrush);
+void AddRoundRect(Gdiplus::GraphicsPath& path, Gdiplus::REAL x, Gdiplus::REAL y,
+	Gdiplus::REAL w, Gdiplus::REAL h, Gdiplus::REAL r) {
+	if (w <= 0.0f || h <= 0.0f) return;
+	Gdiplus::REAL maxR = (w < h ? w : h) / 2.0f;
+	if (r > maxR) r = maxR;
+	if (r <= 0.0f) {
+		path.AddRectangle(Gdiplus::RectF(x, y, w, h));
+		return;
+	}
+	Gdiplus::REAL d = r * 2.0f;
+	path.StartFigure();
+	path.AddArc(x, y, d, d, 180.0f, 90.0f);
+	path.AddArc(x + w - d, y, d, d, 270.0f, 90.0f);
+	path.AddArc(x + w - d, y + h - d, d, d, 0.0f, 90.0f);
+	path.AddArc(x, y + h - d, d, d, 90.0f, 90.0f);
+	path.CloseFigure();
+}
+
+void DrawHandle(Gdiplus::Graphics& g, int cx, int cy, int r) {
+	using namespace Gdiplus;
+	GraphicsPath path;
+	AddRoundRect(path, (REAL)(cx - r), (REAL)(cy - r), (REAL)(2 * r + 1), (REAL)(2 * r + 1), 1.5f);
+	SolidBrush fill(Color(255, 255, 255, 255));
+	g.FillPath(&fill, &path);
+	GraphicsPath innerPath;
+	AddRoundRect(innerPath, (REAL)(cx - r + 1), (REAL)(cy - r + 1), (REAL)(2 * r - 1), (REAL)(2 * r - 1), 1.0f);
+	Pen inner(GpColor(255, HANDLE_INNER), 1.0f);
+	g.DrawPath(&inner, &innerPath);
+	Pen border(GpColor(255, ACCENT), 1.0f);
+	g.DrawPath(&border, &path);
+}
+
+void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
+	using namespace Gdiplus;
+	// Background stays fully transparent (alpha 0) — the caller cleared it.
 
 	LayoutToolbarButtons(W, H);
 	LayoutHoverInsertHotspot();
@@ -658,134 +719,197 @@ void PaintOverlay(HDC hdc, const RECT& rc) {
 			g_hoverBandRect.right - g_windowOriginX,
 			g_hoverBandRect.bottom - g_windowOriginY
 		};
-		HPEN rowPen = ::CreatePen(PS_SOLID, 2, ACCENT);
-		HGDIOBJ oldRowPen = ::SelectObject(hdc, rowPen);
-		::MoveToEx(hdc, band.left, band.top, NULL);
-		::LineTo(hdc, band.right, band.top);
-		::MoveToEx(hdc, band.left, band.bottom, NULL);
-		::LineTo(hdc, band.right, band.bottom);
-		::SelectObject(hdc, oldRowPen);
-		::DeleteObject(rowPen);
-
-		RECT bar = { band.left, band.top, band.left + 3, band.bottom };
-		HBRUSH barBrush = ::CreateSolidBrush(ACCENT);
-		::FillRect(hdc, &bar, barBrush);
-		::DeleteObject(barBrush);
+		// Genuinely translucent accent wash over the whole hovered row band.
+		SolidBrush wash(GpColor(HOVER_WASH_ALPHA, ACCENT));
+		g.FillRectangle(&wash, (INT)band.left, (INT)band.top,
+			(INT)(band.right - band.left), (INT)(band.bottom - band.top));
+		// Soft accent edge lines top/bottom.
+		Pen edge(GpColor(110, ACCENT), 1.0f);
+		g.DrawLine(&edge, (INT)band.left, (INT)band.top, (INT)band.right, (INT)band.top);
+		g.DrawLine(&edge, (INT)band.left, (INT)band.bottom, (INT)band.right, (INT)band.bottom);
+		// Solid accent bar on the left edge.
+		SolidBrush bar(GpColor(255, ACCENT));
+		g.FillRectangle(&bar, (INT)band.left, (INT)band.top, 3, (INT)(band.bottom - band.top));
 
 		if (g_hoverInsertValid) {
-			HBRUSH plusFill = ::CreateSolidBrush(SURFACE);
-			HPEN plusPen = ::CreatePen(PS_SOLID, 1, ACCENT);
-			HGDIOBJ oldPlusBrush = ::SelectObject(hdc, plusFill);
-			HGDIOBJ oldPlusPen = ::SelectObject(hdc, plusPen);
-			::Ellipse(hdc, g_hoverInsertRect.left, g_hoverInsertRect.top, g_hoverInsertRect.right, g_hoverInsertRect.bottom);
-			::SelectObject(hdc, oldPlusBrush);
-			::SelectObject(hdc, oldPlusPen);
-			::DeleteObject(plusFill);
-			::DeleteObject(plusPen);
+			INT ex = (INT)g_hoverInsertRect.left, ey = (INT)g_hoverInsertRect.top;
+			INT ew = (INT)(g_hoverInsertRect.right - g_hoverInsertRect.left);
+			INT eh = (INT)(g_hoverInsertRect.bottom - g_hoverInsertRect.top);
+			SolidBrush plusFill(GpColor(255, SURFACE));
+			g.FillEllipse(&plusFill, ex, ey, ew, eh);
+			Pen plusPen(GpColor(255, ACCENT), 1.0f);
+			g.DrawEllipse(&plusPen, ex, ey, ew, eh);
 
-			HPEN glyphPen = ::CreatePen(PS_SOLID, 2, ACCENT);
-			HGDIOBJ oldGlyphPen = ::SelectObject(hdc, glyphPen);
+			Pen glyphPen(GpColor(255, ACCENT), 2.0f);
 			int cx = (g_hoverInsertRect.left + g_hoverInsertRect.right) / 2;
 			int cy = (g_hoverInsertRect.top + g_hoverInsertRect.bottom) / 2;
-			::MoveToEx(hdc, cx - 4, cy, NULL);
-			::LineTo(hdc, cx + 5, cy);
-			::MoveToEx(hdc, cx, cy - 4, NULL);
-			::LineTo(hdc, cx, cy + 5);
-			::SelectObject(hdc, oldGlyphPen);
-			::DeleteObject(glyphPen);
+			g.DrawLine(&glyphPen, cx - 4, cy, cx + 4, cy);
+			g.DrawLine(&glyphPen, cx, cy - 4, cx, cy + 4);
 		}
 	}
 
 	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
 
 	RECT frame = g_frameRect;
+	REAL fx = (REAL)frame.left, fy = (REAL)frame.top;
+	REAL fw = (REAL)(frame.right - frame.left), fh = (REAL)(frame.bottom - frame.top);
 
-	HPEN pen = ::CreatePen(PS_SOLID, 2, ACCENT);
-	HGDIOBJ oldPen = ::SelectObject(hdc, pen);
-	HGDIOBJ oldBr = ::SelectObject(hdc, ::GetStockObject(NULL_BRUSH));
-	::RoundRect(hdc, frame.left, frame.top, frame.right, frame.bottom, 6, 6);
-	::SelectObject(hdc, oldBr);
-	::SelectObject(hdc, oldPen);
-	::DeleteObject(pen);
+	// Soft halo behind the frame, then the crisp accent frame itself.
+	{
+		GraphicsPath halo;
+		AddRoundRect(halo, fx - 1.5f, fy - 1.5f, fw + 3.0f, fh + 3.0f, 4.5f);
+		Pen haloPen(GpColor(56, ACCENT), 4.0f);
+		g.DrawPath(&haloPen, &halo);
+
+		GraphicsPath framePath;
+		AddRoundRect(framePath, fx, fy, fw, fh, 3.0f);
+		Pen framePen(GpColor(255, ACCENT), 2.0f);
+		g.DrawPath(&framePen, &framePath);
+	}
 
 	// 8 handles (white fill, accent border)
-	HBRUSH white = ::CreateSolidBrush(RGB(255, 255, 255));
-	HPEN hpen = ::CreatePen(PS_SOLID, 1, ACCENT);
-	HPEN innerPen = ::CreatePen(PS_SOLID, 1, HANDLE_INNER);
 	int mx = (frame.left + frame.right) / 2, my = (frame.top + frame.bottom) / 2;
-	int xs[3] = { frame.left, mx, frame.right };
-	int ys[3] = { frame.top, my, frame.bottom };
+	int xs[3] = { (int)frame.left, mx, (int)frame.right };
+	int ys[3] = { (int)frame.top, my, (int)frame.bottom };
 	for (int i = 0; i < 3; ++i)
 		for (int j = 0; j < 3; ++j) {
 			if (i == 1 && j == 1) continue;
-			FillSquare(hdc, xs[i], ys[j], 3, white, hpen, innerPen);
+			DrawHandle(g, xs[i], ys[j], 3);
 		}
-	::DeleteObject(white);
-	::DeleteObject(hpen);
-	::DeleteObject(innerPen);
 
 	// badge: filled Material chip with white label at top-left
 	int bw = 96, bh = BADGE_H - 4;
 	int badgeTop = std::max(2, (int)frame.top - BADGE_H - 3);
-	RECT badge = { frame.left, badgeTop, frame.left + bw, badgeTop + bh };
-	HBRUSH abr = ::CreateSolidBrush(ACCENT);
-	HGDIOBJ ob = ::SelectObject(hdc, abr);
-	HGDIOBJ op = ::SelectObject(hdc, ::GetStockObject(NULL_PEN));
-	::RoundRect(hdc, badge.left, badge.top, badge.right, badge.bottom, 8, 8);
-	::SelectObject(hdc, ob);
-	::SelectObject(hdc, op);
-	::DeleteObject(abr);
-	HFONT font = ::CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-		DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-	HGDIOBJ oldFont = font ? ::SelectObject(hdc, font) : NULL;
-	int oldBk = ::SetBkMode(hdc, TRANSPARENT);
-	COLORREF oldText = ::SetTextColor(hdc, RGB(255, 255, 255));
-	::DrawTextW(hdc, g_badge.c_str(), -1, &badge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-	::SetTextColor(hdc, oldText);
-	::SetBkMode(hdc, oldBk);
-	if (oldFont) ::SelectObject(hdc, oldFont);
-	if (font) ::DeleteObject(font);
+	{
+		GraphicsPath badgePath;
+		AddRoundRect(badgePath, fx, (REAL)badgeTop, (REAL)bw, (REAL)bh, 4.0f);
+		SolidBrush badgeBrush(GpColor(255, ACCENT));
+		g.FillPath(&badgeBrush, &badgePath);
+
+		Gdiplus::Font badgeFont(L"Segoe UI", 11.0f, FontStyleRegular, UnitPixel);
+		StringFormat sf;
+		sf.SetAlignment(StringAlignmentCenter);
+		sf.SetLineAlignment(StringAlignmentCenter);
+		sf.SetFormatFlags(StringFormatFlagsNoWrap);
+		SolidBrush textBrush(Color(255, 255, 255, 255));
+		g.DrawString(g_badge.c_str(), -1, &badgeFont,
+			RectF(fx, (REAL)badgeTop, (REAL)bw, (REAL)bh), &sf, &textBrush);
+	}
 
 	// floating Material mini-toolbar
 	if (g_buttonsValid) {
 		RECT bg = g_buttonRects[0];
 		bg.left -= 6; bg.top -= 3; bg.right = g_buttonRects[BUTTON_COUNT - 1].right + 6; bg.bottom += 3;
-		HBRUSH bgBrush = ::CreateSolidBrush(SURFACE);
-		HPEN bgPen = ::CreatePen(PS_SOLID, 1, RGB(218, 220, 224));
-		HGDIOBJ oldBgBr = ::SelectObject(hdc, bgBrush);
-		HGDIOBJ oldBgPen = ::SelectObject(hdc, bgPen);
-		::RoundRect(hdc, bg.left, bg.top, bg.right, bg.bottom, 10, 10);
-		::SelectObject(hdc, oldBgBr);
-		::SelectObject(hdc, oldBgPen);
-		::DeleteObject(bgBrush);
-		::DeleteObject(bgPen);
+		GraphicsPath bgPath;
+		AddRoundRect(bgPath, (REAL)bg.left, (REAL)bg.top,
+			(REAL)(bg.right - bg.left), (REAL)(bg.bottom - bg.top), 5.0f);
+		SolidBrush bgBrush(GpColor(255, SURFACE));
+		g.FillPath(&bgBrush, &bgPath);
+		Pen bgPen(GpColor(255, RGB(218, 220, 224)), 1.0f);
+		g.DrawPath(&bgPen, &bgPath);
 
-		HFONT btnFont = ::CreateFontW(-12, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-			DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-			DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-		HGDIOBJ oldBtnFont = btnFont ? ::SelectObject(hdc, btnFont) : NULL;
-		int oldBtnBk = ::SetBkMode(hdc, TRANSPARENT);
-		COLORREF oldBtnText = ::SetTextColor(hdc, TEXT);
+		Gdiplus::Font btnFont(L"Segoe UI", 12.0f, FontStyleBold, UnitPixel);
+		StringFormat sf;
+		sf.SetAlignment(StringAlignmentCenter);
+		sf.SetLineAlignment(StringAlignmentCenter);
+		sf.SetFormatFlags(StringFormatFlagsNoWrap);
+		SolidBrush textBrush(GpColor(255, TEXT));
 		const wchar_t* labels[BUTTON_COUNT] = { L"Add", L"Del", L"-", L"+" };
 		for (int i = 0; i < BUTTON_COUNT; ++i) {
-			HBRUSH bbr = ::CreateSolidBrush(i == BTN_ADD ? RGB(232, 240, 254) : SURFACE_VARIANT);
-			HPEN bpen = ::CreatePen(PS_SOLID, 1, i == BTN_ADD ? ACCENT : RGB(218, 220, 224));
-			HGDIOBJ oldB = ::SelectObject(hdc, bbr);
-			HGDIOBJ oldP = ::SelectObject(hdc, bpen);
 			const RECT& br = g_buttonRects[i];
-			::RoundRect(hdc, br.left, br.top, br.right, br.bottom, 8, 8);
-			::SelectObject(hdc, oldB);
-			::SelectObject(hdc, oldP);
-			::DeleteObject(bbr);
-			::DeleteObject(bpen);
-			RECT tr = br;
-			::DrawTextW(hdc, labels[i], -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+			GraphicsPath btnPath;
+			AddRoundRect(btnPath, (REAL)br.left, (REAL)br.top,
+				(REAL)(br.right - br.left), (REAL)(br.bottom - br.top), 4.0f);
+			SolidBrush btnBrush(GpColor(255, i == BTN_ADD ? RGB(232, 240, 254) : SURFACE_VARIANT));
+			g.FillPath(&btnBrush, &btnPath);
+			Pen btnPen(GpColor(255, i == BTN_ADD ? ACCENT : RGB(218, 220, 224)), 1.0f);
+			g.DrawPath(&btnPen, &btnPath);
+			g.DrawString(labels[i], -1, &btnFont,
+				RectF((REAL)br.left, (REAL)br.top,
+					(REAL)(br.right - br.left), (REAL)(br.bottom - br.top)),
+				&sf, &textBrush);
 		}
-		::SetTextColor(hdc, oldBtnText);
-		::SetBkMode(hdc, oldBtnBk);
-		if (oldBtnFont) ::SelectObject(hdc, oldBtnFont);
-		if (btnFont) ::DeleteObject(btnFont);
+	}
+}
+
+// ---- back buffer + UpdateLayeredWindow push --------------------------------
+
+void FreeBackBuffer() {
+	if (g_bufDc) {
+		if (g_bufOld) ::SelectObject(g_bufDc, g_bufOld);
+		::DeleteDC(g_bufDc);
+		g_bufDc = NULL;
+		g_bufOld = NULL;
+	}
+	if (g_bufBmp) {
+		::DeleteObject(g_bufBmp);
+		g_bufBmp = NULL;
+	}
+	g_bufBits = nullptr;
+	g_bufW = 0;
+	g_bufH = 0;
+}
+
+bool EnsureBackBuffer(int w, int h) {
+	if (g_bufDc && g_bufBits && g_bufW == w && g_bufH == h) return true;
+	FreeBackBuffer();
+	BITMAPINFO bi = {};
+	bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bi.bmiHeader.biWidth = w;
+	bi.bmiHeader.biHeight = -h;  // top-down so GDI+ stride is simply w*4
+	bi.bmiHeader.biPlanes = 1;
+	bi.bmiHeader.biBitCount = 32;
+	bi.bmiHeader.biCompression = BI_RGB;
+	void* bits = nullptr;
+	HDC screen = ::GetDC(NULL);
+	HBITMAP bmp = ::CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+	HDC dc = ::CreateCompatibleDC(screen);
+	::ReleaseDC(NULL, screen);
+	if (!bmp || !dc || !bits) {
+		if (dc) ::DeleteDC(dc);
+		if (bmp) ::DeleteObject(bmp);
+		return false;
+	}
+	g_bufOld = ::SelectObject(dc, bmp);
+	g_bufDc = dc;
+	g_bufBmp = bmp;
+	g_bufBits = bits;
+	g_bufW = w;
+	g_bufH = h;
+	return true;
+}
+
+// Compose the full overlay into the 32-bpp premultiplied back buffer and push
+// it to the screen with UpdateLayeredWindow. Never lets exceptions escape (it
+// runs from the timer tick inside PowerPoint's process).
+void RenderOverlay() {
+	if (!g_hwnd || !g_gdiplusToken) return;
+	RECT wr;
+	if (!::GetWindowRect(g_hwnd, &wr)) return;
+	int w = wr.right - wr.left, h = wr.bottom - wr.top;
+	if (w <= 0 || h <= 0) return;
+	if (!EnsureBackBuffer(w, h)) return;
+	try {
+		Gdiplus::Bitmap surface(w, h, w * 4, PixelFormat32bppPARGB, (BYTE*)g_bufBits);
+		Gdiplus::Graphics g(&surface);
+		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+		g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+		g.Clear(Gdiplus::Color(0, 0, 0, 0));
+		PaintOverlay(g, w, h);
+		g.Flush(Gdiplus::FlushIntentionSync);
+
+		POINT dst = { wr.left, wr.top };
+		POINT src = { 0, 0 };
+		SIZE  size = { w, h };
+		BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+		::UpdateLayeredWindow(g_hwnd, NULL, &dst, &size, g_bufDc, &src, 0, &bf, ULW_ALPHA);
+	}
+	catch (const std::exception&) {
+		OvLog(L"overlay render failed (std::exception)");
+	}
+	catch (...) {
+		OvLog(L"overlay render failed");
 	}
 }
 
@@ -935,6 +1059,15 @@ void HandleHoverInsertRow() {
 // the selected PowerPlanner child shape.
 void Tick() {
 	if (g_mutating) return;
+	// Re-entrancy guard: while an outgoing COM call inside Tick blocks, its COM
+	// modal wait still dispatches WM_TIMER — without this guard those nested
+	// ticks issue new COM calls on the same channel and can starve the outer
+	// call's reply forever (observed as a permanent hang in the harness).
+	if (g_inTick) return;
+	struct TickGuard {
+		TickGuard() { g_inTick = true; }
+		~TickGuard() { g_inTick = false; }
+	} tickGuard;
 	if (!g_app) { HideOverlay(); return; }
 	try {
 		RECT oldChartRect = g_chartScreenRect;
@@ -1036,6 +1169,14 @@ void CALLBACK TimerProc(HWND, UINT, UINT_PTR, DWORD) { Tick(); }
 void OverlayStart(IDispatch* app) {
 	g_inst = (HINSTANCE)::GetModuleHandleW(NULL);
 	g_app = app;  // QI to _Application
+	// GDI+ is started here (and shut down in OverlayStop) — never in DllMain.
+	if (!g_gdiplusToken) {
+		Gdiplus::GdiplusStartupInput gsi;
+		if (Gdiplus::GdiplusStartup(&g_gdiplusToken, &gsi, NULL) != Gdiplus::Ok) {
+			g_gdiplusToken = 0;
+			OvLog(L"GdiplusStartup failed");
+		}
+	}
 	EnsureWindow();
 	g_timer = ::SetTimer(NULL, 0, 150, TimerProc);
 	OvLog(L"started");
@@ -1045,6 +1186,11 @@ void OverlayStop() {
 	if (g_timer) { ::KillTimer(NULL, g_timer); g_timer = 0; }
 	DestroyInlineEditor();
 	if (g_hwnd) { ::DestroyWindow(g_hwnd); g_hwnd = NULL; }
+	FreeBackBuffer();
+	if (g_gdiplusToken) {
+		Gdiplus::GdiplusShutdown(g_gdiplusToken);
+		g_gdiplusToken = 0;
+	}
 	g_app = nullptr;
 	g_shown = false;
 	g_lastKind.clear();

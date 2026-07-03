@@ -1,11 +1,13 @@
 // N4: on-slide contextual overlay (think-cell style).
 //
 // A layered, click-through top-level window drawn OVER PowerPoint's slide-edit
-// pane. A polling timer finds the CHART_ROOT on the active slide each tick and
-// positions the overlay over the whole chart via DocumentWindow::
-// PointsToScreenPixelsX/Y (which accounts for zoom + scroll). Selection chrome
-// is painted only when a PowerPlanner shape is selected; the overlay hides only
-// when no chart root is present.
+// pane. Pixels are composed with GDI+ into a 32-bpp premultiplied-alpha DIB
+// back buffer and pushed with UpdateLayeredWindow (per-pixel alpha — no color
+// key), so washes/chrome can be genuinely translucent. A polling timer finds
+// the CHART_ROOT on the active slide each tick and positions the overlay over
+// the whole chart via DocumentWindow::PointsToScreenPixelsX/Y (which accounts
+// for zoom + scroll). Selection chrome is painted only when a PowerPlanner
+// shape is selected; the overlay hides only when no chart root is present.
 #pragma once
 
 #include <windows.h>
