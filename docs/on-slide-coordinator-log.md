@@ -207,3 +207,20 @@ concurrently with each other or with ppoverlay/ppreflow.
   trailing/sealing call needed (trailing call harmless). Undo executed via
   late-bound CommandBars.ExecuteMso("Undo"). rebuild-in-place can therefore make
   one gesture == exactly one undo step, including full re-emits.
+- capture-surface → validated from full clean rebuild (all 5 build gates + OPS
+  HARNESS OK incl. 21 hit-test assertions + 1/1 fixtures + ALPHA/CAPTURE PASS +
+  REFLOW PASS) → 41eca8e. GanttHitTest pure module (COM-free, no Windows headers);
+  snapshot populated in the existing Tick child walk with a rect+count cache
+  (per-tick COM cost = 2 calls on cache hit); NCHITTEST = HTCLIENT anywhere in
+  chart rect, HTTRANSPARENT everywhere while Alt held; 'move chart' grip selects
+  CHART_ROOT natively. THREE FLAGGED GAPS (expected, for next units):
+  (a) selection chrome still keyed to PowerPoint selection, but chart clicks no
+  longer reach PowerPoint → chrome only appears via grip/Alt until
+  own-selection-model consumes g_lastHit; (b) snapshot cache keys on chart rect +
+  child count — a child moved without changing either serves stale rects one
+  cycle; (c) hit zone RowBand with EMPTY rowId = chart background (strip beside
+  title), selection unit must treat it as background, not a row.
+- self-review #2 (cycle2-review) dispatched over the alpha-overlay + capture-surface
+  diffs and the selection-suppression / own-selection-model specs before further
+  Overlay-lane dispatch (4 units landed since last checkpoint; both next units sit
+  on the rewritten Overlay.cpp).
