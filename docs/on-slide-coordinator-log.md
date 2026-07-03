@@ -184,3 +184,19 @@ concurrently with each other or with ppoverlay/ppreflow.
   footprint, AV risk), focus-switch (visible activation flicker on the host,
   WM_ACTIVATE round-trip proven). Caveat: probed with SendInput (LLKHF_INJECTED);
   RegisterHotKey routing should be identical for hardware input.
+- alpha-overlay → validated from clean rebuild (ALPHA PASS + CAPTURE PASS exit 0;
+  full regression 1/1 fixtures, OPS HARNESS OK, REFLOW PASS) → 40c43e9. Paint path
+  now UpdateLayeredWindow + 32bpp PARGB DIB + GDI+ (init in OverlayStart/Stop, never
+  DllMain); single repaint entry (RequestOverlayRepaint→RenderOverlay→PaintOverlay)
+  for future drag ghosts; color-key + KEY constant deleted. TWO NEW FINDINGS:
+  (a) Tick() needed a g_inTick re-entrancy guard — a blocked outgoing COM call's
+  modal wait dispatches WM_TIMER, nested ticks were issuing COM mid-call;
+  (b) HARNESS RULE for all future stages: overlay-test's PumpFor drained
+  PeekMessage until queue-empty, but once a tick takes >150ms a due WM_TIMER is
+  ALWAYS pending → infinite pump. Bound dispatch loops by TIME, not queue-empty.
+  Also: harness now has 120s watchdog + unbuffered stdout (ExitProcess doesn't
+  flush CRT buffers) + Quit/release on all exit paths. Registered add-in loads
+  in-proc during harness runs → two overlay instances coexist; works, keep in mind.
+- cycle 2 — dispatched in parallel: capture-surface (Overlay lane; forbidden from
+  running POWERPNT — its gate is compile+ops only) + disco-undo-entry (owns the
+  POWERPNT mutex this cycle).
