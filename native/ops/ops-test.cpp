@@ -2,6 +2,7 @@
 #include "../PowerPlannerAddin/GanttLayout.h"
 #include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttOps.h"
+#include "../PowerPlannerAddin/GanttHitTest.h"
 
 #include <cstdio>
 #include <string>
@@ -12,6 +13,79 @@ static bool Check(bool cond, const char* msg) {
 		return false;
 	}
 	return true;
+}
+
+// Pure hit-test checks over a synthetic snapshot (no COM, no window).
+static bool RunHitTestChecks() {
+	HtSnapshot snap;
+	snap.chartRect = { 100, 100, 900, 500 };
+	// Title strip across the top of the chart.
+	snap.items.push_back({ HtItemKind::Title, "", { 300, 110, 700, 140 } });
+	// Two rows with label rects in the left column.
+	snap.items.push_back({ HtItemKind::RowLabel, "row-1", { 110, 180, 220, 220 } });
+	snap.items.push_back({ HtItemKind::RowLabel, "row-2", { 110, 280, 220, 320 } });
+	snap.rowBands.push_back({ "row-1", 150, 250 });
+	snap.rowBands.push_back({ "row-2", 250, 350 });
+	// Task bar in row 1, milestone marker in row 2.
+	snap.items.push_back({ HtItemKind::Task, "task-1", { 300, 180, 500, 220 } });
+	snap.items.push_back({ HtItemKind::Milestone, "ms-1", { 600, 280, 640, 320 } });
+
+	bool ok = true;
+	auto zoneCheck = [&](long x, long y, HtZone zone, const char* id, const char* msg) {
+		HtHit hit = GanttHitTestPoint(snap, x, y);
+		return Check(hit.zone == zone && hit.id == id, msg);
+	};
+
+	// Outside: beyond the chart rect (right/bottom are exclusive).
+	ok = zoneCheck(50, 50, HtZone::Outside, "", "hit: point left of chart is Outside") && ok;
+	ok = zoneCheck(900, 300, HtZone::Outside, "", "hit: chart right edge is exclusive (Outside)") && ok;
+	ok = zoneCheck(400, 600, HtZone::Outside, "", "hit: point below chart is Outside") && ok;
+
+	// Task body vs edge bands (edge = bar edge +-4px).
+	ok = zoneCheck(400, 200, HtZone::TaskBody, "task-1", "hit: task center is TaskBody") && ok;
+	ok = zoneCheck(300, 200, HtZone::TaskEdgeL, "task-1", "hit: task left edge is TaskEdgeL") && ok;
+	ok = zoneCheck(296, 200, HtZone::TaskEdgeL, "task-1", "hit: 4px outside left edge is TaskEdgeL") && ok;
+	ok = zoneCheck(304, 200, HtZone::TaskEdgeL, "task-1", "hit: 4px inside left edge is TaskEdgeL") && ok;
+	ok = zoneCheck(305, 200, HtZone::TaskBody, "task-1", "hit: 5px inside left edge is TaskBody") && ok;
+	ok = zoneCheck(500, 200, HtZone::TaskEdgeR, "task-1", "hit: task right edge is TaskEdgeR") && ok;
+	ok = zoneCheck(504, 200, HtZone::TaskEdgeR, "task-1", "hit: 4px outside right edge is TaskEdgeR") && ok;
+	ok = zoneCheck(497, 200, HtZone::TaskEdgeR, "task-1", "hit: 3px inside right edge is TaskEdgeR") && ok;
+	// 5px outside the left edge: no longer an edge; falls through to the row.
+	ok = zoneCheck(295, 200, HtZone::EmptyCell, "row-1", "hit: 5px outside left edge falls to EmptyCell") && ok;
+	// Above/below the bar the edge band does not apply.
+	ok = zoneCheck(300, 230, HtZone::EmptyCell, "row-1", "hit: edge x-band outside task y-range is EmptyCell") && ok;
+
+	// Milestone.
+	ok = zoneCheck(620, 300, HtZone::Milestone, "ms-1", "hit: milestone rect is Milestone") && ok;
+
+	// Labels (row label + title) report kind + id.
+	{
+		HtHit hit = GanttHitTestPoint(snap, 150, 200);
+		ok = Check(hit.zone == HtZone::Label && hit.kind == HtItemKind::RowLabel && hit.id == "row-1", "hit: row label rect is Label(RowLabel,row-1)") && ok;
+		hit = GanttHitTestPoint(snap, 400, 120);
+		ok = Check(hit.zone == HtZone::Label && hit.kind == HtItemKind::Title && hit.id.empty(), "hit: title rect is Label(Title)") && ok;
+	}
+
+	// Row band vs empty cell: left of the label column is RowBand, the open
+	// timeline area is EmptyCell; both carry the rowId.
+	{
+		HtHit hit = GanttHitTestPoint(snap, 115, 240);
+		ok = Check(hit.zone == HtZone::RowBand && hit.rowId == "row-1", "hit: gutter left of label column is RowBand(row-1)") && ok;
+		hit = GanttHitTestPoint(snap, 700, 200);
+		ok = Check(hit.zone == HtZone::EmptyCell && hit.rowId == "row-1", "hit: open timeline in row 1 is EmptyCell(row-1)") && ok;
+		hit = GanttHitTestPoint(snap, 400, 300);
+		ok = Check(hit.zone == HtZone::EmptyCell && hit.rowId == "row-2", "hit: open timeline in row 2 is EmptyCell(row-2)") && ok;
+		hit = GanttHitTestPoint(snap, 100, 300);
+		ok = Check(hit.zone == HtZone::RowBand && hit.rowId == "row-2", "hit: chart left edge inside band is RowBand(row-2)") && ok;
+	}
+
+	// Inside the chart but in no band: chart background = RowBand with empty rowId.
+	{
+		HtHit hit = GanttHitTestPoint(snap, 400, 145);
+		ok = Check(hit.zone == HtZone::RowBand && hit.rowId.empty() && hit.id.empty(), "hit: in-chart point outside all bands is RowBand with empty rowId") && ok;
+	}
+
+	return ok;
 }
 
 int main() {
@@ -29,6 +103,7 @@ int main() {
 
 	bool ok = true;
 	ok = Check(OpsSelfTest() == 0, "OpsSelfTest returns 0") && ok;
+	ok = RunHitTestChecks() && ok;
 	ok = Check(doc.tasks.size() == 2, "model sanity keeps initial tasks") && ok;
 
 	const std::string addedRow = AddRow(doc, "Inserted Row", "row-1");

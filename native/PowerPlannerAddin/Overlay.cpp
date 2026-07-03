@@ -3,6 +3,7 @@
 #include "GanttBuilder.h"
 #include "GanttJson.h"
 #include "GanttOps.h"
+#include "GanttHitTest.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes. Define
 // them only for the header, then drop them so std::min/std::max keep working.
 #ifndef min
@@ -84,6 +85,24 @@ struct RowBand {
 };
 
 std::vector<RowBand> g_rowBands;
+
+// Semantic hit-test snapshot (pure, COM-free — see GanttHitTest.h). Rebuilt by
+// BuildRowBands' child walk; reused across ticks while the chart screen rect
+// and child count are unchanged so the per-tick COM cost stays bounded.
+HtSnapshot g_hitSnapshot;
+RECT g_hitCacheChartRect = {};
+long g_hitCacheChildCount = -1;
+// Last semantic hit from a mouse-down on the overlay. The selection-model unit
+// will consume this; for now it is only stored (and logged on change).
+HtHit g_lastHit;
+
+// 'Move chart' grip in the chrome (top-left): clicking it selects the
+// CHART_ROOT group via COM so the user can still move/delete the whole chart
+// natively even though the overlay now captures every chart click.
+RECT g_gripRect = {};
+bool g_gripValid = false;
+const int GRIP_SIZE = 16;
+
 std::string g_hoverRowId;
 RECT g_hoverBandRect = {};
 RECT g_hoverInsertRect = {};
@@ -207,6 +226,16 @@ bool SameSelectionState(bool hasSelection, const RECT& selRect, const std::strin
 	return g_hasSelectionChrome == hasSelection && SameRect(g_selScreenRect, selRect) && g_selId == selId && g_selKind == selKind;
 }
 
+HtRect ToHtRect(const RECT& r) {
+	return { r.left, r.top, r.right, r.bottom };
+}
+
+void InvalidateHitSnapshot() {
+	g_hitSnapshot = HtSnapshot{};
+	::SetRectEmpty(&g_hitCacheChartRect);
+	g_hitCacheChildCount = -1;
+}
+
 void ClearHoverState() {
 	g_hoverRowId.clear();
 	::SetRectEmpty(&g_hoverBandRect);
@@ -253,6 +282,20 @@ int ButtonFromClientPoint(POINT pt) {
 		if (::PtInRect(&g_buttonRects[i], pt)) return i;
 	}
 	return -1;
+}
+
+// 'Move chart' grip: pinned to the window's top-left, inside the badge strip
+// (the strip above the chart), so it is always reachable.
+void LayoutGrip(int width, int height) {
+	g_gripValid = false;
+	::SetRectEmpty(&g_gripRect);
+	if (width < GRIP_SIZE + INFL * 2 || height < BADGE_H) return;
+	g_gripRect = { INFL + 1, 2, INFL + 1 + GRIP_SIZE, 2 + GRIP_SIZE };
+	g_gripValid = true;
+}
+
+bool GripFromClientPoint(POINT pt) {
+	return g_gripValid && ::PtInRect(&g_gripRect, pt);
 }
 
 void LayoutHoverInsertHotspot() {
@@ -312,20 +355,41 @@ PowerPoint::ShapePtr FindChartRoot(PowerPoint::_SlidePtr slide) {
 	return nullptr;
 }
 
+// Single per-tick child walk: builds the row bands, inline-edit regions AND
+// the semantic hit-test snapshot. When the chart screen rect and child count
+// are unchanged since the last walk, the cached results are reused so the
+// per-tick COM cost stays bounded (one GetGroupItems + GetCount call).
 void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win) {
-	g_rowBands.clear();
-	g_editRegions.clear();
-	if (!chart || !win) return;
+	if (!chart || !win) {
+		g_rowBands.clear();
+		g_editRegions.clear();
+		InvalidateHitSnapshot();
+		return;
+	}
 	try {
 		PowerPoint::GroupShapesPtr items = chart->GetGroupItems();
-		if (!items) return;
+		if (!items) {
+			g_rowBands.clear();
+			g_editRegions.clear();
+			InvalidateHitSnapshot();
+			return;
+		}
 		long n = items->GetCount();
+		if (n == g_hitCacheChildCount && SameRect(g_chartScreenRect, g_hitCacheChartRect)) {
+			return; // cache hit: reuse g_rowBands / g_editRegions / g_hitSnapshot
+		}
+		g_rowBands.clear();
+		g_editRegions.clear();
+		g_hitSnapshot = HtSnapshot{};
+		g_hitSnapshot.chartRect = ToHtRect(g_chartScreenRect);
 		for (long i = 1; i <= n; ++i) {
 			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
 			_bstr_t kind = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
 			if (!kind.length()) continue;
 			std::string kindStr = Narrow((const wchar_t*)kind);
-			if (kindStr != "ROW_LABEL" && kindStr != "TITLE") continue;
+			// TASK_PROGRESS is the inner fill of a TASK bar — the TASK rect
+			// already covers it, so it does not participate in hit-testing.
+			if (kindStr != "ROW_LABEL" && kindStr != "TITLE" && kindStr != "TASK" && kindStr != "MILESTONE") continue;
 			float left = ch->GetLeft(), top = ch->GetTop(), w = ch->GetWidth(), h = ch->GetHeight();
 			RECT rr = {
 				win->PointsToScreenPixelsX(left),
@@ -337,21 +401,38 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			if (rr.bottom <= rr.top) continue;
 			if (kindStr == "TITLE") {
 				g_editRegions.push_back({ "TITLE", "", rr });
+				g_hitSnapshot.items.push_back({ HtItemKind::Title, "", ToHtRect(rr) });
 				continue;
 			}
 			_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
-			std::string rowId = Narrow((const wchar_t*)id);
-			if (rowId.empty()) continue;
-			g_rowBands.push_back({ rowId, { g_chartScreenRect.left, rr.top, g_chartScreenRect.right, rr.bottom }, rr.left });
-			g_editRegions.push_back({ "ROW_LABEL", rowId, rr });
+			std::string idStr = Narrow((const wchar_t*)id);
+			if (idStr.empty()) continue;
+			if (kindStr == "TASK") {
+				g_hitSnapshot.items.push_back({ HtItemKind::Task, idStr, ToHtRect(rr) });
+				continue;
+			}
+			if (kindStr == "MILESTONE") {
+				g_hitSnapshot.items.push_back({ HtItemKind::Milestone, idStr, ToHtRect(rr) });
+				continue;
+			}
+			g_rowBands.push_back({ idStr, { g_chartScreenRect.left, rr.top, g_chartScreenRect.right, rr.bottom }, rr.left });
+			g_editRegions.push_back({ "ROW_LABEL", idStr, rr });
+			g_hitSnapshot.items.push_back({ HtItemKind::RowLabel, idStr, ToHtRect(rr) });
 		}
 		std::sort(g_rowBands.begin(), g_rowBands.end(), [](const RowBand& a, const RowBand& b) {
 			return a.screenRect.top < b.screenRect.top;
 		});
+		g_hitSnapshot.rowBands.reserve(g_rowBands.size());
+		for (const auto& band : g_rowBands) {
+			g_hitSnapshot.rowBands.push_back({ band.rowId, band.screenRect.top, band.screenRect.bottom });
+		}
+		g_hitCacheChartRect = g_chartScreenRect;
+		g_hitCacheChildCount = n;
 	}
 	catch (const _com_error&) {
 		g_rowBands.clear();
 		g_editRegions.clear();
+		InvalidateHitSnapshot();
 	}
 }
 
@@ -561,22 +642,72 @@ void OvLog(const wchar_t* msg) {
 	::CloseHandle(h);
 }
 
+// Select the CHART_ROOT group natively (used by the 'move chart' grip) so the
+// user can still move/delete the whole chart even though the overlay captures
+// every chart click.
+void SelectChartRoot() {
+	if (!g_app || g_mutating) return;
+	try {
+		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
+		if (!win) return;
+		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
+		PowerPoint::ShapePtr chart = FindChartRoot(slide);
+		if (!chart) return;
+		chart->Select(Office::msoTrue);
+		FocusPowerPoint();
+		OvLog(L"move-chart grip: selected CHART_ROOT");
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error selecting chart root");
+	}
+	catch (const std::exception&) {
+		OvLog(L"error selecting chart root");
+	}
+	catch (...) {
+		OvLog(L"unknown error selecting chart root");
+	}
+}
+
+// Semantic hit test for a client-space point (pure — no COM).
+HtHit HitTestClientPoint(POINT pt) {
+	return GanttHitTestPoint(g_hitSnapshot, pt.x + g_windowOriginX, pt.y + g_windowOriginY);
+}
+
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	if (msg == WM_NCHITTEST) {
+		// Alt = escape hatch: let PowerPoint see the mouse so the user can
+		// natively select/move the whole group under the overlay.
+		if (::GetKeyState(VK_MENU) < 0) return HTTRANSPARENT;
 		POINT screenPt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		// The overlay captures ALL mouse input over the chart area; PowerPoint
+		// never sees chart clicks. Outside the chart, only the chrome widgets
+		// (toolbar, hover '+', move grip) are interactive.
+		if (::PtInRect(&g_chartScreenRect, screenPt)) return HTCLIENT;
 		POINT pt = screenPt;
 		::ScreenToClient(hwnd, &pt);
-		return (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || EditRegionFromScreenPoint(screenPt)) ? HTCLIENT : HTTRANSPARENT;
+		return (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt)) ? HTCLIENT : HTTRANSPARENT;
 	}
 	if (msg == WM_MOUSEACTIVATE) {
 		return MA_NOACTIVATE;
 	}
 	if (msg == WM_LBUTTONDOWN) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
-		if (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt)) return 0;
+		if (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt)) return 0;
+		// Route everything else through the semantic hit test and stash the
+		// result — the selection-model unit consumes g_lastHit next.
+		g_lastHit = HitTestClientPoint(pt);
+		return 0;
 	}
 	if (msg == WM_LBUTTONUP) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		if (GripFromClientPoint(pt)) {
+			try {
+				SelectChartRoot();
+			} catch (...) {
+				OvLog(L"move-chart grip click failed");
+			}
+			return 0;
+		}
 		if (HoverInsertFromClientPoint(pt)) {
 			try {
 				HandleHoverInsertRow();
@@ -594,13 +725,27 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			}
 			return 0;
 		}
+		return 0;
 	}
 	if (msg == WM_LBUTTONDBLCLK) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		HtHit hit = HitTestClientPoint(pt);
+		if (hit.zone == HtZone::Label) {
+			const char* kindStr = (hit.kind == HtItemKind::Title) ? "TITLE" : "ROW_LABEL";
+			for (const auto& region : g_editRegions) {
+				if (region.kind == kindStr && region.id == hit.id) {
+					OpenInlineEditor(region);
+					return 0;
+				}
+			}
+		}
+		// Fallback for edit regions not represented in the snapshot (none
+		// today, but keeps behavior if the walk and regions ever diverge).
 		if (const EditRegion* region = EditRegionFromClientPoint(pt)) {
 			OpenInlineEditor(*region);
 			return 0;
 		}
+		return 0;
 	}
 	if (msg == WM_PAINT) {
 		// Content is pushed by UpdateLayeredWindow (RenderOverlay); WM_PAINT
@@ -711,6 +856,33 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 
 	LayoutToolbarButtons(W, H);
 	LayoutHoverInsertHotspot();
+	LayoutGrip(W, H);
+
+	// 'Move chart' grip chip (top-left, in the badge strip): white chip with an
+	// accent four-way move glyph. Clicking it selects the CHART_ROOT group.
+	if (g_gripValid) {
+		GraphicsPath gripPath;
+		AddRoundRect(gripPath, (REAL)g_gripRect.left, (REAL)g_gripRect.top,
+			(REAL)(g_gripRect.right - g_gripRect.left), (REAL)(g_gripRect.bottom - g_gripRect.top), 3.0f);
+		SolidBrush gripFill(GpColor(255, SURFACE));
+		g.FillPath(&gripFill, &gripPath);
+		Pen gripBorder(GpColor(255, ACCENT), 1.0f);
+		g.DrawPath(&gripBorder, &gripPath);
+
+		int cx = (g_gripRect.left + g_gripRect.right) / 2;
+		int cy = (g_gripRect.top + g_gripRect.bottom) / 2;
+		Pen glyph(GpColor(255, ACCENT), 1.4f);
+		g.DrawLine(&glyph, cx - 4, cy, cx + 4, cy);
+		g.DrawLine(&glyph, cx, cy - 4, cx, cy + 4);
+		g.DrawLine(&glyph, cx - 4, cy, cx - 2, cy - 2);
+		g.DrawLine(&glyph, cx - 4, cy, cx - 2, cy + 2);
+		g.DrawLine(&glyph, cx + 4, cy, cx + 2, cy - 2);
+		g.DrawLine(&glyph, cx + 4, cy, cx + 2, cy + 2);
+		g.DrawLine(&glyph, cx, cy - 4, cx - 2, cy - 2);
+		g.DrawLine(&glyph, cx, cy - 4, cx + 2, cy - 2);
+		g.DrawLine(&glyph, cx, cy + 4, cx - 2, cy + 2);
+		g.DrawLine(&glyph, cx, cy + 4, cx + 2, cy + 2);
+	}
 
 	if (!g_hoverRowId.empty() && !::IsRectEmpty(&g_hoverBandRect) && !(::GetKeyState(VK_LBUTTON) & 0x8000)) {
 		RECT band = {
@@ -921,6 +1093,10 @@ void HideOverlay() {
 	g_lastLeftButtonDown = false;
 	g_rowBands.clear();
 	g_editRegions.clear();
+	InvalidateHitSnapshot();
+	g_lastHit = HtHit{};
+	g_gripValid = false;
+	::SetRectEmpty(&g_gripRect);
 	::SetRectEmpty(&g_chartScreenRect);
 	g_chartProj.clear();
 }
@@ -939,6 +1115,7 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	if (ww < toolbarMinW) ww = toolbarMinW;
 	if (wh < BADGE_H + TOOLBAR_H + INFL * 2 + 8) wh = BADGE_H + TOOLBAR_H + INFL * 2 + 8;
 	LayoutToolbarButtons(ww, wh);
+	LayoutGrip(ww, wh);
 	RECT oldWindow = {};
 	bool wasShown = g_shown;
 	bool hadWindow = ::GetWindowRect(g_hwnd, &oldWindow) != FALSE;
@@ -1199,6 +1376,10 @@ void OverlayStop() {
 	g_buttonsValid = false;
 	g_rowBands.clear();
 	g_editRegions.clear();
+	InvalidateHitSnapshot();
+	g_lastHit = HtHit{};
+	g_gripValid = false;
+	::SetRectEmpty(&g_gripRect);
 	::SetRectEmpty(&g_frameRect);
 	::SetRectEmpty(&g_chartScreenRect);
 }

@@ -10,7 +10,7 @@ if not exist "%OUT%" mkdir "%OUT%"
 pushd "%OUT%"
 echo [ops] compiling ops harness
 cl /nologo /EHsc /MT /std:c++17 /bigobj /DUNICODE /D_UNICODE /DWIN32 ^
-	"%SRC%ops\ops-test.cpp" "%SRC%PowerPlannerAddin\GanttOps.cpp" "%SRC%PowerPlannerAddin\GanttLayout.cpp" "%SRC%PowerPlannerAddin\GanttJson.cpp" ^
+	"%SRC%ops\ops-test.cpp" "%SRC%PowerPlannerAddin\GanttOps.cpp" "%SRC%PowerPlannerAddin\GanttLayout.cpp" "%SRC%PowerPlannerAddin\GanttJson.cpp" "%SRC%PowerPlannerAddin\GanttHitTest.cpp" ^
 	/Fe"%OUT%\ppops.exe" || ( popd & exit /b 1 )
 popd
 
