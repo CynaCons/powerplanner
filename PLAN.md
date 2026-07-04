@@ -544,6 +544,9 @@ These are confirmed-on-the-roadmap-but-not-yet-scheduled items. Promote into a p
 - Comments anchored to tasks
 - AI assist (Gemini): "Draft a Gantt from this paragraph", "Compress the schedule by 2 weeks"
 - Fork / merge workflow for chart variants
+- Day-planning mode: personal daily task planning in the style of Google Calendar
+  tasks (user note 2026-07-04 — "day planning like how I used to handle google
+  calendar tasks for myself"); likely a day-scale view with time-of-day rows
 - Two-way PowerNote data binding (Gantt tasks referencing PowerNote-defined entities)
 - Style preset gallery
 - Touch gestures (pinch zoom, two-finger pan) polish
