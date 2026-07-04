@@ -239,3 +239,15 @@ concurrently with each other or with ppoverlay/ppreflow.
   (RAII unwind). Noted, not blocking: Alt-tap can pop PowerPoint KeyTips (UX wart).
   TOKEN MODE: per user, sub-agents now run on Sonnet with condensed prompts.
 - cycle 3 — dispatched selection-suppression (sonnet).
+- selection-suppression → validated from clean rebuild (full suite: build, overlay
+  stages, OPS, 1/1 fixtures, REFLOW PASS) → c2d49bb. GATE AMENDED (degraded, honest):
+  the child-suppression half is UNSIMULATABLE — GroupItems->Select always resolves
+  back to CHART_ROOT (PowerPoint OM limitation, confirmed empirically + research);
+  Alt+click SendInput passthrough also failed to land a child selection (suspected
+  GetKeyState race with SendInput key-state propagation). Harness verifies the
+  CHART_ROOT exemption half for real and prints 'SUPPRESS PASS (child-select
+  unsimulatable)'. NEGATIVE KNOWLEDGE: no COM/SendInput route creates a native
+  child-of-group selection; Selection Pane is the only realistic user path; the
+  suppression code covers it as cheap insurance and is exercised in-proc only.
+  UIA (IUIAutomation) flagged unexplored if real reproduction is ever needed.
+- cycle 4 — dispatched fix-capture-hardening (sonnet, Overlay lane serial).
