@@ -380,3 +380,45 @@ concurrently with each other or with ppoverlay/ppreflow.
   focusable-top-level pattern (label/start/end/percent/8 swatches, one commit =
   one undo), SetTaskColor + absolute percent ops, EDITOR harness stage with live
   target resolution (t4 deleted by KEYS).
+- floating-editor → validated; ALL 10 stages PASS + full suite from clean rebuild →
+  29afc9b. Card editor (label/start/end/percent/8 swatches) on the focusable
+  top-level pattern; strict ISO date validation w/ red tint + beep; card
+  focus-loss cancels (inline commits — deliberate divergence); mutual exclusion
+  inline↔card; edit session suppresses hotkeys+gestures; SetTaskColor +
+  SetTaskPercentValue ops. Noted: milestone recolor op not requested → task-only.
+
+## V2 completion summary (15/15 green)
+
+Full gate suite from a clean rebuild: [build] OK · OPS HARNESS OK + DPI HELPER OK +
+MENU MAP OK + CURSOR MAP OK · 1/1 fixtures · ppoverlay 10/10 stages (ALPHA, CAPTURE,
+SUPPRESS(child-select unsimulatable), OWNSEL, DRAG, DRAGROW, CREATE, INPLACE, KEYS,
+EDITOR) · REFLOW PASS.
+
+Shipped (each gated, [todo: id]): 40c43e9 alpha-overlay · 41eca8e capture-surface ·
+c2d49bb selection-suppression · 4243863 fix-capture-hardening · 488e886
+own-selection-model · 9fbb001 drag-move-resize · 65e87da drag-row-and-create ·
+29e209d disco-undo-entry · 543dc86 disco-keyboard-focus · 1f7fef3 rebuild-in-place ·
+ed5c5c7 fix-reconcile-robustness · bbb2330 dpi-and-monitors · 99e6044
+overlay-context-menu · ec6fa7c keyboard-and-cursors · 29afc9b floating-editor.
+
+Self-reviews: pre-dispatch (11 findings), #2 post-capture (2 new units + amendments),
+#3 pre-drag (2 mandatory amendments, stale-reflow removal), #4 post-rebuild (1 High
+fix unit + live-rect harness rule + dispatch order). Sub-agents ran on Sonnet from
+cycle 3 onward (user token directive).
+
+DELIVERED — V2 pure on-slide editor: chart shapes are render-target only. Overlay
+captures all chart input (Alt/grip = whole-group escape); internal semantic
+selection with own chrome; drag move/resize with ghost + date tooltip + day
+snapping; vertical row reassign; drag-to-create phantom bar; right-click semantic
+menu; Delete/arrow hotkeys (scoped); zone cursors; floating card editor
+(label/dates/percent/color); diff-based in-place rebuild, one gesture = one undo
+entry; per-pixel-alpha chrome; DPI-scaled at 100-200%; crash-hardened (WndProc net,
+GDI+ status gates, reconcile failure cleanup).
+
+USER NOTES for the visual pass: restart PowerPoint to load the latest DLL. Watch
+for: (a) TrackPopupMenu activation flicker on right-click (unautomatable — report
+back); (b) hotkey theft is scoped to selection+foreground but system-wide while
+active; (c) manual DPI matrix in plan §4.2.1 awaits your run. Known limits:
+SUPPRESS child-select path unverifiable by automation (Selection Pane is the only
+real user path); milestone recolor not implemented (op exists pattern, small add);
+edge/milestone drag paths share commit logic but only body-drag is harness-covered.
