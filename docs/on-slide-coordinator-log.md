@@ -612,3 +612,14 @@ tooltip; SetMarkerDate commit; selection kind MARKER. Agent-noted latent quirk
 (pre-existing, untouched): UpdateDpiScaledMetrics sets edgeBandPx then
 InvalidateHitSnapshot resets it; BuildRowBands now re-sets per walk so Marker
 hits stay DPI-correct. Dispatched: text-model (pure gate).
+
+### text-model — DONE (e4ddbaa)
+
+Pure gate (build + ops + conformance) from clean rebuild, exit 0, TEXT OPS OK,
+fixtures untouched (texts serialized only when non-empty; conformance
+serializer does not cover texts - naturally contract-safe). PpText: anchored
+(anchorId -> tracks anchor task/milestone through layout) or free (rowId+date
+cell origin), both offset by dx/dy points. Emission tagged PP_KIND=TEXT with
+stable PP_ID. DeleteById cascades direct/via-anchor/via-row. PpText.color
+stored but not rendered (same precedent as task/marker color - material-theme
+will wire all of them). Dispatched: text-interaction.
