@@ -527,3 +527,14 @@ INPUT NEUTRAL OK. Deps added: marker-drag / text-interaction / appbar-shell now
 depend on it so every NEW stage is written input-neutral. Dispatch slot: right
 after fit-to-slide. Known trade-off: PowerPoint window still opens during COM
 gates (full invisibility = second session/VM, deliberately out of scope).
+
+### fit-to-slide — DONE (f2d9796)
+
+Gate: FIT OK + REFLOW PASS from clean rebuild, exit 0, first attempt. Key
+finding (agent, verified): resizing a PowerPoint group rescales children
+Left/Width but PP_PROJ ptPerDay/originX stay stale - FitChartRootToSlide must
+rewrite PP_PROJ from the scaled geometry BEFORE the defensive ReflowFromSlide,
+else recovered dates distort. Insert path: DoInsertGantt -> InsertGantt ->
+FitChartRootToSlide (non-fatal on failure). 18pt side/bottom margins, top 15%
+reserved; harness FIT assertion is a hard rc=1 gate. Dispatched next:
+harness-input-isolation.
