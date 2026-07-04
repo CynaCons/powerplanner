@@ -513,3 +513,17 @@ bound) + 300ms settle pump. Agent then proved 3 consecutive green harness runs;
 coordinator clean-rebuild run also green. NEW STANDING RULE: any harness helper
 that synthesizes modifier keys must verify-release them before returning (Alt
 doubles as the overlay escape hatch).
+
+### harness-input-isolation queued (user request 2026-07-04)
+
+User: gate runs take over mouse/keyboard/focus. Cause: overlay-test.cpp drives
+gestures with posted WM_MOUSE* but ALSO SetCursorPos in lockstep (overlay reads
+physical cursor), SetForegroundWindow steals (required since fix-overlay-scoping),
+and Alt-tap fallback. New unit V3-15 harness-input-isolation: cursor-position +
+host-active (+Alt-state) test seams in Overlay.cpp; harness drops ALL real-input
+APIs (poison-macro block prevents silent reintroduction); SCOPE stage switches to
+override toggling (real-transition coverage becomes a manual-check note); marker
+INPUT NEUTRAL OK. Deps added: marker-drag / text-interaction / appbar-shell now
+depend on it so every NEW stage is written input-neutral. Dispatch slot: right
+after fit-to-slide. Known trade-off: PowerPoint window still opens during COM
+gates (full invisibility = second session/VM, deliberately out of scope).
