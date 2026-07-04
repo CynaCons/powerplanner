@@ -325,3 +325,15 @@ concurrently with each other or with ppoverlay/ppreflow.
   the 4 remaining specs (floating-editor, overlay-context-menu,
   keyboard-and-cursors, dpi-and-monitors) incl. harness-contamination questions
   and dispatch-order recommendation. Holding dispatch until folded.
+- self-review #4 result — landed drag/rebuild code verified sound (snapshot-before-
+  ReleaseCapture trap closed; Esc-mid-commit unreachable via g_mutating guard; COM
+  lifetimes clean; drag math drift-free). ONE High: partial failure after Ungroup()
+  orphans loose ex-group shapes + duplicate chart on InsertGantt fallback → NEW unit
+  fix-reconcile-robustness (also: exclude empty-PP_KIND children from diff; blanket
+  try/catch net around OverlayWndProc). All four remaining units cleared with
+  amendments folded: floating-editor + keyboard + ctx-menu harness stages must
+  re-resolve LIVE shape rects/ids (earlier stages mutate the document — INPLACE
+  pattern); keyboard harness re-selects explicitly; keys-probe.txt pre-flight OK
+  (VERDICT HOTKEY). Recommended dispatch order: fix-reconcile → dpi → ctx-menu →
+  keyboard → floating-editor (most harness-fragile last). 15 units total.
+- cycle 9 — dispatched fix-reconcile-robustness (sonnet).
