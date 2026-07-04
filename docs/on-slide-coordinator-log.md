@@ -296,3 +296,15 @@ concurrently with each other or with ppoverlay/ppreflow.
 - cycle 7 — dispatched drag-row-and-create (sonnet): vertical row retarget in
   body drags + phantom-bar create on EmptyCell; stages DRAGROW then CREATE (CREATE
   last; exit-on-first-fail makes CREATE PASS prove both; coordinator checks both).
+- drag-row-and-create → validated clean rebuild; all 7 stages PASS (both DRAGROW and
+  CREATE markers verified) + full suite → 65e87da. Vertical row retarget in body
+  drags (RowBandAtScreenY per move, MoveTaskToRow+NudgeTask in one rebuild);
+  phantom-bar create on EmptyCell (<0.5 day = click). Agent found+fixed the SAME
+  WM_CAPTURECHANGED-synchronous-reset bug class in its new path (Create branch read
+  live g_dragPxPerDay after ReleaseCapture zeroed it → every create misclassified
+  as click) — third occurrence of this pattern; noted as a standing trap for any
+  future WM_LBUTTONUP logic: SNAPSHOT ALL gesture state before ReleaseCapture.
+- cycle 8 — dispatched rebuild-in-place (sonnet): StartNewUndoEntry per gesture
+  (GROUPING_WORKS), diff-based UpdateGantt (move/resize by PP_ID, add/remove deltas
+  only, no regroup on pure moves), InsertGantt kept as fallback, INPLACE harness
+  stage asserts same chart-root COM identity + stable child count.
