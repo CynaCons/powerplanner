@@ -1177,6 +1177,157 @@ int wmain(int argc, wchar_t** argv) {
 				wprintf(pass ? L"INPLACE PASS\n" : L"INPLACE FAIL\n");
 				if (!pass) rc = 1;
 			}
+
+			// ---- stage 9: KEYS -------------------------------------------------
+			// Keyboard hotkey handler correctness. Per the task brief: "Posting
+			// WM_HOTKEY bypasses the RegisterHotKey OS layer — acceptable: the
+			// probe already proved delivery (keys-probe.txt OPTION C); the stage
+			// proves HANDLER correctness." So this stage does NOT rely on
+			// RegisterHotKey/actual key presses at all — it re-selects a known
+			// still-existing task via a posted click (INPLACE's pattern: the
+			// document has been mutated by stages 3-8, so the task must be
+			// re-found by id at its LIVE rect, not assumed to be where
+			// MakeSampleDocument first put it), then posts WM_HOTKEY straight to
+			// the overlay hwnd with the SAME wParam ids Overlay.cpp's own
+			// RegisterHotKey calls would use (Overlay.h's
+			// OverlayHotkeyIdForTest), simulating Right-arrow then Delete.
+			//
+			// "t4" is used because it is untouched by every earlier stage:
+			// OWNSEL/DRAG/DRAGROW pick "the first TASK child found" (t1),
+			// INPLACE explicitly targets "t2", and CREATE only ADDS a task in
+			// r_launch — none of them touch t4's row/dates, so its PP_DOC
+			// dates are still exactly MakeSampleDocument's ("2026-06-22" /
+			// "2026-07-10") going into this stage, making the +1 day
+			// assertion unambiguous.
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					const std::wstring kTargetTaskId = L"t4";
+					PowerPoint::ShapePtr taskChild;
+					if (chartRoot) {
+						PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+						long gn = grp->GetCount();
+						for (long j = 1; j <= gn && !taskChild; ++j) {
+							PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+							_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+							if (ckind != L"TASK") continue;
+							_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+							std::wstring cidW = cid.length() ? (const wchar_t*)cid : L"";
+							if (cidW == kTargetTaskId) taskChild = child;
+						}
+					}
+
+					HWND ov = OverlayHwnd();
+					if (!chartRoot || !taskChild || !ov) {
+						wprintf(L"KEYS: could not find TASK '%s' or overlay hwnd\n", kTargetTaskId.c_str());
+					} else {
+						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+						float left = taskChild->GetLeft(), top = taskChild->GetTop();
+						float w = taskChild->GetWidth(), h = taskChild->GetHeight();
+						POINT screenPt = {
+							win->PointsToScreenPixelsX(left + w / 2.0f),
+							win->PointsToScreenPixelsY(top + h / 2.0f)
+						};
+						POINT clientPt = screenPt;
+						::ScreenToClient(ov, &clientPt);
+						::SetCursorPos(screenPt.x, screenPt.y);
+
+						// Re-select explicitly (INPLACE pattern): a plain click
+						// gesture posted at the LIVE rect center, same route as
+						// OWNSEL/INPLACE.
+						LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+						::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+						PumpFor(400);
+
+						const char* gotIdUtf8 = Overlay_GetSelectedIdForTest();
+						std::string taskIdUtf8 = WNarrowFn(kTargetTaskId.c_str());
+						bool selectedOk = gotIdUtf8 && taskIdUtf8 == gotIdUtf8;
+						if (!selectedOk) {
+							wprintf(L"KEYS: re-select click did not select '%s' (got '%hs')\n",
+								kTargetTaskId.c_str(), gotIdUtf8 ? gotIdUtf8 : "(null)");
+						} else {
+							std::string docJsonBefore = ReadGanttFromSlide(app);
+							PpDocument docBefore = DocumentFromJson(docJsonBefore);
+							std::string origStart, origEnd;
+							bool foundBefore = false;
+							for (const auto& t : docBefore.tasks) {
+								if (t.id == taskIdUtf8) { origStart = t.start; origEnd = t.end; foundBefore = true; break; }
+							}
+
+							if (!foundBefore) {
+								wprintf(L"KEYS: task '%s' missing from PP_DOC before Right-arrow\n", kTargetTaskId.c_str());
+							} else {
+								// Simulate Right-arrow: post WM_HOTKEY with the
+								// SAME id Overlay.cpp's RegisterHotKey(HOTKEY_
+								// RIGHT,...) call would receive from Windows.
+								::PostMessageW(ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_RIGHT_FOR_TEST, 0);
+								PumpFor(500);
+
+								std::string docJsonAfterRight = ReadGanttFromSlide(app);
+								PpDocument docAfterRight = DocumentFromJson(docJsonAfterRight);
+								std::string newStart, newEnd;
+								bool foundAfterRight = false;
+								for (const auto& t : docAfterRight.tasks) {
+									if (t.id == taskIdUtf8) { newStart = t.start; newEnd = t.end; foundAfterRight = true; break; }
+								}
+								std::string expectStart = DaysToDate(DateToDays(origStart) + 1);
+								std::string expectEnd = DaysToDate(DateToDays(origEnd) + 1);
+								bool datesShifted = foundAfterRight && newStart == expectStart && newEnd == expectEnd;
+
+								const char* gotIdAfterRight = Overlay_GetSelectedIdForTest();
+								bool selectionRetained = gotIdAfterRight && taskIdUtf8 == gotIdAfterRight;
+
+								if (!datesShifted) {
+									wprintf(L"KEYS: Right-arrow expected %hs..%hs, got %hs..%hs (found=%d)\n",
+										expectStart.c_str(), expectEnd.c_str(), newStart.c_str(), newEnd.c_str(), (int)foundAfterRight);
+								}
+								if (!selectionRetained) {
+									wprintf(L"KEYS: selection not retained after Right-arrow (got '%hs')\n",
+										gotIdAfterRight ? gotIdAfterRight : "(null)");
+								}
+
+								bool rightOk = datesShifted && selectionRetained;
+								bool deleteOk = false;
+								if (rightOk) {
+									// Simulate Delete: same posted-WM_HOTKEY route.
+									::PostMessageW(ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+									PumpFor(500);
+
+									std::string docJsonAfterDelete = ReadGanttFromSlide(app);
+									PpDocument docAfterDelete = DocumentFromJson(docJsonAfterDelete);
+									bool stillPresent = false;
+									for (const auto& t : docAfterDelete.tasks) {
+										if (t.id == taskIdUtf8) { stillPresent = true; break; }
+									}
+									deleteOk = !stillPresent;
+									if (!deleteOk) {
+										wprintf(L"KEYS: task '%s' still present in PP_DOC after Delete hotkey\n", kTargetTaskId.c_str());
+									}
+								}
+
+								pass = rightOk && deleteOk;
+							}
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"KEYS: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"KEYS PASS\n" : L"KEYS FAIL\n");
+				if (!pass) rc = 1;
+			}
 		} catch (const _com_error& e) {
 			wprintf(L"COM error 0x%08lX: %s\n", (unsigned long)e.Error(),
 				e.Description().length() ? (const wchar_t*)e.Description() : L"(no description)");

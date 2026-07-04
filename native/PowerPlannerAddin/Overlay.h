@@ -26,3 +26,17 @@ HWND OverlayHwnd();
 // or empty if nothing is internally selected. Drives the harness's OWNSEL
 // stage assertion. Never touches COM.
 const char* Overlay_GetSelectedIdForTest();
+
+// WM_HOTKEY ids (wParam values) the overlay registers via RegisterHotKey and
+// dispatches on in its WM_HOTKEY handler (see Overlay.cpp's kHotkeySpecs /
+// OverlayHotkeyId). Exposed here so the harness's KEYS stage can post
+// WM_HOTKEY directly to the overlay hwnd with the matching id, bypassing the
+// OS RegisterHotKey layer (which keys-probe.txt already proved delivers WM_
+// HOTKEY to this NOACTIVATE overlay) to test the HANDLER in isolation.
+enum OverlayHotkeyIdForTest {
+	OVERLAY_HOTKEY_DELETE_FOR_TEST = 1,
+	OVERLAY_HOTKEY_LEFT_FOR_TEST = 2,
+	OVERLAY_HOTKEY_RIGHT_FOR_TEST = 3,
+	OVERLAY_HOTKEY_SHIFT_LEFT_FOR_TEST = 4,
+	OVERLAY_HOTKEY_SHIFT_RIGHT_FOR_TEST = 5,
+};

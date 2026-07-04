@@ -237,6 +237,63 @@ enum OverlayButton {
 	BTN_PCT_PLUS = 3
 };
 
+// ---- keyboard hotkeys (Delete/Left/Right (+/-1 day), Shift+Left/Right (+/-7))
+// -----------------------------------------------------------------------------
+// PROBE VERDICT (native/build/keys-probe.txt, OPTION C): RegisterHotKey
+// delivers WM_HOTKEY to this NOACTIVATE overlay even though it never has
+// keyboard focus, but registered keys are stolen SYSTEM-WIDE for as long as
+// they're registered (every process, not just PowerPoint) and cleanly return
+// to normal on UnregisterHotKey. So registration is scoped as tightly as
+// possible: only while (a) the internal selection is a TASK/MILESTONE (there
+// is something to Delete/Nudge) AND (b) PowerPoint itself is the foreground
+// app (so the theft window is limited to "user is actually looking at
+// PowerPoint") AND (c) no gesture/mutation/inline-edit is in progress
+// (mid-drag Delete would be nonsensical, and re-registering while g_mutating
+// could race the commit). Tick() re-evaluates this every 150ms tick and
+// registers/unregisters on the true<->false TRANSITION only (not every tick)
+// so a steady selected-task+foreground state doesn't thrash RegisterHotKey.
+// NOTE: these values are mirrored in Overlay.h's OverlayHotkeyIdForTest for
+// the harness's KEYS stage (which posts WM_HOTKEY directly to the overlay
+// hwnd, bypassing RegisterHotKey, to test this handler in isolation) — keep
+// both enums in sync if either changes.
+enum OverlayHotkeyId {
+	HOTKEY_DELETE = 1,
+	HOTKEY_LEFT = 2,
+	HOTKEY_RIGHT = 3,
+	HOTKEY_SHIFT_LEFT = 4,
+	HOTKEY_SHIFT_RIGHT = 5,
+};
+
+struct HotkeySpec {
+	int id;
+	UINT mods;
+	UINT vk;
+	const wchar_t* name; // for OvLog on registration failure
+};
+
+// fsModifiers deliberately omits MOD_NOREPEAT: held Left/Right should repeat
+// (matching PowerPoint's own arrow-key nudge feel) exactly like the existing
+// GetAsyncKeyState-polled Esc handling has no repeat-suppression either.
+const HotkeySpec kHotkeySpecs[] = {
+	{ HOTKEY_DELETE,       0,          VK_DELETE, L"Delete" },
+	{ HOTKEY_LEFT,         0,          VK_LEFT,   L"Left" },
+	{ HOTKEY_RIGHT,        0,          VK_RIGHT,  L"Right" },
+	{ HOTKEY_SHIFT_LEFT,   MOD_SHIFT,  VK_LEFT,   L"Shift+Left" },
+	{ HOTKEY_SHIFT_RIGHT,  MOD_SHIFT,  VK_RIGHT,  L"Shift+Right" },
+};
+constexpr int kHotkeyCount = sizeof(kHotkeySpecs) / sizeof(kHotkeySpecs[0]);
+
+// Whether each hotkey id is CURRENTLY registered (per-key, since an
+// individual RegisterHotKey call can fail — e.g. another app already owns
+// that combo — and the rest should still work per the task spec's "degrade
+// gracefully" requirement).
+bool g_hotkeysRegistered[kHotkeyCount] = {};
+// Whether the group as a whole is in the "registered" state, i.e. the last
+// evaluated shouldRegister was true. Tracked separately from
+// g_hotkeysRegistered (which is per-key) so Tick() only calls Register/
+// UnregisterHotKey on an actual state TRANSITION.
+bool g_hotkeysActive = false;
+
 // Forward
 void PaintOverlay(Gdiplus::Graphics& g, int W, int H);
 void RenderOverlay();
@@ -256,6 +313,10 @@ float ComputeEmptyCellPxPerDay();
 void ShowContextMenuForHit(const HtHit& hit, POINT clientPt);
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+void UpdateHotkeyRegistration();
+void UnregisterAllHotkeys();
+void HandleHotkeyDelete();
+void HandleHotkeyNudge(long deltaDays);
 
 std::string Narrow(const wchar_t* w) {
 	if (!w || !*w) return "";
@@ -953,6 +1014,48 @@ HtHit HitTestClientPoint(POINT pt) {
 	return GanttHitTestPoint(g_hitSnapshot, pt.x + g_windowOriginX, pt.y + g_windowOriginY);
 }
 
+// Translate a pure HtCursor into a real HCURSOR for ::SetCursor. This is the
+// ONLY place HCURSOR appears — GanttHitTest.h/.cpp stay COM/Windows-free so
+// GanttCursorForZone can be unit-tested from the ops harness.
+HCURSOR HCursorForHtCursor(HtCursor c) {
+	switch (c) {
+	case HtCursor::SizeAll: return ::LoadCursor(NULL, IDC_SIZEALL);
+	case HtCursor::SizeWE:  return ::LoadCursor(NULL, IDC_SIZEWE);
+	case HtCursor::Cross:   return ::LoadCursor(NULL, IDC_CROSS);
+	case HtCursor::Hand:    return ::LoadCursor(NULL, IDC_HAND);
+	case HtCursor::Arrow:   return ::LoadCursor(NULL, IDC_ARROW);
+	case HtCursor::Default:
+	default:
+		return NULL; // let DefWindowProcW pick the default (class) cursor
+	}
+}
+
+// WM_SETCURSOR handler body: resolve the client point under the cursor to a
+// chrome-widget hit first (toolbar button / hover-insert '+' / move grip all
+// win as Hand, matching WM_NCHITTEST's own widget-vs-chart precedence), then
+// fall back to the semantic chart hit test. Returns true if a cursor was set
+// (caller returns TRUE from WM_SETCURSOR to suppress the default handling);
+// false lets DefWindowProcW apply the class cursor (used outside the chart
+// and off any chrome widget).
+bool HandleSetCursor(HWND hwnd) {
+	POINT screenPt = {};
+	if (!::GetCursorPos(&screenPt)) return false;
+	POINT pt = screenPt;
+	::ScreenToClient(hwnd, &pt);
+
+	bool overChromeWidget = ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt);
+	HtZone zone = HtZone::Outside;
+	if (!overChromeWidget) {
+		if (!::PtInRect(&g_chartScreenRect, screenPt)) return false; // truly outside: default cursor
+		zone = HitTestClientPoint(pt).zone;
+	}
+	HtCursor cur = GanttCursorForZone(zone, overChromeWidget);
+	HCURSOR hc = HCursorForHtCursor(cur);
+	if (!hc) return false;
+	::SetCursor(hc);
+	return true;
+}
+
 // Apply the selection effect of a completed CLICK gesture (down+up within the
 // drag threshold, same point). TaskBody/edges and Milestone select the item;
 // a RowBand hit with a row id selects the row; EmptyCell/background-RowBand
@@ -1467,6 +1570,14 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	if (msg == WM_MOUSEACTIVATE) {
 		return MA_NOACTIVATE;
 	}
+	if (msg == WM_SETCURSOR) {
+		// Only decide the cursor when it's actually over OUR client area
+		// (LOWORD(lp) is the hit-test result WM_NCHITTEST just returned); for
+		// any other case (e.g. HTERROR while the window is being torn down)
+		// fall through to DefWindowProcW like every unhandled message here.
+		if (LOWORD(lp) == HTCLIENT && HandleSetCursor(hwnd)) return TRUE;
+		return ::DefWindowProcW(hwnd, msg, wp, lp);
+	}
 	if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
 		// WM_MOUSEWHEEL/HWHEEL carry screen coordinates in lp already (unlike
 		// most mouse messages), so no client-to-screen conversion is needed.
@@ -1679,6 +1790,36 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// Content is pushed by UpdateLayeredWindow (RenderOverlay); WM_PAINT
 		// only needs to validate the region so the queue stays quiet.
 		::ValidateRect(hwnd, NULL);
+		return 0;
+	}
+	if (msg == WM_HOTKEY) {
+		// Delivered even though this NOACTIVATE window never has keyboard
+		// focus (see kHotkeySpecs' header comment / keys-probe.txt OPTION C).
+		// wp is the id passed to RegisterHotKey; dispatch on it directly
+		// rather than re-deriving the key from lp's packed vk/mods.
+		try {
+			switch ((int)wp) {
+			case HOTKEY_DELETE:
+				HandleHotkeyDelete();
+				break;
+			case HOTKEY_LEFT:
+				HandleHotkeyNudge(-1);
+				break;
+			case HOTKEY_RIGHT:
+				HandleHotkeyNudge(1);
+				break;
+			case HOTKEY_SHIFT_LEFT:
+				HandleHotkeyNudge(-7);
+				break;
+			case HOTKEY_SHIFT_RIGHT:
+				HandleHotkeyNudge(7);
+				break;
+			default:
+				break;
+			}
+		} catch (...) {
+			OvLog(L"WM_HOTKEY handler failed");
+		}
 		return 0;
 	}
 	return ::DefWindowProcW(hwnd, msg, wp, lp);
@@ -2187,6 +2328,8 @@ void HideOverlay() {
 	g_buttonsValid = false;
 	ClearSelectionState();
 	ClearOwnSelection();
+	UnregisterAllHotkeys(); // no selection left to Delete/Nudge; release any stolen keys
+
 	if (g_captureActive) {
 		g_captureActive = false;
 		if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
@@ -2250,6 +2393,164 @@ void RebuildChart(PpDocument& doc, const std::string& selectId) {
 	InvalidateHitSnapshot();
 	HRESULT hr = UpdateGantt(g_app, doc, selectId);
 	if (FAILED(hr)) OvLog(L"UpdateGantt failed after gesture commit");
+}
+
+// ---- keyboard hotkey handlers ------------------------------------------------
+// Both follow the standard commit pattern used throughout this file (see
+// RebuildChart's header comment): read PP_DOC, mutate via GanttOps, rebuild,
+// SetOwnSelection synchronously (RebuildChart just invalidated the hit
+// snapshot, so — same reasoning as CommitDragGesture/HandleContextMenuCommand
+// — SyncSelectionChromeFromOwnSelection must wait for the next Tick()).
+
+// WM_HOTKEY(Delete): delete the selected task/milestone and clear selection.
+void HandleHotkeyDelete() {
+	if (!g_app || g_mutating) return;
+	const std::string selId = g_ownSelId;
+	const std::string selKind = g_ownSelKind;
+	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE")) return;
+
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (!json.empty()) {
+			PpDocument doc = DocumentFromJson(json);
+			if (DeleteById(doc, selId)) {
+				RebuildChart(doc, "");
+				ClearOwnSelection();
+				RequestOverlayRepaint();
+				wchar_t buf[128];
+				::swprintf_s(buf, 128, L"hotkey Delete applied to %hs/%hs", selKind.c_str(), selId.c_str());
+				OvLog(buf);
+			}
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error during hotkey delete");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error during hotkey delete");
+	}
+	catch (...) {
+		OvLog(L"unknown error during hotkey delete");
+	}
+	g_mutating = false;
+}
+
+// WM_HOTKEY(Left/Right, +-Shift): nudge the selected task/milestone by
+// deltaDays (+-1 for plain Left/Right, +-7 for the Shift variants per the
+// task spec), keeping the selection on the same item.
+void HandleHotkeyNudge(long deltaDays) {
+	if (!g_app || g_mutating) return;
+	const std::string selId = g_ownSelId;
+	const std::string selKind = g_ownSelKind;
+	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE")) return;
+
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (!json.empty()) {
+			PpDocument doc = DocumentFromJson(json);
+			bool changed = NudgeTask(doc, selId, deltaDays); // no-op if selId is not a task
+			if (!changed && selKind == "MILESTONE") {
+				for (auto& ms : doc.milestones) {
+					if (ms.id == selId) {
+						ms.date = DaysToDate(DateToDays(ms.date) + deltaDays);
+						changed = true;
+						break;
+					}
+				}
+			}
+			if (changed) {
+				RebuildChart(doc, selId);
+				SetOwnSelection(selKind, selId);
+				RequestOverlayRepaint();
+				wchar_t buf[128];
+				::swprintf_s(buf, 128, L"hotkey Nudge(%ld) applied to %hs/%hs", deltaDays, selKind.c_str(), selId.c_str());
+				OvLog(buf);
+			}
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error during hotkey nudge");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error during hotkey nudge");
+	}
+	catch (...) {
+		OvLog(L"unknown error during hotkey nudge");
+	}
+	g_mutating = false;
+}
+
+// Unregister every hotkey id that is currently registered (per-key state in
+// g_hotkeysRegistered, so this is safe to call even after a partial-failure
+// registration). Called on the shouldRegister true->false transition, and
+// from HideOverlay/OverlayStop so a hidden/stopped overlay never leaves keys
+// stolen system-wide.
+void UnregisterAllHotkeys() {
+	for (int i = 0; i < kHotkeyCount; ++i) {
+		if (g_hotkeysRegistered[i]) {
+			::UnregisterHotKey(g_hwnd, kHotkeySpecs[i].id);
+			g_hotkeysRegistered[i] = false;
+		}
+	}
+	g_hotkeysActive = false;
+}
+
+// Register every hotkey (best-effort per-key: a single key's RegisterHotKey
+// failing — e.g. another app already owns that combo — is logged and does
+// NOT prevent the other keys from registering, per the task spec's "degrade
+// gracefully" requirement). Called on the shouldRegister false->true
+// transition.
+void RegisterAllHotkeys() {
+	if (!g_hwnd) return;
+	for (int i = 0; i < kHotkeyCount; ++i) {
+		const HotkeySpec& spec = kHotkeySpecs[i];
+		BOOL registered = ::RegisterHotKey(g_hwnd, spec.id, spec.mods, spec.vk);
+		g_hotkeysRegistered[i] = (registered != FALSE);
+		if (!registered) {
+			wchar_t buf[96];
+			::swprintf_s(buf, 96, L"RegisterHotKey failed for %s (err=%lu)", spec.name, (unsigned long)::GetLastError());
+			OvLog(buf);
+		}
+	}
+	g_hotkeysActive = true;
+}
+
+// Evaluate shouldRegister = (internal selection is TASK/MILESTONE) AND
+// (PowerPoint is the foreground app) AND (not mid-gesture/mutation/inline-
+// edit) and register/unregister on a TRANSITION only. Called every Tick().
+// PowerPoint-foreground is checked by comparing the foreground window's owning
+// process id against our OWN process id (GetCurrentProcessId): the overlay
+// DLL runs IN-PROCESS inside POWERPNT.EXE (per the task brief), so "foreground
+// window belongs to PowerPoint's process" and "foreground window belongs to
+// OUR process" are the same check here — no need to resolve g_pptHwnd's PID
+// separately, and this also naturally covers the overlay's OWN hwnd (and the
+// inline editor) being foreground, which are legitimately "PowerPoint is
+// active" states for this purpose (e.g. right after a click before focus
+// returns to the main frame).
+void UpdateHotkeyRegistration() {
+	if (!g_hwnd) return;
+
+	bool selectionIsTaskOrMilestone = (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE") && !g_ownSelId.empty();
+
+	bool foregroundIsOurs = false;
+	HWND fg = ::GetForegroundWindow();
+	if (fg) {
+		DWORD fgPid = 0;
+		::GetWindowThreadProcessId(fg, &fgPid);
+		foregroundIsOurs = (fgPid == ::GetCurrentProcessId());
+	}
+
+	bool notMidGesture = !g_gestureActive && !g_mutating && !(g_editHwnd && !g_editKind.empty());
+
+	bool shouldRegister = selectionIsTaskOrMilestone && foregroundIsOurs && notMidGesture;
+
+	if (shouldRegister && !g_hotkeysActive) {
+		RegisterAllHotkeys();
+	} else if (!shouldRegister && g_hotkeysActive) {
+		UnregisterAllHotkeys();
+	}
 }
 
 void HandleToolbarButton(int button) {
@@ -2604,6 +2905,24 @@ void Tick() {
 			g_captureActive = false;
 			CancelDragGesture();
 			if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
+		} else if (!g_gestureActive && !g_captureActive && !g_ownSelKind.empty() &&
+			(::GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
+			// No gesture active but something IS internally selected: Esc
+			// clears the internal selection (repainted below via the existing
+			// SameSelectionState diff). PowerPoint must be the foreground app —
+			// same foreground-ownership check UpdateHotkeyRegistration() uses —
+			// so a stray Esc typed into some OTHER foreground app while
+			// PowerPoint merely happens to still hold the selection doesn't
+			// clear it. Esc is deliberately NOT registered as a hotkey (per the
+			// task brief) — it stays on this existing GetAsyncKeyState poll,
+			// so latency is bounded by the 150ms tick period like the gesture-
+			// cancel case above.
+			HWND fg = ::GetForegroundWindow();
+			DWORD fgPid = 0;
+			if (fg) ::GetWindowThreadProcessId(fg, &fgPid);
+			if (fg && fgPid == ::GetCurrentProcessId()) {
+				ClearOwnSelection();
+			}
 		}
 
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
@@ -2697,6 +3016,13 @@ void Tick() {
 			SyncSelectionChromeFromOwnSelection();
 		}
 
+		// Re-evaluate hotkey registration every tick (transition-only —
+		// UpdateHotkeyRegistration itself no-ops unless shouldRegister flipped)
+		// AFTER the internal selection has been fully resolved for this tick
+		// (suppression mirror + SyncSelectionChromeFromOwnSelection above), so
+		// it sees the selection state a user actually observes on screen.
+		UpdateHotkeyRegistration();
+
 		// NOTE: the old auto-reflow-on-mouse-up-idle-tick block that lived
 		// here is gone (A1). It predated the own-selection/drag-gesture model:
 		// chart clicks never reach PowerPoint anymore (the overlay captures
@@ -2755,6 +3081,7 @@ void OverlayStop() {
 		if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
 	}
 	ResetDragGestureState();
+	UnregisterAllHotkeys(); // MUST run before DestroyWindow below (needs g_hwnd)
 	if (g_hwnd) { ::DestroyWindow(g_hwnd); g_hwnd = NULL; }
 	FreeBackBuffer();
 	if (g_gdiplusToken) {

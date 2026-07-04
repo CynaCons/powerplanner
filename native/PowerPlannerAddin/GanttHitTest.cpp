@@ -250,3 +250,29 @@ HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind, bool hasRowId) 
 	}
 	return op;
 }
+
+// ---- pure zone -> cursor mapping --------------------------------------------
+
+HtCursor GanttCursorForZone(HtZone zone) {
+	switch (zone) {
+	case HtZone::TaskBody:
+	case HtZone::Milestone:
+		return HtCursor::SizeAll;
+	case HtZone::TaskEdgeL:
+	case HtZone::TaskEdgeR:
+		return HtCursor::SizeWE;
+	case HtZone::EmptyCell:
+		return HtCursor::Cross;
+	case HtZone::RowBand:
+	case HtZone::Label:
+		return HtCursor::Arrow;
+	case HtZone::Outside:
+	default:
+		return HtCursor::Default;
+	}
+}
+
+HtCursor GanttCursorForZone(HtZone zone, bool overChromeWidget) {
+	if (overChromeWidget) return HtCursor::Hand;
+	return GanttCursorForZone(zone);
+}

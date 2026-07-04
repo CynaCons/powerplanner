@@ -328,6 +328,50 @@ static bool RunMenuModelChecks() {
 	return ok;
 }
 
+// Zone -> cursor mapping checks: exhaustive over every HtZone value (both the
+// bare GanttCursorForZone(zone) and the (zone, overChromeWidget) overload used
+// by the overlay's WM_SETCURSOR handler). Print 'CURSOR MAP OK' when these
+// pass (after OPS HARNESS OK / DPI HELPER OK / MENU MAP OK).
+static bool RunCursorMapChecks() {
+	bool ok = true;
+
+	// Exhaustive over every HtZone enumerator: TaskBody/Milestone -> SizeAll,
+	// TaskEdgeL/R -> SizeWE, EmptyCell -> Cross, RowBand/Label -> Arrow,
+	// Outside -> Default. Listed in HtZone declaration order so a future zone
+	// added to the enum without a case here is easy to spot in review.
+	static const struct { HtZone zone; HtCursor expected; const char* msg; } kZoneCases[] = {
+		{ HtZone::Outside,    HtCursor::Default, "cursor: Outside -> Default" },
+		{ HtZone::TaskBody,   HtCursor::SizeAll, "cursor: TaskBody -> SizeAll" },
+		{ HtZone::TaskEdgeL,  HtCursor::SizeWE,  "cursor: TaskEdgeL -> SizeWE" },
+		{ HtZone::TaskEdgeR,  HtCursor::SizeWE,  "cursor: TaskEdgeR -> SizeWE" },
+		{ HtZone::Milestone,  HtCursor::SizeAll, "cursor: Milestone -> SizeAll" },
+		{ HtZone::Label,      HtCursor::Arrow,   "cursor: Label -> Arrow" },
+		{ HtZone::RowBand,    HtCursor::Arrow,   "cursor: RowBand -> Arrow" },
+		{ HtZone::EmptyCell,  HtCursor::Cross,   "cursor: EmptyCell -> Cross" },
+	};
+	constexpr size_t kZoneCount = sizeof(kZoneCases) / sizeof(kZoneCases[0]);
+	// If this fires, a zone was added to/removed from HtZone without updating
+	// kZoneCases above -- the exhaustiveness this test promises would silently
+	// lapse otherwise.
+	static_assert(kZoneCount == 8, "HtZone case count changed: update kZoneCases in RunCursorMapChecks");
+
+	for (const auto& c : kZoneCases) {
+		ok = Check(GanttCursorForZone(c.zone) == c.expected, c.msg) && ok;
+		// overChromeWidget=false must agree with the bare overload for every zone.
+		ok = Check(GanttCursorForZone(c.zone, false) == c.expected, (std::string(c.msg) + " (overload, no chrome)").c_str()) && ok;
+	}
+
+	// overChromeWidget=true wins over the zone for every zone, including
+	// Outside (a click-through outside-chart point that happens to be over
+	// the toolbar/hover-insert '+'/move grip is Hand, not Default/Arrow/etc.).
+	for (const auto& c : kZoneCases) {
+		ok = Check(GanttCursorForZone(c.zone, true) == HtCursor::Hand,
+			(std::string("cursor: ") + c.msg + " but overChromeWidget=true -> Hand").c_str()) && ok;
+	}
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -348,6 +392,8 @@ int main() {
 	ok = dpiOk && ok;
 	bool menuOk = RunMenuModelChecks();
 	ok = menuOk && ok;
+	bool cursorOk = RunCursorMapChecks();
+	ok = cursorOk && ok;
 	ok = Check(doc.tasks.size() == 2, "model sanity keeps initial tasks") && ok;
 
 	const std::string addedRow = AddRow(doc, "Inserted Row", "row-1");
@@ -417,6 +463,9 @@ int main() {
 	}
 	if (menuOk) {
 		std::printf("MENU MAP OK\n");
+	}
+	if (cursorOk) {
+		std::printf("CURSOR MAP OK\n");
 	}
 	return 0;
 }

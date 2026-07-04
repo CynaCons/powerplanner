@@ -187,3 +187,36 @@ struct HtMenuOp {
 // HtCmd_PercentMinus10 on a Milestone zone (milestones have no percent), or
 // HtCmd_AddTaskThisRow on RowBand background (hasRowId=false).
 HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind = HtItemKind::Task, bool hasRowId = true);
+
+// ---- pure zone -> cursor mapping --------------------------------------------
+// WM_SETCURSOR needs to pick a cursor shape from the hit zone under the
+// pointer. This enum is the pure (COM/Windows-free) output of that mapping —
+// Overlay.cpp's WM_SETCURSOR handler turns each value into a real HCURSOR via
+// LoadCursor(NULL, IDC_...); no HCURSOR appears in this layer so it stays
+// testable from the PowerPoint-free ops harness.
+enum class HtCursor {
+	Arrow,     // default: RowBand, Label, outside any special widget
+	SizeAll,   // TaskBody, Milestone: whole-item move
+	SizeWE,    // TaskEdgeL/TaskEdgeR: horizontal resize
+	Cross,     // EmptyCell: click-drag creates a new task here
+	Hand,      // toolbar / hover-insert-row '+' / move-chart grip chrome widgets
+	Default    // outside the chart and not over any chrome widget: let
+	           // Windows pick (typically arrow), i.e. "we have no opinion"
+};
+
+// Map a semantic hit zone to the cursor Overlay.cpp's WM_SETCURSOR handler
+// should show. Pure function of the zone alone — chrome-widget hits (toolbar
+// button / hover-insert '+' / move grip) are not modeled by HtZone (they are
+// resolved earlier, before hit-testing reaches the chart at all), so callers
+// that are over one of those widgets should pass HtZone::Outside is NOT
+// correct for that case: see GanttCursorForZone's overload below that takes an
+// explicit "over chrome widget" flag for the one ambiguous case (Outside can
+// mean either "over a chrome widget" or "truly outside everything").
+HtCursor GanttCursorForZone(HtZone zone);
+
+// Overload used by the overlay's WM_SETCURSOR handler, which already knows
+// (from its own button/grip/hover-insert hit-testing, done before falling
+// back to the chart hit test) whether the point is over a chrome widget.
+// overChromeWidget wins over the zone (a click-through outside-chart point
+// that happens to be over the toolbar is Hand, not Default).
+HtCursor GanttCursorForZone(HtZone zone, bool overChromeWidget);
