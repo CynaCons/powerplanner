@@ -356,3 +356,15 @@ concurrently with each other or with ppoverlay/ppreflow.
   GanttHitTest (MENU MAP OK gate), TrackPopupMenu on NOACTIVATE via
   SetForegroundWindow+WM_NULL idiom, commands through the standard undo+ops+
   UpdateGantt commit path.
+- overlay-context-menu → validated clean rebuild; OPS+DPI+MENU MAP OK, all 8
+  stages, full suite → 99e6044. Pure zone→menu→op model (MapMenuCommand validates
+  against BuildMenuForZone's own table — can't drift); WM_RBUTTONDOWN selects,
+  UP shows TrackPopupMenuEx (TPM_RETURNCMD, SetForegroundWindow+WM_NULL idiom);
+  commands via standard undo+ops+UpdateGantt path; PP_OVERLAY_NO_MENU env guard
+  for manual smoke. Flicker of the NOACTIVATE popup idiom NOT yet observed
+  (modal menu unautomatable) — ask user during visual pass.
+- cycle 12 — dispatched keyboard-and-cursors (sonnet): WM_SETCURSOR zone cursors
+  (pure CURSOR MAP OK), HOTKEY-verdict keyboard (scoped RegisterHotKey on
+  selection+foreground transitions, Delete/arrows/Shift-arrows), Esc clears
+  selection via tick poll; KEYS harness stage posts WM_HOTKEY (handler-correctness;
+  OS delivery already probe-proven).
