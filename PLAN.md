@@ -527,9 +527,9 @@ reference) · [docs/onslide-v4-plan.md](docs/onslide-v4-plan.md) (14 units in 6
 vertical slices, ground rules, gates, acceptance criteria). Triple acceptance
 per unit: behavioral harness marker + shape-property assertions + slide-export
 PNG vs mockup; user visual review at every slice boundary.
-- [ ] S1 The Look — theme tokens, visual gate, rail label column, hierarchical
+- [x] S1 The Look — theme tokens, visual gate, rail label column, hierarchical
       two-band date header (s1-theme-tokens · s1-visual-gate · s1-rail-labels
-      · s1-hier-axis)
+      · s1-hier-axis) — all 4 units gated green; **awaiting user visual review**
 - [ ] S2 App bar shell — pure model + docked window + global commands
       (s2-appbar-model · s2-appbar-window)
 - [ ] S3 Rows are objects — ops + selection/reorder/indent UX (s3-row-ops ·
