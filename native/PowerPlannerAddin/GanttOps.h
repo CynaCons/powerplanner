@@ -34,6 +34,15 @@ bool SetLabelPlacement(PpDocument& doc, const std::string& taskId, const std::st
 // regardless of each task's own labelPlacement. Always returns true.
 bool SetRailLabelsGlobal(PpDocument& doc, bool on);
 
+// Axis separator-tick density: "auto" | year | quarter | month | week | day |
+// none (empty string is accepted and normalized to "auto"). Returns false for
+// any other value.
+bool SetGridDensity(PpDocument& doc, const std::string& density);
+
+// Bottom-tier tick style: "solid" | "dotted" (empty accepted, normalized to
+// "solid"). Returns false for any other value.
+bool SetGridStyle(PpDocument& doc, const std::string& style);
+
 // Adds a marker (vertical date line + label chip), e.g. "today", "deadline",
 // or "custom". Generates a unique id ("mk<N>") and returns it, mirroring
 // AddRow/AddTask's id-return convention.

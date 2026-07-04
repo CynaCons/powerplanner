@@ -126,6 +126,8 @@ enum HtMenuCmd {
 	HtCmd_ScaleDay,
 	HtCmd_ScaleWeek,
 	HtCmd_ScaleMonth,
+	HtCmd_ScaleQuarter,
+	HtCmd_ScaleYear,
 	HtCmd_AddTaskThisRow,
 	HtCmd_AddRowBelow,
 	HtCmd_DeleteRow,

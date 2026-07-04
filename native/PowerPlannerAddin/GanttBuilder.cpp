@@ -158,8 +158,8 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, 
 //
 // A Prim's (tagKind, tagId) is not a unique shape identity by itself: several
 // prims can legitimately share both (e.g. a bracket emits two BRACKET_TICK
-// prims for the same bracket id; untagged prims — AXIS_GRID/AXIS_LABEL, row
-// dividers, TITLE — share ("", "") entirely). The match key adds an ordinal
+// prims for the same bracket id; the TITLE prim carries a kind but no id, so
+// several kind-only prims share ("KIND", "")). The match key adds an ordinal
 // that counts repeats of the same (tagKind, tagId) pair IN EMISSION ORDER, so
 // as long as BuildGanttScene stays deterministic for a given document shape
 // (it does — same std::vector iteration order every call), the Nth prim of a

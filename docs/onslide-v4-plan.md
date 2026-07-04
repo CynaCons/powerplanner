@@ -156,7 +156,7 @@ freshly inserted chart resemble the mockup.*
     marker `LABEL OPS OK`; GATE-PURE exit 0.
   - AC2 ⚙ conformance `1/1` (sample doc untouched).
   - AC3 ⚙ GATE-FULL floor green.
-- [ ] **s1-hier-axis** — Two-band hierarchical header per spec R3 table +
+- [x] **s1-hier-axis** — Two-band hierarchical header per spec R3 table +
   `gridDensity`/`gridStyle` model fields (backward-compatible JSON) + ops
   `SetGridDensity`/`SetGridStyle` + separator emission with stable ISO tag ids
   + ~150-separator cap with density fallback. Band heights/typography per

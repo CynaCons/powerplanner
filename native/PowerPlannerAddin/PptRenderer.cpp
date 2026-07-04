@@ -55,8 +55,8 @@ std::vector<PowerPoint::ShapePtr> RenderScene(PowerPoint::ShapesPtr shapes, cons
 			lf->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.lineBgr);
 			lf->PutWeight(s.lineWeight);
 			if (s.arrowEnd) lf->PutEndArrowheadStyle(Office::msoArrowheadTriangle);
-			if (p.tagKind == "DEADLINE" || p.tagKind == "TODAY_LINE" || p.tagKind == "AXIS_GRID") {
-				lf->PutDashStyle(p.tagKind == "AXIS_GRID" ? Office::msoLineDashDot : Office::msoLineDash);
+			if (s.dash || p.tagKind == "DEADLINE" || p.tagKind == "TODAY_LINE") {
+				lf->PutDashStyle(s.dash ? Office::msoLineDashDot : Office::msoLineDash);
 			}
 		} else {
 			if (s.fill) sh->GetFill()->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.fillBgr);

@@ -22,6 +22,7 @@ struct Style {
 	TextAlign align = TextAlign::Left;
 	bool arrowEnd = false;        // connectors
 	float corner = 0.0f;          // RoundRect corner radius in points (0 = renderer default)
+	bool dash = false;            // dashed/dotted stroke for Line/Connector
 };
 
 struct Prim {

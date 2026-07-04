@@ -166,6 +166,20 @@ bool SetRailLabelsGlobal(PpDocument& doc, bool on) {
 	return true;
 }
 
+bool SetGridDensity(PpDocument& doc, const std::string& density) {
+	std::string v = density.empty() ? "auto" : density;
+	if (v != "auto" && v != "year" && v != "quarter" && v != "month" && v != "week" && v != "day" && v != "none") return false;
+	doc.gridDensity = (v == "auto") ? "" : v;
+	return true;
+}
+
+bool SetGridStyle(PpDocument& doc, const std::string& style) {
+	std::string v = style.empty() ? "solid" : style;
+	if (v != "solid" && v != "dotted") return false;
+	doc.gridStyle = (v == "solid") ? "" : v;
+	return true;
+}
+
 std::string AddMarker(PpDocument& doc, const std::string& type, const std::string& label, const std::string& dateISO) {
 	PpMarker marker;
 	marker.id = NextId(doc, "mk");

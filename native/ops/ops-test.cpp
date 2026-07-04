@@ -213,13 +213,22 @@ static bool RunMenuModelChecks() {
 		ok = Check(MenuHasCmd(items, HtCmd_NudgePlus1), "task zone menu has Nudge +1") && ok;
 		ok = Check(MenuHasCmd(items, HtCmd_PercentMinus10), "task zone menu has Percent -10") && ok;
 		ok = Check(MenuHasCmd(items, HtCmd_PercentPlus10), "task zone menu has Percent +10") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_ScaleDay) && MenuHasCmd(items, HtCmd_ScaleWeek) && MenuHasCmd(items, HtCmd_ScaleMonth),
-			"task zone menu has Change Scale D/W/M") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_ScaleDay) && MenuHasCmd(items, HtCmd_ScaleWeek) && MenuHasCmd(items, HtCmd_ScaleMonth)
+			&& MenuHasCmd(items, HtCmd_ScaleQuarter) && MenuHasCmd(items, HtCmd_ScaleYear),
+			"task zone menu has Change Scale D/W/M/Q/Y") && ok;
 		// Scale submenu items must actually be tagged as living under "Change Scale".
 		for (const auto& it : items) {
-			if (it.cmdId == HtCmd_ScaleDay || it.cmdId == HtCmd_ScaleWeek || it.cmdId == HtCmd_ScaleMonth) {
+			if (it.cmdId == HtCmd_ScaleDay || it.cmdId == HtCmd_ScaleWeek || it.cmdId == HtCmd_ScaleMonth
+				|| it.cmdId == HtCmd_ScaleQuarter || it.cmdId == HtCmd_ScaleYear) {
 				ok = Check(std::string(it.submenu) == "Change Scale", "scale items are under the Change Scale submenu") && ok;
 			}
+		}
+		// New Quarter/Year commands map to the right scale.
+		{
+			HtMenuOp opq = MapMenuCommand(HtZone::TaskBody, HtCmd_ScaleQuarter);
+			ok = Check(opq.opKind == HtOpKind::SetScale && std::string(opq.scale) == "quarter", "map: ScaleQuarter -> SetScale(quarter)") && ok;
+			HtMenuOp opy = MapMenuCommand(HtZone::TaskBody, HtCmd_ScaleYear);
+			ok = Check(opy.opKind == HtOpKind::SetScale && std::string(opy.scale) == "year", "map: ScaleYear -> SetScale(year)") && ok;
 		}
 	}
 
@@ -761,6 +770,115 @@ static bool RunLabelOpsChecks() {
 	return ok;
 }
 
+// S1 s1-hier-axis: hierarchical two-band header + grid density/style. Print
+// 'GRID OPS OK' when these pass.
+static int CountKind(const Scene& sc, const char* kind) {
+	int c = 0; for (const auto& p : sc.prims) if (p.tagKind == kind) ++c; return c;
+}
+static bool AnyIdPrefix(const Scene& sc, const char* kind, char pfx) {
+	for (const auto& p : sc.prims) if (p.tagKind == kind && !p.tagId.empty() && p.tagId[0] == pfx) return true;
+	return false;
+}
+static bool AllIdsPrefix(const Scene& sc, const char* kind, char pfx) {
+	bool any = false;
+	for (const auto& p : sc.prims) if (p.tagKind == kind) { any = true; if (p.tagId.empty() || p.tagId[0] != pfx) return false; }
+	return any;
+}
+static PpDocument GridDoc(const std::string& start, const std::string& end, const std::string& scale) {
+	PpDocument d; d.scale = scale;
+	d.rows.push_back(PpRow{"r1", "Row 1", "", false});
+	d.tasks.push_back(PpTask{"t1", "T", start, end, "r1", "", 0});
+	return d;
+}
+
+static bool RunGridOpsChecks() {
+	bool ok = true;
+
+	// --- ops validation + round-trip ---
+	PpDocument d = GridDoc("2026-06-01", "2026-08-10", "week");
+	ok = Check(SetGridDensity(d, "month") && d.gridDensity == "month", "SetGridDensity sets month") && ok;
+	ok = Check(SetGridDensity(d, "none") && d.gridDensity == "none", "SetGridDensity sets none") && ok;
+	ok = Check(SetGridDensity(d, "auto") && d.gridDensity.empty(), "SetGridDensity auto normalizes to empty") && ok;
+	ok = Check(!SetGridDensity(d, "bogus"), "SetGridDensity rejects invalid") && ok;
+	ok = Check(SetGridStyle(d, "dotted") && d.gridStyle == "dotted", "SetGridStyle sets dotted") && ok;
+	ok = Check(SetGridStyle(d, "solid") && d.gridStyle.empty(), "SetGridStyle solid normalizes to empty") && ok;
+	ok = Check(!SetGridStyle(d, "bogus"), "SetGridStyle rejects invalid") && ok;
+	SetGridDensity(d, "week"); SetGridStyle(d, "dotted");
+	PpDocument rt = DocumentFromJson(DocumentToJson(d));
+	ok = Check(rt.gridDensity == "week" && rt.gridStyle == "dotted", "round-trip preserves gridDensity/gridStyle") && ok;
+	PpDocument legacy = DocumentFromJson("{\"title\":\"x\",\"tasks\":[{\"id\":\"t\",\"rowId\":\"r\",\"start\":\"2026-01-01\",\"end\":\"2026-01-05\"}]}");
+	ok = Check(legacy.gridDensity.empty() && legacy.gridStyle.empty(), "legacy JSON defaults grid fields empty") && ok;
+
+	Scene sc; std::string mn, mx; long pad = 0; float ppd = 0.0f;
+
+	// --- week: months top band, Monday bottom cells + Monday separators ---
+	{
+		PpDocument w = GridDoc("2026-06-01", "2026-08-10", "week");
+		if (Check(BuildProjectedScene(w, 960.0f, &sc, &mn, &mx, &pad, &ppd), "week scene builds")) {
+			ok = Check(AllIdsPrefix(sc, "AXIS_TOP", 'M'), "week: top band is months") && ok;
+			ok = Check(AllIdsPrefix(sc, "AXIS_BOT", 'W'), "week: bottom band is weeks") && ok;
+			ok = Check(AllIdsPrefix(sc, "AXIS_TICK", 'W'), "week: separators are Monday (week) ticks") && ok;
+			ok = Check(CountKind(sc, "AXIS_MAJOR") >= 1, "week: month major ticks present") && ok;
+			ok = Check(CountKind(sc, "AXIS_BANDDIV") == 1, "week: one band divider") && ok;
+		}
+	}
+
+	// --- quarter: "Q2 2026"-style bottom cells, year top band ---
+	{
+		PpDocument q = GridDoc("2026-02-01", "2026-11-30", "quarter");
+		if (Check(BuildProjectedScene(q, 960.0f, &sc, &mn, &mx, &pad, &ppd), "quarter scene builds")) {
+			ok = Check(AllIdsPrefix(sc, "AXIS_TOP", 'Y'), "quarter: top band is years") && ok;
+			ok = Check(AllIdsPrefix(sc, "AXIS_BOT", 'Q'), "quarter: bottom band is quarters") && ok;
+			bool qLabel = false;
+			for (const auto& p : sc.prims) if (p.tagKind == "AXIS_BOT" && !p.text.empty() && p.text[0] == L'Q') qLabel = true;
+			ok = Check(qLabel, "quarter: a bottom label reads like 'Q2 2026'") && ok;
+		}
+	}
+
+	// --- day: day-number bottom cells, auto-thinned (fewer labels than days) ---
+	{
+		PpDocument dd = GridDoc("2026-01-01", "2026-04-10", "day"); // ~100 days -> step 2
+		if (Check(BuildProjectedScene(dd, 960.0f, &sc, &mn, &mx, &pad, &ppd), "day scene builds")) {
+			long dayCount = DateToDays("2026-04-10") - DateToDays("2026-01-01") + 1;
+			int botCount = CountKind(sc, "AXIS_BOT");
+			ok = Check(AllIdsPrefix(sc, "AXIS_BOT", 'D'), "day: bottom band is days") && ok;
+			ok = Check(botCount > 0 && botCount < (int)dayCount, "day: labels auto-thinned (fewer than days)") && ok;
+		}
+	}
+
+	// --- density override: month ticks over a week-scale header ---
+	{
+		PpDocument w = GridDoc("2026-06-01", "2026-08-10", "week");
+		SetGridDensity(w, "month");
+		if (Check(BuildProjectedScene(w, 960.0f, &sc, &mn, &mx, &pad, &ppd), "override scene builds")) {
+			ok = Check(AllIdsPrefix(sc, "AXIS_TICK", 'M'), "override: gridDensity=month makes ticks month-tier") && ok;
+			ok = Check(AllIdsPrefix(sc, "AXIS_BOT", 'W'), "override: bottom labels stay weeks") && ok;
+		}
+	}
+
+	// --- none: no ticks, bands intact ---
+	{
+		PpDocument w = GridDoc("2026-06-01", "2026-08-10", "week");
+		SetGridDensity(w, "none");
+		if (Check(BuildProjectedScene(w, 960.0f, &sc, &mn, &mx, &pad, &ppd), "none scene builds")) {
+			ok = Check(CountKind(sc, "AXIS_TICK") == 0, "none: no separator ticks") && ok;
+			ok = Check(CountKind(sc, "AXIS_TOP") >= 1 && CountKind(sc, "AXIS_BOT") >= 1, "none: band labels intact") && ok;
+		}
+	}
+
+	// --- cap fallback: multi-year day scale coarsens below the ~150 cap ---
+	{
+		PpDocument dd = GridDoc("2024-01-01", "2026-12-31", "day"); // ~1096 days
+		if (Check(BuildProjectedScene(dd, 960.0f, &sc, &mn, &mx, &pad, &ppd), "cap scene builds")) {
+			int ticks = CountKind(sc, "AXIS_TICK");
+			ok = Check(ticks > 0 && ticks <= 150, "cap: day ticks fall back below ~150") && ok;
+			ok = Check(!AllIdsPrefix(sc, "AXIS_TICK", 'D'), "cap: tick tier coarsened away from per-day") && ok;
+		}
+	}
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -863,6 +981,9 @@ int main() {
 	bool labelOpsOk = RunLabelOpsChecks();
 	ok = labelOpsOk && ok;
 
+	bool gridOpsOk = RunGridOpsChecks();
+	ok = gridOpsOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -889,6 +1010,9 @@ int main() {
 	}
 	if (labelOpsOk) {
 		std::printf("LABEL OPS OK\n");
+	}
+	if (gridOpsOk) {
+		std::printf("GRID OPS OK\n");
 	}
 	return 0;
 }

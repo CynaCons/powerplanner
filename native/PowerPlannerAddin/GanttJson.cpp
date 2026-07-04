@@ -15,6 +15,8 @@ std::string DocumentToJson(const PpDocument& d) {
 	j["title"] = d.title;
 	j["calendar"] = { {"scale", d.scale.empty() ? "week" : d.scale}, {"fiscalYearStart", 1}, {"workingDays", {1, 2, 3, 4, 5}}, {"holidays", json::array()} };
 	if (d.railLabels) j["railLabels"] = true;
+	if (!d.gridDensity.empty()) j["gridDensity"] = d.gridDensity;
+	if (!d.gridStyle.empty()) j["gridStyle"] = d.gridStyle;
 
 	j["rows"] = json::array();
 	for (const auto& r : d.rows) {
@@ -77,6 +79,8 @@ PpDocument DocumentFromJson(const std::string& jsonStr) {
 		if (!scale.empty()) doc.scale = scale;
 	}
 	doc.railLabels = d.value("railLabels", false);
+	doc.gridDensity = getStr(d, "gridDensity");
+	doc.gridStyle = getStr(d, "gridStyle");
 	for (const auto& r : d.value("rows", json::array())) {
 		PpRow row;
 		row.id = getStr(r, "id");

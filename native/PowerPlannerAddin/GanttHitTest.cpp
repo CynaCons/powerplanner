@@ -162,9 +162,11 @@ void AddScaleSubmenu(std::vector<HtMenuItem>& items, bool separatorBeforeHeader)
 	// takes a menu handle, not a cmdId, so HtCmd_None here is correct and
 	// MapMenuCommand never accepts it.
 	items.push_back({ HtCmd_None, "Change Scale", separatorBeforeHeader, "" });
-	items.push_back({ HtCmd_ScaleDay,   "Day",   false, "Change Scale" });
-	items.push_back({ HtCmd_ScaleWeek,  "Week",  false, "Change Scale" });
-	items.push_back({ HtCmd_ScaleMonth, "Month", false, "Change Scale" });
+	items.push_back({ HtCmd_ScaleDay,     "Day",     false, "Change Scale" });
+	items.push_back({ HtCmd_ScaleWeek,    "Week",    false, "Change Scale" });
+	items.push_back({ HtCmd_ScaleMonth,   "Month",   false, "Change Scale" });
+	items.push_back({ HtCmd_ScaleQuarter, "Quarter", false, "Change Scale" });
+	items.push_back({ HtCmd_ScaleYear,    "Year",    false, "Change Scale" });
 }
 
 } // namespace
@@ -269,6 +271,12 @@ HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind, bool hasRowId) 
 		break;
 	case HtCmd_ScaleMonth:
 		op.opKind = HtOpKind::SetScale; op.scale = "month";
+		break;
+	case HtCmd_ScaleQuarter:
+		op.opKind = HtOpKind::SetScale; op.scale = "quarter";
+		break;
+	case HtCmd_ScaleYear:
+		op.opKind = HtOpKind::SetScale; op.scale = "year";
 		break;
 	case HtCmd_AddTaskThisRow:
 		op.opKind = HtOpKind::AddTask; op.needsRowId = true;

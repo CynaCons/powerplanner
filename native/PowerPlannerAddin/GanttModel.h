@@ -47,6 +47,12 @@ struct PpDocument {
 	std::string title;
 	std::string scale = "week";
 	bool railLabels = false;  // global override: render ALL task labels in the rail
+	// Axis separator-tick tier override (labels unchanged): "" = auto (follows
+	// scale) | year | quarter | month | week | day | none. "none" keeps band
+	// labels but draws no plot ticks.
+	std::string gridDensity;
+	// Bottom-tier tick style: "" = solid | solid | dotted.
+	std::string gridStyle;
 	std::vector<PpRow> rows;
 	std::vector<PpTask> tasks;
 	std::vector<PpMilestone> milestones;
