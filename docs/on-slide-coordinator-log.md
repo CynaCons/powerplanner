@@ -272,3 +272,14 @@ concurrently with each other or with ppoverlay/ppreflow.
   (drag would feel broken), lParam-vs-GetCursorPos in drag handling (PostMessage
   testability), drag↔rebuild-in-place ordering contradiction. Holding drag dispatch
   until folded.
+- self-review #3 result — NOT safe as specced; folded: (A1) new g_gestureActive flag
+  (g_mutating makes Tick a no-op → ghost would never paint) + REMOVE the stale
+  mouseUp/ReflowFromSlide block (~1545: pre-V2 leftover, now runs COM reflow on idle
+  ticks after any click-select); (A2) synchronous SetOwnSelection after RebuildChart
+  (COM selectId re-select gets suppressed+mirrored a tick later → visible deselect
+  after every drag); (A3) PP_PROJ parser only in GanttBuilder.cpp:384 — expose or
+  duplicate; (A4) WM_MOUSEMOVE lParam=client coords, g_dragActive latch not endpoint
+  math, WM_CAPTURECHANGED idempotent full-reset, Esc ≤150ms by design. Clean:
+  capture lifecycle, mirror race-free, wheel forwarding (minor GetParent nit),
+  no capture leaks. Same SetOwnSelection rule pre-noted on rebuild-in-place.
+- cycle 6 — dispatched drag-move-resize (sonnet) with amendments.
