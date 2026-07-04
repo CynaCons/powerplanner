@@ -372,6 +372,73 @@ static bool RunCursorMapChecks() {
 	return ok;
 }
 
+// Marker ops checks: AddMarker/SetMarkerDate/SetMarkerLabel, DeleteById's
+// marker-removal branch (DeleteById previously never checked doc.markers),
+// and a JSON round-trip that preserves a "custom" marker's type unchanged.
+// Print 'MARKER OPS OK' when these pass (after OPS HARNESS OK / DPI HELPER
+// OK / MENU MAP OK / CURSOR MAP OK).
+static bool RunMarkerOpsChecks() {
+	bool ok = true;
+
+	PpDocument doc;
+	doc.title = "Marker ops sample";
+	doc.scale = "week";
+
+	const std::string mk1 = AddMarker(doc, "today", "Today", "2026-06-25");
+	ok = Check(!mk1.empty(), "AddMarker returns a non-empty id") && ok;
+	ok = Check(doc.markers.size() == 1, "AddMarker appends a marker") && ok;
+	ok = Check(doc.markers.back().id == mk1 && doc.markers.back().type == "today"
+		&& doc.markers.back().label == "Today" && doc.markers.back().date == "2026-06-25",
+		"AddMarker stores type/label/date under the returned id") && ok;
+
+	const std::string mk2 = AddMarker(doc, "deadline", "Ship it", "2026-07-30");
+	ok = Check(!mk2.empty() && mk2 != mk1, "AddMarker returns a fresh, unique id for a second marker") && ok;
+
+	const std::string mk3 = AddMarker(doc, "custom", "Board review", "2026-08-01");
+	ok = Check(!mk3.empty() && mk3 != mk1 && mk3 != mk2, "AddMarker returns a fresh, unique id for a custom marker") && ok;
+	ok = Check(doc.markers.size() == 3, "AddMarker grew the markers list to 3") && ok;
+
+	ok = Check(SetMarkerDate(doc, mk3, "2026-08-15"), "SetMarkerDate returns true for existing marker") && ok;
+	ok = Check(doc.markers.back().date == "2026-08-15", "SetMarkerDate updates the date") && ok;
+	ok = Check(!SetMarkerDate(doc, "missing-marker", "2026-01-01"), "SetMarkerDate returns false for missing marker") && ok;
+
+	ok = Check(SetMarkerLabel(doc, mk3, "Board review (final)"), "SetMarkerLabel returns true for existing marker") && ok;
+	ok = Check(doc.markers.back().label == "Board review (final)", "SetMarkerLabel updates the label") && ok;
+	ok = Check(!SetMarkerLabel(doc, "missing-marker", "x"), "SetMarkerLabel returns false for missing marker") && ok;
+
+	// JSON round-trip: a "custom" marker's type/label/date/id survive unchanged.
+	{
+		const std::string json = DocumentToJson(doc);
+		PpDocument roundTrip = DocumentFromJson(json);
+		bool foundCustom = false;
+		for (const auto& m : roundTrip.markers) {
+			if (m.id == mk3) {
+				foundCustom = Check(m.type == "custom", "round-trip preserves custom marker's type unchanged")
+					&& Check(m.label == "Board review (final)", "round-trip preserves custom marker's label")
+					&& Check(m.date == "2026-08-15", "round-trip preserves custom marker's date");
+			}
+		}
+		ok = Check(foundCustom, "round-trip finds the custom marker by id") && ok;
+		ok = Check(roundTrip.markers.size() == 3, "round-trip preserves marker count") && ok;
+	}
+
+	// DeleteById: DeleteById previously never checked doc.markers (it only
+	// handled rows/tasks/milestones/brackets/deps), so deleting a marker id
+	// would silently fall through and return false. Confirm the new branch
+	// actually removes it and only it.
+	ok = Check(DeleteById(doc, mk2), "DeleteById removes a marker (deadline)") && ok;
+	ok = Check(doc.markers.size() == 2, "DeleteById shrinks the markers list by one") && ok;
+	bool mk2Gone = true;
+	for (const auto& m : doc.markers) mk2Gone = mk2Gone && m.id != mk2;
+	ok = Check(mk2Gone, "deleted marker is absent") && ok;
+	bool othersRemain = false;
+	for (const auto& m : doc.markers) othersRemain = othersRemain || m.id == mk1;
+	ok = Check(othersRemain, "DeleteById on a marker leaves other markers intact") && ok;
+	ok = Check(!DeleteById(doc, mk2), "DeleteById returns false for an already-deleted marker") && ok;
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -462,6 +529,9 @@ int main() {
 
 	ok = Check(DeleteById(doc, "dep-1") == false, "DeleteById returns false for already cascaded dependency") && ok;
 
+	bool markerOpsOk = RunMarkerOpsChecks();
+	ok = markerOpsOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -476,6 +546,9 @@ int main() {
 	}
 	if (cursorOk) {
 		std::printf("CURSOR MAP OK\n");
+	}
+	if (markerOpsOk) {
+		std::printf("MARKER OPS OK\n");
 	}
 	return 0;
 }

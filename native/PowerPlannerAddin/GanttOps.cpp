@@ -98,6 +98,7 @@ bool DeleteById(PpDocument& doc, const std::string& id) {
 	if (RemoveIf(doc.milestones, [&](const PpMilestone& m) { return m.id == id; })) return true;
 	if (RemoveIf(doc.brackets, [&](const PpBracket& b) { return b.id == id; })) return true;
 	if (RemoveIf(doc.deps, [&](const PpDependency& d) { return d.id == id; })) return true;
+	if (RemoveIf(doc.markers, [&](const PpMarker& m) { return m.id == id; })) return true;
 	return false;
 }
 
@@ -130,6 +131,36 @@ bool SetTaskColor(PpDocument& doc, const std::string& taskId, const std::string&
 	for (auto& task : doc.tasks) {
 		if (task.id == taskId) {
 			task.color = color;
+			return true;
+		}
+	}
+	return false;
+}
+
+std::string AddMarker(PpDocument& doc, const std::string& type, const std::string& label, const std::string& dateISO) {
+	PpMarker marker;
+	marker.id = NextId(doc, "mk");
+	marker.type = type;
+	marker.label = label;
+	marker.date = dateISO;
+	doc.markers.push_back(marker);
+	return marker.id;
+}
+
+bool SetMarkerDate(PpDocument& doc, const std::string& id, const std::string& dateISO) {
+	for (auto& marker : doc.markers) {
+		if (marker.id == id) {
+			marker.date = dateISO;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool SetMarkerLabel(PpDocument& doc, const std::string& id, const std::string& label) {
+	for (auto& marker : doc.markers) {
+		if (marker.id == id) {
+			marker.label = label;
 			return true;
 		}
 	}

@@ -24,4 +24,14 @@ bool SetScale(PpDocument& doc, const std::string& scale);
 // back to the renderer's default theme color. Returns false if taskId is not
 // a task (mirrors SetTaskDates/SetTaskPercent's not-found semantics).
 bool SetTaskColor(PpDocument& doc, const std::string& taskId, const std::string& color);
+
+// Adds a marker (vertical date line + label chip), e.g. "today", "deadline",
+// or "custom". Generates a unique id ("mk<N>") and returns it, mirroring
+// AddRow/AddTask's id-return convention.
+std::string AddMarker(PpDocument& doc, const std::string& type, const std::string& label, const std::string& dateISO);
+// Updates a marker's date. Returns false if id is not a marker.
+bool SetMarkerDate(PpDocument& doc, const std::string& id, const std::string& dateISO);
+// Updates a marker's label. Returns false if id is not a marker.
+bool SetMarkerLabel(PpDocument& doc, const std::string& id, const std::string& label);
+
 int OpsSelfTest();

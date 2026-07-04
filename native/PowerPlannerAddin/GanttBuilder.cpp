@@ -241,30 +241,34 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 		Prim t = scene::text(left, top - 13.0f, width, 12.0f, Widen(label), bl); t.tagKind = "BRACKET_LABEL"; t.tagId = b.id; sc.prims.push_back(t);
 	}
 
-	// Markers (Today line / Deadline lines).
+	// Markers (Today line / Deadline lines / Custom lines). "custom" renders
+	// like "deadline" (vertical line + label chip) but with its own default
+	// accent color (Material Purple) so it's visually distinct from both the
+	// Today line and Deadline lines. (Marker.color is reserved for a future
+	// custom-color override, matching task/milestone/bracket.color, which
+	// are likewise not yet wired into scene construction.)
 	for (const auto& m : doc.markers) {
 		float mx = xToPt(DateToDays(m.date) - vs);
 		if (mx >= MARGIN + ROW_GUTTER && mx <= chartRight) {
+			bool isToday = m.type == "today";
+			bool isDeadline = m.type == "deadline";
+			unsigned long markerColor = isToday ? th.primary : (isDeadline ? 0xD93025 /* Material Red */ : 0x8E24AA /* Material Purple, custom default */);
+
 			Style ms; ms.line = true;
-			if (m.type == "deadline") {
-				ms.lineBgr = Bgr(0xD93025); // Material Red
-				ms.lineWeight = 1.25f;
-			} else {
-				ms.lineBgr = Bgr(th.primary); // Material Blue (Today line)
-				ms.lineWeight = 1.25f;
-			}
+			ms.lineBgr = Bgr(markerColor);
+			ms.lineWeight = 1.25f;
 			Prim ln = scene::line(mx, chartTop - AXIS_H, mx, chartBottom, ms);
-			ln.tagKind = m.type == "deadline" ? "DEADLINE" : "TODAY_LINE";
+			ln.tagKind = isToday ? "TODAY_LINE" : (isDeadline ? "DEADLINE" : "CUSTOM_MARKER");
 			ln.tagId = m.id;
 			sc.prims.push_back(ln);
 
 			Style ml;
-			ml.textBgr = m.type == "deadline" ? Bgr(0xD93025) : Bgr(th.primary);
+			ml.textBgr = Bgr(markerColor);
 			ml.fontSize = 9.0f;
 			ml.align = TextAlign::Left;
 			ml.bold = true;
 			Prim t = scene::text(mx + 4.0f, chartTop - AXIS_H + 2.0f, 96.0f, 12.0f, Widen(m.label), ml);
-			t.tagKind = m.type == "deadline" ? "DEADLINE_LABEL" : "TODAY_LABEL";
+			t.tagKind = isToday ? "TODAY_LABEL" : (isDeadline ? "DEADLINE_LABEL" : "CUSTOM_MARKER_LABEL");
 			t.tagId = m.id;
 			sc.prims.push_back(t);
 		}
