@@ -555,3 +555,12 @@ pumps 500->800ms + pre-settle (timing only). MANUAL-CHECK NOTE: SCOPE now
 exercises the scoping logic via override, not a real OS focus transition; real
 transition was validated at e81c182 - re-verify by eye if scoping code changes.
 Dispatched: marker-model-ops (pure gate, no PowerPoint).
+
+### marker-model-ops — DONE (e795ef7)
+
+Pure gate (build + ops) from clean rebuild, exit 0, MARKER OPS OK. Fixed en
+route: DeleteById never removed markers; custom-type markers rendered as Today
+lines. FINDING folded into material-theme: task/milestone/bracket/marker color
+fields are stored + round-tripped but NEVER consumed by BuildGanttScene - the
+V2 card-editor color swatches are visually inert. material-theme now must wire
+per-element color overrides into scene construction with an ops-test assertion.

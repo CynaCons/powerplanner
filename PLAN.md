@@ -513,7 +513,7 @@ hierarchy · generic movable markers · fit-to-slide under a reserved title zone
 Plan: [docs/on-slide-ux-plan.md §6](docs/on-slide-ux-plan.md); coordination via
 the same gated sub-agent loop as N7 (log: docs/on-slide-coordinator-log.md).
 - [x] V3-1 fit-to-slide (default insert fills slide content area) — done, f2d9796
-- [ ] V3-2 marker-model-ops · V3-3 marker-drag (movable Today/deadline/custom lines)
+- [ ] V3-2 marker-model-ops (done, e795ef7) · V3-3 marker-drag (movable Today/deadline/custom lines)
 - [ ] V3-4 text-model · V3-5 text-interaction (free + anchored text elements)
 - [ ] V3-6 label-placement (on-bar vs left-rail task labels)
 - [ ] V3-7 row-uniform-ux (add/indent/outdent — everything is a row)
