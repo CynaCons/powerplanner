@@ -337,3 +337,12 @@ concurrently with each other or with ppoverlay/ppreflow.
   (VERDICT HOTKEY). Recommended dispatch order: fix-reconcile → dpi → ctx-menu →
   keyboard → floating-editor (most harness-fragile last). 15 units total.
 - cycle 9 — dispatched fix-reconcile-robustness (sonnet).
+- fix-reconcile-robustness → validated clean rebuild; all 8 stages + full suite →
+  ed5c5c7. Post-ungroup section now try/caught with cleanupLoose() (deletes
+  ex-group shapes + this attempt's rendered prims before E_FAIL → fallback starts
+  clean); untagged (empty PP_KIND) children excluded from diff, always survive into
+  regroup; OverlayWndProc wrapped in blanket try/catch → DefWindowProc.
+- cycle 10 — dispatched dpi-and-monitors (sonnet): pure HtScalePx helper +
+  scaled edge band in GanttHitTest, all chrome constants DPI-scaled per tick,
+  PMv2 awareness in harness exes, DPI HELPER OK marker, manual matrix appended
+  to plan §4.2 U10.
