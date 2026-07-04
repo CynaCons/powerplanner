@@ -521,9 +521,11 @@ the same gated sub-agent loop as N7 (log: docs/on-slide-coordinator-log.md).
 - [ ] V3-9 appbar-shell · V3-10 appbar-actions (bottom contextual app bar)
 - [ ] V3-11 dependency-ux (link mode from app bar)
 - [ ] V3-12 context-menu-v3 (menus rebuilt from shared command map)
-- [ ] V3-13 fix-overlay-scoping (BUG: chrome floats over other apps — hide unless
-      PowerPoint foreground; dispatch first)
+- [x] V3-13 fix-overlay-scoping (BUG: chrome floats over other apps — hide unless
+      PowerPoint foreground) — done, e81c182
 - [ ] V3-14 material-theme (Material 3 palette shared by shapes + chrome)
+- [ ] V3-15 harness-input-isolation (gates stop taking over mouse/keyboard/focus —
+      cursor + foreground test seams; runs before any unit that adds harness stages)
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
