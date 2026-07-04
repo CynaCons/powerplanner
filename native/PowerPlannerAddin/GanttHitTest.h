@@ -92,3 +92,98 @@ int HtScalePx(int basePx, int dpi);
 // edges use snap.edgeBandPx (defaults to kHtEdgePx) as the half-width of the
 // edge band, so DPI-scaled snapshots get a proportionally wider hit zone.
 HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y);
+
+// ---- pure right-click context menu model -----------------------------------
+// A menu built from a zone alone (no COM/doc access) so it can be assembled
+// AND unit-tested without PowerPoint. Overlay.cpp turns HtMenuItem lists into
+// a real Win32 popup (CreatePopupMenu/AppendMenuW); ops-test.cpp asserts the
+// zone->items mapping and the (zone,cmdId)->op mapping directly.
+
+// Stable command ids: also used as Win32 menu command ids (WM_COMMAND-style
+// values returned by TrackPopupMenuEx with TPM_RETURNCMD), so they must all be
+// nonzero (0 means "menu dismissed with no selection").
+enum HtMenuCmd {
+	HtCmd_None = 0,
+	HtCmd_AddTaskSameRow,
+	HtCmd_Delete,
+	HtCmd_NudgeMinus1,
+	HtCmd_NudgePlus1,
+	HtCmd_PercentMinus10,
+	HtCmd_PercentPlus10,
+	HtCmd_ScaleDay,
+	HtCmd_ScaleWeek,
+	HtCmd_ScaleMonth,
+	HtCmd_AddTaskThisRow,
+	HtCmd_AddRowBelow,
+	HtCmd_DeleteRow,
+	HtCmd_EmptyCellAddTaskHere,
+	HtCmd_AddRow,
+};
+
+// One flat entry in a (possibly submenu'd) popup menu. Submenu items share the
+// same flat vector; `submenu` names the submenu label they belong under
+// (empty = top-level item). separatorBefore requests a separator drawn ABOVE
+// this item (skipped if it would be the very first item/entry of its menu).
+struct HtMenuItem {
+	int cmdId = HtCmd_None;
+	const char* label = "";
+	bool separatorBefore = false;
+	const char* submenu = ""; // empty = top-level item; non-empty = submenu label
+};
+
+// Build the ordered list of menu items for a right-click at this zone. Empty
+// vector means "no menu" (e.g. Outside the chart but not over any chrome).
+// Mirrors the zone->items table in the on-slide-ux-plan overlay-context-menu
+// task:
+//   TaskBody/Milestone           -> Add Task (same row), Delete, Nudge -1/+1
+//                                   day, (tasks only) Percent -10/+10, Change
+//                                   Scale (D/W/M)
+//   RowBand(rowId set)/Label(ROW_LABEL) -> Add Task (this row), Add Row Below,
+//                                   Delete Row
+//   EmptyCell                    -> Add Task Here
+//   RowBand(empty id, i.e. chart background) / Label(TITLE) / Outside-but-
+//   in-chart                     -> Add Row, Change Scale (D/W/M)
+//
+// `kind` disambiguates HtZone::Label (ROW_LABEL vs TITLE); ignored elsewhere.
+// `hasRowId` disambiguates HtZone::RowBand (a row's gutter, rowId set) from
+// the chart-background case (rowId empty) — both share the same HtZone value
+// (see GanttHitTestPoint), so the caller passes hit.rowId.empty() through
+// here rather than this function re-deriving it. Ignored for every other
+// zone (all of which have their menu fully determined by zone+kind alone).
+std::vector<HtMenuItem> BuildMenuForZone(HtZone zone, HtItemKind kind = HtItemKind::Task, bool hasRowId = true);
+
+// Description of the operation a chosen (zone, cmdId) pair maps to. The
+// overlay's WM_COMMAND-equivalent handler switches on opKind and reads
+// whichever of rowId/taskId/nudgeDays/percentDelta/scale it needs; needsRowId/
+// needsTaskId tell a caller (or ops-test) which identifier the caller must
+// still supply (BuildMenuForZone/MapMenuCommand know only the zone, not which
+// concrete row/task/milestone id was under the cursor — the overlay fills
+// that in from the HtHit that produced the menu).
+enum class HtOpKind {
+	None,           // invalid (zone,cmdId) combination
+	AddTask,        // needsRowId
+	Delete,         // needsTaskId (task or milestone id)
+	DeleteRow,      // needsRowId
+	Nudge,          // needsTaskId; nudgeDays set
+	Percent,        // needsTaskId; percentDelta set
+	SetScale,       // scale set
+	AddRow,         // needsRowId (afterRowId; empty = append)
+	AddTaskAtPoint, // needsRowId; anchor day comes from the click point
+};
+
+struct HtMenuOp {
+	HtOpKind opKind = HtOpKind::None;
+	bool needsRowId = false;
+	bool needsTaskId = false;
+	long nudgeDays = 0;
+	int percentDelta = 0;
+	const char* scale = ""; // "day" | "week" | "month" when opKind == SetScale
+};
+
+// Map a chosen menu command back to the operation it represents, validating
+// that cmdId is actually one of the items BuildMenuForZone(zone,kind,hasRowId)
+// would have offered. Returns HtOpKind::None (all other fields default) for
+// any combination BuildMenuForZone would not produce — e.g. asking for
+// HtCmd_PercentMinus10 on a Milestone zone (milestones have no percent), or
+// HtCmd_AddTaskThisRow on RowBand background (hasRowId=false).
+HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind = HtItemKind::Task, bool hasRowId = true);

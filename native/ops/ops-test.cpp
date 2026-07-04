@@ -162,6 +162,172 @@ static bool RunDpiHelperChecks() {
 	return ok;
 }
 
+// Right-click context menu model checks: BuildMenuForZone's zone->items table
+// and MapMenuCommand's (zone,cmdId)->op mapping, including invalid combos.
+// Print 'MENU MAP OK' when these pass (after OPS HARNESS OK / DPI HELPER OK).
+static bool MenuHasCmd(const std::vector<HtMenuItem>& items, int cmdId) {
+	for (const auto& it : items) if (it.cmdId == cmdId) return true;
+	return false;
+}
+
+static bool RunMenuModelChecks() {
+	bool ok = true;
+
+	// ---- TaskBody / TaskEdgeL / TaskEdgeR: identical menus (edges are still
+	// "the task"). Add Task, Delete, Nudge -1/+1, Percent -10/+10, Change Scale D/W/M.
+	for (HtZone z : { HtZone::TaskBody, HtZone::TaskEdgeL, HtZone::TaskEdgeR }) {
+		auto items = BuildMenuForZone(z);
+		ok = Check(MenuHasCmd(items, HtCmd_AddTaskSameRow), "task zone menu has Add Task") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_Delete), "task zone menu has Delete") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_NudgeMinus1), "task zone menu has Nudge -1") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_NudgePlus1), "task zone menu has Nudge +1") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_PercentMinus10), "task zone menu has Percent -10") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_PercentPlus10), "task zone menu has Percent +10") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_ScaleDay) && MenuHasCmd(items, HtCmd_ScaleWeek) && MenuHasCmd(items, HtCmd_ScaleMonth),
+			"task zone menu has Change Scale D/W/M") && ok;
+		// Scale submenu items must actually be tagged as living under "Change Scale".
+		for (const auto& it : items) {
+			if (it.cmdId == HtCmd_ScaleDay || it.cmdId == HtCmd_ScaleWeek || it.cmdId == HtCmd_ScaleMonth) {
+				ok = Check(std::string(it.submenu) == "Change Scale", "scale items are under the Change Scale submenu") && ok;
+			}
+		}
+	}
+
+	// ---- Milestone: same as task zones but NO Percent items (no percent-complete).
+	{
+		auto items = BuildMenuForZone(HtZone::Milestone);
+		ok = Check(MenuHasCmd(items, HtCmd_AddTaskSameRow), "milestone menu has Add Task") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_Delete), "milestone menu has Delete") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_NudgeMinus1) && MenuHasCmd(items, HtCmd_NudgePlus1), "milestone menu has Nudge -1/+1") && ok;
+		ok = Check(!MenuHasCmd(items, HtCmd_PercentMinus10) && !MenuHasCmd(items, HtCmd_PercentPlus10), "milestone menu has NO Percent items") && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_ScaleDay) && MenuHasCmd(items, HtCmd_ScaleWeek) && MenuHasCmd(items, HtCmd_ScaleMonth),
+			"milestone menu has Change Scale D/W/M") && ok;
+	}
+
+	// ---- RowBand with a row id (a row's gutter) / Label(ROW_LABEL): Add Task
+	// (this row), Add Row Below, Delete Row. No Percent/Nudge/Scale here.
+	for (int variant = 0; variant < 2; ++variant) {
+		std::vector<HtMenuItem> items = (variant == 0)
+			? BuildMenuForZone(HtZone::RowBand, HtItemKind::Task, /*hasRowId=*/true)
+			: BuildMenuForZone(HtZone::Label, HtItemKind::RowLabel);
+		const char* label = (variant == 0) ? "RowBand(rowId)" : "Label(ROW_LABEL)";
+		ok = Check(MenuHasCmd(items, HtCmd_AddTaskThisRow), (std::string(label) + " menu has Add Task").c_str()) && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_AddRowBelow), (std::string(label) + " menu has Add Row Below").c_str()) && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_DeleteRow), (std::string(label) + " menu has Delete Row").c_str()) && ok;
+		ok = Check(!MenuHasCmd(items, HtCmd_AddRow), (std::string(label) + " menu has no background Add Row").c_str()) && ok;
+	}
+
+	// ---- EmptyCell: Add Task Here, nothing else.
+	{
+		auto items = BuildMenuForZone(HtZone::EmptyCell);
+		ok = Check(items.size() == 1 && items[0].cmdId == HtCmd_EmptyCellAddTaskHere, "EmptyCell menu is exactly [Add Task Here]") && ok;
+	}
+
+	// ---- Background (RowBand with empty rowId) / Label(TITLE) / Outside-in-
+	// chart (modeled as RowBand background too, per the spec table): Add Row,
+	// Change Scale D/W/M. No row-specific or task-specific items.
+	for (int variant = 0; variant < 2; ++variant) {
+		std::vector<HtMenuItem> items = (variant == 0)
+			? BuildMenuForZone(HtZone::RowBand, HtItemKind::Task, /*hasRowId=*/false)
+			: BuildMenuForZone(HtZone::Label, HtItemKind::Title);
+		const char* label = (variant == 0) ? "RowBand(background)" : "Label(TITLE)";
+		ok = Check(MenuHasCmd(items, HtCmd_AddRow), (std::string(label) + " menu has Add Row").c_str()) && ok;
+		ok = Check(MenuHasCmd(items, HtCmd_ScaleDay) && MenuHasCmd(items, HtCmd_ScaleWeek) && MenuHasCmd(items, HtCmd_ScaleMonth),
+			(std::string(label) + " menu has Change Scale D/W/M").c_str()) && ok;
+		ok = Check(!MenuHasCmd(items, HtCmd_AddTaskThisRow) && !MenuHasCmd(items, HtCmd_DeleteRow),
+			(std::string(label) + " menu has no row-specific items").c_str()) && ok;
+	}
+
+	// ---- Outside: no menu at all.
+	{
+		auto items = BuildMenuForZone(HtZone::Outside);
+		ok = Check(items.empty(), "Outside zone has no menu") && ok;
+	}
+
+	// ---- MapMenuCommand: valid (zone,cmdId) pairs map to the right op.
+	{
+		HtMenuOp op = MapMenuCommand(HtZone::TaskBody, HtCmd_AddTaskSameRow);
+		ok = Check(op.opKind == HtOpKind::AddTask && op.needsRowId, "map: TaskBody+AddTaskSameRow -> AddTask(needsRowId)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskBody, HtCmd_Delete);
+		ok = Check(op.opKind == HtOpKind::Delete && op.needsTaskId, "map: TaskBody+Delete -> Delete(needsTaskId)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskBody, HtCmd_NudgeMinus1);
+		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId && op.nudgeDays == -1, "map: TaskBody+NudgeMinus1 -> Nudge(-1)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskEdgeR, HtCmd_NudgePlus1);
+		ok = Check(op.opKind == HtOpKind::Nudge && op.nudgeDays == 1, "map: TaskEdgeR+NudgePlus1 -> Nudge(+1)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskBody, HtCmd_PercentMinus10);
+		ok = Check(op.opKind == HtOpKind::Percent && op.needsTaskId && op.percentDelta == -10, "map: TaskBody+PercentMinus10 -> Percent(-10)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskBody, HtCmd_PercentPlus10);
+		ok = Check(op.opKind == HtOpKind::Percent && op.percentDelta == 10, "map: TaskBody+PercentPlus10 -> Percent(+10)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskBody, HtCmd_ScaleWeek);
+		ok = Check(op.opKind == HtOpKind::SetScale && std::string(op.scale) == "week", "map: TaskBody+ScaleWeek -> SetScale(week)") && ok;
+
+		op = MapMenuCommand(HtZone::Milestone, HtCmd_NudgeMinus1);
+		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId, "map: Milestone+NudgeMinus1 -> Nudge (id is the milestone id)") && ok;
+
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddTaskThisRow, HtItemKind::Task, /*hasRowId=*/true);
+		ok = Check(op.opKind == HtOpKind::AddTask && op.needsRowId, "map: RowBand(rowId)+AddTaskThisRow -> AddTask(needsRowId)") && ok;
+
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddRowBelow, HtItemKind::Task, /*hasRowId=*/true);
+		ok = Check(op.opKind == HtOpKind::AddRow && op.needsRowId, "map: RowBand(rowId)+AddRowBelow -> AddRow(needsRowId)") && ok;
+
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_DeleteRow, HtItemKind::Task, /*hasRowId=*/true);
+		ok = Check(op.opKind == HtOpKind::DeleteRow && op.needsRowId, "map: RowBand(rowId)+DeleteRow -> DeleteRow(needsRowId)") && ok;
+
+		op = MapMenuCommand(HtZone::Label, HtCmd_AddTaskThisRow, HtItemKind::RowLabel);
+		ok = Check(op.opKind == HtOpKind::AddTask, "map: Label(ROW_LABEL)+AddTaskThisRow -> AddTask") && ok;
+
+		op = MapMenuCommand(HtZone::EmptyCell, HtCmd_EmptyCellAddTaskHere);
+		ok = Check(op.opKind == HtOpKind::AddTaskAtPoint && op.needsRowId, "map: EmptyCell+AddTaskHere -> AddTaskAtPoint(needsRowId)") && ok;
+
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddRow, HtItemKind::Task, /*hasRowId=*/false);
+		ok = Check(op.opKind == HtOpKind::AddRow && !op.needsRowId, "map: RowBand(background)+AddRow -> AddRow(no row needed)") && ok;
+
+		op = MapMenuCommand(HtZone::Label, HtCmd_ScaleMonth, HtItemKind::Title);
+		ok = Check(op.opKind == HtOpKind::SetScale && std::string(op.scale) == "month", "map: Label(TITLE)+ScaleMonth -> SetScale(month)") && ok;
+	}
+
+	// ---- MapMenuCommand: invalid combos map to HtOpKind::None.
+	{
+		HtMenuOp op = MapMenuCommand(HtZone::Milestone, HtCmd_PercentMinus10);
+		ok = Check(op.opKind == HtOpKind::None, "map: Milestone+PercentMinus10 (no percent) -> None") && ok;
+
+		op = MapMenuCommand(HtZone::Milestone, HtCmd_PercentPlus10);
+		ok = Check(op.opKind == HtOpKind::None, "map: Milestone+PercentPlus10 (no percent) -> None") && ok;
+
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddTaskThisRow, HtItemKind::Task, /*hasRowId=*/false);
+		ok = Check(op.opKind == HtOpKind::None, "map: RowBand(background)+AddTaskThisRow -> None (no row under background)") && ok;
+
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_DeleteRow, HtItemKind::Task, /*hasRowId=*/false);
+		ok = Check(op.opKind == HtOpKind::None, "map: RowBand(background)+DeleteRow -> None") && ok;
+
+		op = MapMenuCommand(HtZone::EmptyCell, HtCmd_Delete);
+		ok = Check(op.opKind == HtOpKind::None, "map: EmptyCell+Delete -> None (EmptyCell only offers Add Task Here)") && ok;
+
+		op = MapMenuCommand(HtZone::Outside, HtCmd_AddRow);
+		ok = Check(op.opKind == HtOpKind::None, "map: Outside+AddRow -> None (Outside has no menu)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskBody, HtCmd_AddRow);
+		ok = Check(op.opKind == HtOpKind::None, "map: TaskBody+AddRow -> None (AddRow is a background-only command)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskBody, HtCmd_DeleteRow);
+		ok = Check(op.opKind == HtOpKind::None, "map: TaskBody+DeleteRow -> None (DeleteRow is a row-oriented command)") && ok;
+
+		op = MapMenuCommand(HtZone::TaskBody, HtCmd_None);
+		ok = Check(op.opKind == HtOpKind::None, "map: cmdId None -> None (menu dismissed)") && ok;
+
+		op = MapMenuCommand(HtZone::Label, HtCmd_AddRow, HtItemKind::RowLabel);
+		ok = Check(op.opKind == HtOpKind::None, "map: Label(ROW_LABEL)+AddRow -> None (background-only command)") && ok;
+	}
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -180,6 +346,8 @@ int main() {
 	ok = RunHitTestChecks() && ok;
 	bool dpiOk = RunDpiHelperChecks();
 	ok = dpiOk && ok;
+	bool menuOk = RunMenuModelChecks();
+	ok = menuOk && ok;
 	ok = Check(doc.tasks.size() == 2, "model sanity keeps initial tasks") && ok;
 
 	const std::string addedRow = AddRow(doc, "Inserted Row", "row-1");
@@ -246,6 +414,9 @@ int main() {
 	std::printf("OPS HARNESS OK\n");
 	if (dpiOk) {
 		std::printf("DPI HELPER OK\n");
+	}
+	if (menuOk) {
+		std::printf("MENU MAP OK\n");
 	}
 	return 0;
 }

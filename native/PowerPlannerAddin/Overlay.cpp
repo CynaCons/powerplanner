@@ -253,6 +253,7 @@ void CancelDragGesture();
 void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId);
 void CommitCreateGesture(const std::string& rowId, long startDay, long endDay);
 float ComputeEmptyCellPxPerDay();
+void ShowContextMenuForHit(const HtHit& hit, POINT clientPt);
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
@@ -1628,6 +1629,32 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 		return 0;
 	}
+	if (msg == WM_RBUTTONDOWN) {
+		// Right-click owns the chart's context menu (V2): hit-test, set the
+		// internal selection to the hit element (standard convention: a
+		// right-click on an unselected item selects it first, same as
+		// PowerPoint's own native behavior), and repaint so the chrome
+		// reflects it before the popup appears. Actually showing/handling the
+		// menu happens on the UP (see WM_RBUTTONUP) — TrackPopupMenuEx wants
+		// TPM_RIGHTBUTTON with the button already released, matching the
+		// standard Windows down-then-up-shows-menu right-click idiom.
+		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		HtHit hit = HitTestClientPoint(pt);
+		ApplyClickSelection(hit);
+		SyncSelectionChromeFromOwnSelection();
+		RequestOverlayRepaint();
+		return 0;
+	}
+	if (msg == WM_RBUTTONUP) {
+		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		HtHit hit = HitTestClientPoint(pt);
+		try {
+			ShowContextMenuForHit(hit, pt);
+		} catch (...) {
+			OvLog(L"context menu display/handling failed");
+		}
+		return 0;
+	}
 	if (msg == WM_LBUTTONDBLCLK) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		HtHit hit = HitTestClientPoint(pt);
@@ -2311,6 +2338,237 @@ void HandleHoverInsertRow() {
 		OvLog(L"unknown error during hover row insert");
 	}
 	g_mutating = false;
+}
+
+// Execute the operation MapMenuCommand described for a chosen right-click
+// menu command, given the HtHit that produced the menu (supplies whichever of
+// rowId/taskId the op needs) and, for HtOpKind::AddTaskAtPoint, the client
+// point the menu was invoked at (to derive the new task's anchor day, mirroring
+// StartCreateGesture's EmptyCell math). Follows the standard commit pattern:
+// read PP_DOC, apply the GanttOps mutation, RebuildChart (which itself calls
+// StartNewUndoEntryIfPossible before mutating), then synchronously
+// SetOwnSelection so the edited/created item is selected without a
+// deselect-then-reselect flicker (same reasoning as CommitDragGesture/
+// CommitCreateGesture — the hit snapshot is invalidated by RebuildChart, so
+// SyncSelectionChromeFromOwnSelection must wait for the next Tick()).
+void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT clientPt) {
+	if (op.opKind == HtOpKind::None) return;
+	if (!g_app || g_mutating) return;
+
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (json.empty()) { g_mutating = false; return; }
+		PpDocument doc = DocumentFromJson(json);
+
+		std::string selectId;
+		std::string selectKind;
+		bool changed = false;
+
+		switch (op.opKind) {
+		case HtOpKind::AddTask: {
+			// hit.id is the task/milestone id for TaskBody/Edge/Milestone
+			// zones; hit.rowId (via hit.id, since RowBand/Label report the
+			// row id in HtHit::id too) covers the row-oriented zones.
+			std::string rowId = !hit.rowId.empty() ? hit.rowId : RowForSelection(doc, hit.kind == HtItemKind::Milestone ? "MILESTONE" : "TASK", hit.id);
+			if (!rowId.empty()) {
+				std::string start, end;
+				DefaultTaskDates(doc, rowId, hit.id, start, end);
+				selectId = AddTask(doc, rowId, "New Task", start, end);
+				changed = !selectId.empty();
+				selectKind = "TASK";
+			}
+			break;
+		}
+		case HtOpKind::Delete: {
+			selectId.clear();
+			changed = DeleteById(doc, hit.id);
+			break;
+		}
+		case HtOpKind::DeleteRow: {
+			selectId.clear();
+			changed = DeleteById(doc, hit.rowId);
+			break;
+		}
+		case HtOpKind::Nudge: {
+			changed = NudgeTask(doc, hit.id, op.nudgeDays);
+			if (!changed) {
+				// Milestones have no length; a "nudge" shifts the date directly
+				// (mirrors CommitDragGesture's milestone-drag fallback).
+				for (auto& ms : doc.milestones) {
+					if (ms.id == hit.id) {
+						ms.date = DaysToDate(DateToDays(ms.date) + op.nudgeDays);
+						changed = true;
+						break;
+					}
+				}
+				selectKind = "MILESTONE";
+			} else {
+				selectKind = "TASK";
+			}
+			if (changed) selectId = hit.id;
+			break;
+		}
+		case HtOpKind::Percent: {
+			if (const PpTask* task = FindTask(doc, hit.id)) {
+				int newPct = task->percent + op.percentDelta;
+				if (newPct < 0) newPct = 0;
+				if (newPct > 100) newPct = 100;
+				if (newPct != task->percent) {
+					changed = SetTaskPercent(doc, hit.id, newPct);
+					if (changed) { selectId = hit.id; selectKind = "TASK"; }
+				}
+			}
+			break;
+		}
+		case HtOpKind::SetScale: {
+			changed = SetScale(doc, op.scale);
+			break;
+		}
+		case HtOpKind::AddRow: {
+			// needsRowId => "Add Row Below" (afterRowId = hit.rowId); the
+			// background "Add Row" command has needsRowId == false and
+			// appends (AddRow's empty-afterRowId behavior).
+			std::string afterRowId = op.needsRowId ? hit.rowId : "";
+			std::string rowId = AddRow(doc, "New Row", afterRowId);
+			changed = !rowId.empty();
+			break;
+		}
+		case HtOpKind::AddTaskAtPoint: {
+			// Mirrors StartCreateGesture's EmptyCell anchor-day derivation: no
+			// task rect at this point to read a day from directly, so anchor
+			// against a reference task already in the (still-valid, since we
+			// have not rebuilt yet) hit snapshot. Falls back to a 7-day span.
+			float pxPerDay = ComputeEmptyCellPxPerDay();
+			if (pxPerDay > 0.0f) {
+				bool haveRef = false;
+				long refDay = 0;
+				long refScreenX = 0;
+				for (const auto& item : g_hitSnapshot.items) {
+					if (item.kind != HtItemKind::Task) continue;
+					const PpTask* task = FindTask(doc, item.id);
+					if (!task) continue;
+					refDay = DateToDays(task->start);
+					refScreenX = item.rect.left;
+					haveRef = true;
+					break;
+				}
+				if (haveRef) {
+					long screenX = clientPt.x + g_windowOriginX;
+					long anchorDay = refDay + (long)::lround((double)(screenX - refScreenX) / (double)pxPerDay);
+					std::string startISO = DaysToDate(anchorDay);
+					std::string endISO = DaysToDate(anchorDay + 6); // default ~1 week span
+					selectId = AddTask(doc, hit.rowId, "New task", startISO, endISO);
+					changed = !selectId.empty();
+					selectKind = "TASK";
+				}
+			}
+			break;
+		}
+		case HtOpKind::None:
+		default:
+			break;
+		}
+
+		if (changed) {
+			RebuildChart(doc, selectId);
+			if (!selectId.empty() && !selectKind.empty()) {
+				SetOwnSelection(selectKind, selectId);
+			}
+			RequestOverlayRepaint();
+			wchar_t buf[160];
+			::swprintf_s(buf, 160, L"context menu op %d applied (id=%hs)", (int)op.opKind, hit.id.c_str());
+			OvLog(buf);
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error during context menu command");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error during context menu command");
+	}
+	catch (...) {
+		OvLog(L"unknown error during context menu command");
+	}
+	g_mutating = false;
+}
+
+// Build a real Win32 popup menu from BuildMenuForZone(hit's zone) and show it
+// via TrackPopupMenuEx, then execute whatever command the user picked. NOACTIVATE
+// windows (WS_EX_NOACTIVATE, like this overlay) do not become the foreground
+// window on their own, and Win32 popup menus need SOME window to be foreground
+// to behave correctly (dismiss on outside click, keyboard nav, etc.) — this is
+// the documented workaround: SetForegroundWindow(g_hwnd) immediately before
+// TrackPopupMenuEx, and PostMessage(g_hwnd, WM_NULL, 0, 0) immediately after,
+// per the well-known "NOACTIVATE + TrackPopupMenu" idiom (the WM_NULL nudges
+// the message queue so the menu's internal modal loop reliably tears down).
+// TrackPopupMenu is a genuinely modal call — it pumps its own message loop
+// until dismissed, so this whole function only returns after the user has
+// picked an item (or cancelled). Skipped entirely under the ops harness (env
+// var PP_OVERLAY_NO_MENU set): posting WM_RBUTTONDOWN/UP in that environment
+// still exercises hit-testing + selection without blocking on a real modal menu.
+void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
+	if (hit.zone == HtZone::Outside) return;
+	bool hasRowId = !hit.rowId.empty();
+	std::vector<HtMenuItem> items = BuildMenuForZone(hit.zone, hit.kind, hasRowId);
+	if (items.empty()) return;
+
+	// Under the ops/harness smoke check, skip showing the actual modal popup
+	// (it cannot be automated in-process) — selection is already set by the
+	// caller before this function runs, which is all that check verifies.
+	if (::GetEnvironmentVariableW(L"PP_OVERLAY_NO_MENU", NULL, 0) > 0) return;
+
+	HMENU menu = ::CreatePopupMenu();
+	if (!menu) return;
+	// name -> submenu HMENU, created + attached to the top-level menu (as an
+	// MF_POPUP entry) lazily the first time an item references it.
+	std::vector<std::pair<std::string, HMENU>> submenus;
+	auto submenuFor = [&](const std::string& name) -> HMENU {
+		for (auto& p : submenus) if (p.first == name) return p.second;
+		HMENU sub = ::CreatePopupMenu();
+		submenus.push_back({ name, sub });
+		::AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR)sub, Widen(name).c_str());
+		return sub;
+	};
+
+	for (const auto& item : items) {
+		bool inSubmenu = item.submenu && item.submenu[0] != '\0';
+		// The "Change Scale" HEADER entry (HtCmd_None, submenu=="") only
+		// exists in BuildMenuForZone's list to carry separatorBefore for the
+		// header itself; submenuFor() below appends the actual MF_POPUP
+		// header when the first Day/Week/Month leaf is seen, so this entry
+		// contributes nothing here beyond the separator (handled next).
+		if (item.cmdId == HtCmd_None && !inSubmenu) {
+			if (item.separatorBefore) ::AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+			continue;
+		}
+		if (inSubmenu) {
+			HMENU sub = submenuFor(item.submenu);
+			::AppendMenuW(sub, MF_STRING, (UINT_PTR)item.cmdId, Widen(item.label).c_str());
+			continue;
+		}
+		if (item.separatorBefore) ::AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+		::AppendMenuW(menu, MF_STRING, (UINT_PTR)item.cmdId, Widen(item.label).c_str());
+	}
+
+	POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
+
+	// NOACTIVATE idiom: force foreground before, nudge the queue after.
+	::SetForegroundWindow(g_hwnd);
+	int cmd = ::TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+		screenPt.x, screenPt.y, g_hwnd, NULL);
+	::PostMessageW(g_hwnd, WM_NULL, 0, 0);
+
+	::DestroyMenu(menu); // destroys owned submenus recursively
+
+	if (cmd > 0) {
+		HtMenuOp op = MapMenuCommand(hit.zone, cmd, hit.kind, hasRowId);
+		try {
+			HandleContextMenuCommand(op, hit, clientPt);
+		} catch (...) {
+			OvLog(L"context menu command execution failed");
+		}
+	}
 }
 
 // Poll the slide; keep the overlay over the chart while selection chrome follows
