@@ -517,10 +517,13 @@ the same gated sub-agent loop as N7 (log: docs/on-slide-coordinator-log.md).
 - [ ] V3-4 text-model · V3-5 text-interaction (free + anchored text elements)
 - [ ] V3-6 label-placement (on-bar vs left-rail task labels)
 - [ ] V3-7 row-uniform-ux (add/indent/outdent — everything is a row)
-- [ ] V3-8 grid-scale-options (timescale grid visibility/style)
+- [ ] V3-8 grid-scale-options (five real scales Y/Q/M/W/D + separator density/style)
 - [ ] V3-9 appbar-shell · V3-10 appbar-actions (bottom contextual app bar)
 - [ ] V3-11 dependency-ux (link mode from app bar)
 - [ ] V3-12 context-menu-v3 (menus rebuilt from shared command map)
+- [ ] V3-13 fix-overlay-scoping (BUG: chrome floats over other apps — hide unless
+      PowerPoint foreground; dispatch first)
+- [ ] V3-14 material-theme (Material 3 palette shared by shapes + chrome)
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons

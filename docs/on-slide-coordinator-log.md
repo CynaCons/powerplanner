@@ -443,3 +443,33 @@ self-review pre-dispatch and every ~3 units.
 Standing V2 lessons that apply verbatim: hardcoded bat source lists (new .cpp →
 every bat); snapshot gesture state before ReleaseCapture; time-bounded harness
 pumps; SetOwnSelection-only after RebuildChart; SetCursorPos lockstep in harness.
+
+### V3 pre-dispatch review + user feedback fold (2026-07-04)
+
+Pre-dispatch Sonnet review of the 12-unit backlog: 6 actionable findings, all
+folded into the DB: (1) DeleteById does NOT handle markers (claim corrected to
+definitive); (2) context-menu-v3 gate was VACUOUS (MENU MAP OK already prints) →
+new distinct marker MENU MAP V3 OK; (3) AddMilestone op does not exist → made a
+definitive sub-task; (5/6) no harness hook exposes widget rects or selection KIND
+(Overlay_GetSelectedIdForTest returns id only) → appbar-shell adds
+OverlayAppBarButtonRectForTest, text-interaction adds Overlay_GetSelectedKindForTest;
+(9) fit-to-slide FIT assertion must force rc=1 on failure (reflow rc pattern);
+(10) SetGridStyleLine→SetGridStyle naming reconciled. Coordinator note (finding 8):
+label-placement / grid-scale-options / text-model all edit GanttBuilder emission —
+serialize them (serial dispatch is the default anyway).
+
+Second user feedback wave folded as units 13-14 + a rewrite:
+- fix-overlay-scoping (V3-13, URGENT user bug): overlay chrome visible over other
+  apps (CurseForge) — TOPMOST overlay never checks foreground/iconic. Dispatch FIRST.
+  Includes the harness trap: after the fix the harness itself must foreground
+  PowerPoint or every posted-mouse stage dies.
+- material-theme (V3-14): Material 3 tonal palette in new pure GanttTheme.h, shared
+  by shape emitter AND overlay chrome; slide-export PNG artifact for coordinator
+  visual inspection.
+- grid-scale-options REWRITTEN: verified doc.scale does not affect rendering today
+  (header always months; SetScale already accepts all five values; ribbon handlers
+  exist). Now: two-tier axis per scale, gridDensity override (auto/.../none),
+  gridStyle solid|dotted, separator cap ~150, deliberate fixture regen.
+
+appbar-shell amended: obeys foreground scoping, painted from GanttTheme.h, Grid
+cycle + five-scale control; deps now include V3-13 + V3-14. Backlog: 14 pending.
