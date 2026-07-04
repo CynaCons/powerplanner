@@ -499,3 +499,17 @@ DISPATCH ORDER: fix-overlay-scoping (user bug) -> fit-to-slide ->
 marker-model-ops -> marker-drag -> text-model -> text-interaction ->
 label-placement -> row-uniform-ux -> grid-scale-options -> material-theme ->
 appbar-shell -> appbar-actions -> dependency-ux -> context-menu-v3.
+
+### fix-overlay-scoping — DONE (e81c182)
+
+Gate: full suite + new SCOPE stage, validated from clean rebuild, exit 0.
+Attempt 1 FAILED coordinator validation: KEYS went nondeterministic (~50%) with
+two symptoms (wrong re-select target; Delete hotkey ignored). Root cause: the
+harness EnsureForeground Alt-tap polluted Alt keystate - Alt is ALSO the
+overlay NCHITTEST pass-through hatch, so posted clicks intermittently bypassed
+the overlay. Fix: plain SetForegroundWindow first, Alt-tap only as fallback
+with force-released Alt (both scancodes, GetAsyncKeyState-verified, 500ms
+bound) + 300ms settle pump. Agent then proved 3 consecutive green harness runs;
+coordinator clean-rebuild run also green. NEW STANDING RULE: any harness helper
+that synthesizes modifier keys must verify-release them before returning (Alt
+doubles as the overlay escape hatch).
