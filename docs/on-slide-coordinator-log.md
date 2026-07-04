@@ -308,3 +308,20 @@ concurrently with each other or with ppoverlay/ppreflow.
   (GROUPING_WORKS), diff-based UpdateGantt (move/resize by PP_ID, add/remove deltas
   only, no regroup on pure moves), InsertGantt kept as fallback, INPLACE harness
   stage asserts same chart-root COM identity + stable child count.
+- rebuild-in-place → validated clean rebuild; all 8 stages PASS (incl. INPLACE:
+  same chart-root COM identity, stable child count) + full suite → 1f7fef3.
+  UpdateGantt reconciles by (PP_KIND,PP_ID,ordinal): pure move/resize = property
+  writes only (no regroup); structural = ungroup/delete/add/regroup/retag;
+  InsertGantt fallback on failure. StartNewUndoEntry per gesture at RebuildChart +
+  MutateChart choke points (GROUPING_WORKS). Agent fixed 4 real bugs: untagged prims
+  got stable ids (row/month/milestone); Ungroup() invalidates pre-ungroup Shape
+  pointers (re-derive from post-ungroup range); TextFrame AutoSize fought explicit
+  heights (ppAutoSizeNone); harness capture race (real WM_MOUSEMOVE interleaves
+  with posted ones → SetCursorPos in lockstep). Residual: structural reconcile of
+  SUMMARY/BRACKET/DEP kinds exercised only incidentally; registered add-in runs a
+  second overlay instance during harness runs (environmental, pre-existing).
+- self-review #4 dispatched (3 units since checkpoint; UpdateGantt rewrote the
+  mutation path all remaining units sit on) over the three drag/rebuild diffs +
+  the 4 remaining specs (floating-editor, overlay-context-menu,
+  keyboard-and-cursors, dpi-and-monitors) incl. harness-contamination questions
+  and dispatch-order recommendation. Holding dispatch until folded.
