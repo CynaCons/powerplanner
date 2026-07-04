@@ -107,7 +107,7 @@ const int kDragThresholdPx = 4;
 // without ever early-returning (the ghost still needs to paint every tick).
 bool g_gestureActive = false;
 bool g_dragActive = false;
-enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, Milestone };
+enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, Milestone, Create };
 DragKind g_dragKind = DragKind::None;
 std::string g_dragId;          // task or milestone PP_ID being dragged
 RECT g_dragAnchorRect = {};    // original screen rect of the dragged item at gesture start
@@ -116,6 +116,28 @@ std::string g_dragOrigEnd;     // original ISO end date (task); empty for milest
 float g_dragPxPerDay = 0.0f;   // SCREEN pixels-per-day for this gesture (see ComputeDragPxPerDay)
 long g_dragDeltaDays = 0;      // current candidate day delta (updated on move)
 POINT g_dragLastPt = {};       // last client point seen during the drag
+
+// Row-reassign (vertical) part of a TaskBody drag: the row band id under the
+// current drag point, and its screen rect. Recomputed every WM_MOUSEMOVE from
+// the (per-tick-cached) g_rowBands; empty g_dragTargetRowId means "no row
+// band under the pointer right now" (e.g. above/below the chart), in which
+// case the vertical retarget is simply skipped for that move (horizontal
+// ghost/date math is unaffected). Only meaningful when g_dragKind ==
+// DragKind::TaskBody; edges/milestones never retarget rows.
+std::string g_dragOrigRowId;    // task's row at gesture start
+std::string g_dragTargetRowId;  // row band currently under the pointer (may equal orig)
+RECT g_dragTargetRowRect = {};  // screen rect of that row band (for the ghost's y-position)
+
+// ---- create-on-EmptyCell gesture state --------------------------------------
+// Started on WM_LBUTTONDOWN over an EmptyCell(rowId) hit. Reuses g_dragKind ==
+// DragKind::Create / g_gestureActive / g_dragActive / g_dragLastPt (the
+// existing threshold-latch + repaint-on-move plumbing in UpdateDragGesture)
+// but tracks its own anchor/target day pair rather than a day DELTA, because a
+// create-drag has no "original" task to offset — it defines a brand new span
+// from the down point to the current point (and can extend either direction).
+std::string g_createRowId;     // row band the create gesture is anchored in
+long g_createAnchorDay = 0;    // ISO day number under the down-point
+long g_createCurrentDay = 0;   // ISO day number under the current point (updated on move)
 std::wstring g_badge = L"PowerPlanner";
 RECT g_buttonRects[BUTTON_COUNT] = {};
 RECT g_frameRect = {};
@@ -190,7 +212,9 @@ void OpenInlineEditor(const EditRegion& region);
 void CommitInlineEdit();
 void CancelInlineEdit();
 void CancelDragGesture();
-void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays);
+void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId);
+void CommitCreateGesture(const std::string& rowId, long startDay, long endDay);
+float ComputeEmptyCellPxPerDay();
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
@@ -828,6 +852,12 @@ void ResetDragGestureState() {
 	g_dragPxPerDay = 0.0f;
 	g_dragDeltaDays = 0;
 	g_dragLastPt = {};
+	g_dragOrigRowId.clear();
+	g_dragTargetRowId.clear();
+	::SetRectEmpty(&g_dragTargetRowRect);
+	g_createRowId.clear();
+	g_createAnchorDay = 0;
+	g_createCurrentDay = 0;
 }
 
 // SCREEN-PIXELS-per-day for the gesture. WM_MOUSEMOVE deltas are screen
@@ -914,6 +944,20 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 		g_dragOrigEnd = task->end;
 		long spanDays = DateToDays(task->end) - DateToDays(task->start) + 1;
 		g_dragPxPerDay = ComputeDragPxPerDay(anchorRect, spanDays);
+		if (g_dragKind == DragKind::TaskBody) {
+			// Row-reassign only applies to whole-bar (body) drags, not edge
+			// resizes: retarget the ghost's row using the row band under the
+			// CURRENT drag point, tracked from WM_MOUSEMOVE (see
+			// UpdateDragGesture). Seed both orig and target with the task's
+			// row at gesture start so a drag that never leaves the row is a
+			// no-op vertically.
+			g_dragOrigRowId = task->rowId;
+			g_dragTargetRowId = task->rowId;
+			g_dragTargetRowRect = anchorRect; // refined below if a band is found
+			for (const auto& band : g_rowBands) {
+				if (band.rowId == task->rowId) { g_dragTargetRowRect = band.screenRect; break; }
+			}
+		}
 	}
 	if (g_dragPxPerDay <= 0.0f) { ResetDragGestureState(); return; }
 
@@ -923,9 +967,93 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 	g_gestureActive = true;
 }
 
+// px-per-day for a CREATE gesture anchored on an EmptyCell (no task rect to
+// derive scale from at the anchor point itself). Reuses ComputeDragPxPerDay's
+// "scan the snapshot for any task with a usable day-span" fallback path by
+// passing an empty anchor rect / zero span, so the scale always comes from an
+// existing task's rect-width / day-span — the same axis all tasks share.
+float ComputeEmptyCellPxPerDay() {
+	RECT empty = {};
+	return ComputeDragPxPerDay(empty, 0);
+}
+
+// Begin a create-on-EmptyCell gesture: anchors a brand-new task span at the
+// day under the down point, in the row the EmptyCell hit reports. Mirrors
+// StartDragGesture's "read doc once, everything else off the snapshot"
+// pattern so WM_MOUSEMOVE handling stays COM-free.
+void StartCreateGesture(const HtHit& hit, POINT downPt) {
+	ResetDragGestureState();
+	if (hit.zone != HtZone::EmptyCell || hit.rowId.empty()) return;
+	if (!g_app) return;
+
+	float pxPerDay = ComputeEmptyCellPxPerDay();
+	if (pxPerDay <= 0.0f) return;
+
+	// Derive the anchor day from the down-point x. There is no task rect at
+	// an EmptyCell point to read a day directly from, so instead anchor
+	// against a REFERENCE task already in the snapshot: its rect.left is a
+	// known (day, screen-x) pair (day = task.start, screen-x = rect.left),
+	// and every task shares the same time axis (pxPerDay), so the anchor day
+	// is that reference day plus/minus the screen-pixel offset from the
+	// reference, divided by pxPerDay. This is the documented choice for A4's
+	// "derive px-per-day... or from any task rect in the snapshot" — using a
+	// task rect as the (day, x) reference point avoids a second COM call
+	// beyond the one doc read ComputeEmptyCellPxPerDay's fallback already
+	// performs (that read is reused below via a fresh ReadGanttFromSlide,
+	// which is cheap/idempotent and keeps this function self-contained).
+	std::string json = ReadGanttFromSlide(g_app);
+	if (json.empty()) return;
+	PpDocument doc = DocumentFromJson(json);
+	bool haveRef = false;
+	long refDay = 0;
+	long refScreenX = 0;
+	for (const auto& item : g_hitSnapshot.items) {
+		if (item.kind != HtItemKind::Task) continue;
+		const PpTask* task = FindTask(doc, item.id);
+		if (!task) continue;
+		refDay = DateToDays(task->start);
+		refScreenX = item.rect.left;
+		haveRef = true;
+		break;
+	}
+	if (!haveRef) return;
+
+	long anchorDay = refDay + (long)::lround((double)(downPt.x + g_windowOriginX - refScreenX) / (double)pxPerDay);
+
+	g_dragKind = DragKind::Create;
+	g_createRowId = hit.rowId;
+	g_createAnchorDay = anchorDay;
+	g_createCurrentDay = anchorDay;
+	g_dragPxPerDay = pxPerDay;
+	for (const auto& band : g_rowBands) {
+		if (band.rowId == hit.rowId) { g_dragTargetRowRect = band.screenRect; break; }
+	}
+	g_dragLastPt = downPt;
+	g_gestureActive = true;
+	// Note: g_dragActive latches later, in UpdateDragGesture, exactly like the
+	// move/resize path — a create gesture that never crosses the threshold is
+	// still a plain click (no task created), per ApplyClickSelection's
+	// existing EmptyCell -> ClearOwnSelection handling.
+}
+
+// Row band (from the current per-tick g_rowBands) whose y-range contains the
+// given SCREEN y, or nullptr if none (e.g. above/below the chart). Screen
+// space to match g_rowBands' screenRect (see BuildRowBands).
+const RowBand* RowBandAtScreenY(long screenY) {
+	for (const auto& band : g_rowBands) {
+		if (screenY >= band.screenRect.top && screenY < band.screenRect.bottom) return &band;
+	}
+	return nullptr;
+}
+
 // Recompute the candidate day delta from the total horizontal displacement
 // since the gesture anchor (not incremental per-move deltas, so rounding
 // never accumulates drift) and request a repaint if it changed the ghost.
+// For a TaskBody drag, also retargets the row band under the CURRENT point
+// (vertical reassignment) combined with the same horizontal day-shift. For a
+// Create gesture, recomputes the candidate day under the current point
+// (anchor day is fixed; current day tracks the pointer, so dragging left of
+// the anchor is a valid "growing left" span exactly like the task spec asks).
 void UpdateDragGesture(POINT pt) {
 	if (!g_gestureActive) return;
 	g_dragLastPt = pt;
@@ -938,13 +1066,29 @@ void UpdateDragGesture(POINT pt) {
 			return; // still within click threshold: no ghost yet
 		}
 	}
-	long newDelta = (g_dragPxPerDay > 0.0f) ? (long)::lround((double)dx / (double)g_dragPxPerDay) : 0;
-	if (newDelta != g_dragDeltaDays) {
-		g_dragDeltaDays = newDelta;
+
+	if (g_dragKind == DragKind::Create) {
+		long newDay = g_createAnchorDay + (long)::lround((double)dx / (double)g_dragPxPerDay);
+		g_createCurrentDay = newDay;
 		RequestOverlayRepaint();
-	} else {
-		RequestOverlayRepaint(); // A2/task spec: repaint on each move (cheap)
+		return;
 	}
+
+	long newDelta = (g_dragPxPerDay > 0.0f) ? (long)::lround((double)dx / (double)g_dragPxPerDay) : 0;
+	g_dragDeltaDays = newDelta;
+
+	if (g_dragKind == DragKind::TaskBody) {
+		long screenY = pt.y + g_windowOriginY;
+		if (const RowBand* band = RowBandAtScreenY(screenY)) {
+			g_dragTargetRowId = band->rowId;
+			g_dragTargetRowRect = band->screenRect;
+		}
+		// If no band is under the pointer (above/below the chart), keep the
+		// last valid target — the ghost stays at the last row it was over
+		// rather than snapping away, and the horizontal shift still updates.
+	}
+
+	RequestOverlayRepaint(); // A2/task spec: repaint on each move (cheap)
 }
 
 // Compute the candidate dates for a gesture (original dates shifted by the
@@ -996,7 +1140,8 @@ void CancelDragGesture() {
 // Commit on WM_LBUTTONUP with an active drag: mutate the document via
 // GanttOps and rebuild, then re-apply the internal selection (A2) so the
 // dragged item stays selected instead of flickering to deselected. A
-// zero-day delta is a no-op — no rebuild, no undo pollution.
+// zero-day delta AND an unchanged row is a no-op — no rebuild, no undo
+// pollution (a pure row-reassign with zero horizontal shift still commits).
 //
 // Takes the gesture snapshot as PARAMETERS rather than reading the live
 // g_drag* globals: the caller (WM_LBUTTONUP) must call ::ReleaseCapture()
@@ -1005,8 +1150,13 @@ void CancelDragGesture() {
 // CancelDragGesture() (to cover the externally-stolen-capture case) and
 // would otherwise wipe g_gestureActive/g_dragActive/g_dragKind/etc. out from
 // under this function before it ever ran.
-void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays) {
-	if (deltaDays == 0 || !g_app || g_mutating) return;
+//
+// targetRowId is only meaningful for DragKind::TaskBody (row-reassign); pass
+// "" for edge/milestone drags where no row retarget applies.
+void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId) {
+	bool rowChangeRequested = (kind == DragKind::TaskBody) && !targetRowId.empty();
+	if (deltaDays == 0 && !rowChangeRequested) return;
+	if (!g_app || g_mutating) return;
 
 	g_mutating = true;
 	try {
@@ -1029,7 +1179,21 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays) {
 				}
 				selKind = "MILESTONE";
 			} else if (kind == DragKind::TaskBody) {
-				changed = NudgeTask(doc, id, deltaDays);
+				// Row-reassign first (only if the target row actually differs
+				// from the task's CURRENT row — re-read fresh, not the gesture-
+				// start g_dragOrigRowId, since nothing else mutates the doc
+				// between gesture start and commit so they agree anyway), then
+				// the horizontal day-shift, combined into one rebuild/commit.
+				bool rowChanged = false;
+				if (rowChangeRequested) {
+					if (const PpTask* task = FindTask(doc, id)) {
+						if (task->rowId != targetRowId) {
+							rowChanged = MoveTaskToRow(doc, id, targetRowId);
+						}
+					}
+				}
+				bool dateChanged = (deltaDays != 0) && NudgeTask(doc, id, deltaDays);
+				changed = rowChanged || dateChanged;
 				selKind = "TASK";
 			} else { // TaskEdgeL / TaskEdgeR
 				// Candidate dates from the FRESHLY-read task (not the gesture-
@@ -1068,6 +1232,41 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays) {
 	}
 	catch (...) {
 		OvLog(L"unknown error committing drag gesture");
+	}
+	g_mutating = false;
+}
+
+// Commit a CREATE gesture on WM_LBUTTONUP: adds a new task spanning
+// [startDay, endDay] (inclusive, already normalized/clamped by the caller) in
+// rowId, rebuilds, and selects the new task — mirrors CommitDragGesture's A2
+// synchronous-selection pattern.
+void CommitCreateGesture(const std::string& rowId, long startDay, long endDay) {
+	if (rowId.empty() || !g_app || g_mutating) return;
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (!json.empty()) {
+			PpDocument doc = DocumentFromJson(json);
+			std::string startISO = DaysToDate(startDay);
+			std::string endISO = DaysToDate(endDay);
+			std::string newId = AddTask(doc, rowId, "New task", startISO, endISO);
+			if (!newId.empty()) {
+				RebuildChart(doc, newId);
+				// A2, same reasoning as CommitDragGesture: set synchronously,
+				// do not resync chrome here (stale/invalidated snapshot).
+				SetOwnSelection("TASK", newId);
+				RequestOverlayRepaint();
+			}
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error committing create gesture");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error committing create gesture");
+	}
+	catch (...) {
+		OvLog(L"unknown error committing create gesture");
 	}
 	g_mutating = false;
 }
@@ -1130,6 +1329,12 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// once the pointer crosses the threshold; a plain click still selects
 		// on WM_LBUTTONUP exactly as before.
 		StartDragGesture(g_lastHit, pt);
+		// EmptyCell (a row's open timeline area, non-empty rowId): anchor a
+		// create-drag instead. StartDragGesture above already no-op'd (wrong
+		// zone), so gesture state is still idle here.
+		if (g_lastHit.zone == HtZone::EmptyCell && !g_lastHit.rowId.empty()) {
+			StartCreateGesture(g_lastHit, pt);
+		}
 		return 0;
 	}
 	if (msg == WM_MOUSEMOVE) {
@@ -1166,9 +1371,18 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		DragKind dragKind = g_dragKind;
 		std::string dragId = g_dragId;
 		long dragDeltaDays = g_dragDeltaDays;
-		if (wasGestureActive && g_dragPxPerDay > 0.0f) {
-			long dx = pt.x - g_mouseDownPt.x;
-			dragDeltaDays = (long)::lround((double)dx / (double)g_dragPxPerDay);
+		std::string dragTargetRowId = g_dragTargetRowId;
+		std::string createRowId = g_createRowId;
+		long createAnchorDay = g_createAnchorDay;
+		long createCurrentDay = g_createCurrentDay;
+		float gesturePxPerDay = g_dragPxPerDay; // snapshot: ReleaseCapture below zeroes the live global (see CREATE branch's isClick check)
+		long finalDx = pt.x - g_mouseDownPt.x;
+		if (wasGestureActive && gesturePxPerDay > 0.0f) {
+			if (dragKind == DragKind::Create) {
+				createCurrentDay = createAnchorDay + (long)::lround((double)finalDx / (double)gesturePxPerDay);
+			} else {
+				dragDeltaDays = (long)::lround((double)finalDx / (double)gesturePxPerDay);
+			}
 		}
 		if (g_captureActive) {
 			g_captureActive = false;
@@ -1205,9 +1419,35 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// from these up/down endpoints) commits via GanttOps; otherwise this
 		// is a plain click and selects exactly as before.
 		if (wasCaptureActive) {
-			if (wasGestureActive && wasDragActive) {
+			if (wasGestureActive && wasDragActive && dragKind == DragKind::Create) {
+				// Create-drag: span < 0.5 day is treated as a click (no task
+				// created) per the task spec — existing EmptyCell click
+				// semantics (ClearOwnSelection, via ApplyClickSelection) apply
+				// instead. 0.5 day is compared against the RAW pixel
+				// displacement's day-equivalent (createCurrentDay vs
+				// createAnchorDay is already rounded to whole days, so the
+				// comparison is done in pixels here to preserve the half-day
+				// threshold).
+				double dayDx = (gesturePxPerDay > 0.0f) ? (double)finalDx / (double)gesturePxPerDay : 0.0;
+				bool isClick = (dayDx > -0.5 && dayDx < 0.5);
+				ResetDragGestureState();
+				if (isClick) {
+					HtHit hit = HitTestClientPoint(g_mouseDownPt);
+					ApplyClickSelection(hit);
+					SyncSelectionChromeFromOwnSelection();
+					RequestOverlayRepaint();
+				} else {
+					long startDay = createAnchorDay, endDay = createCurrentDay;
+					if (endDay < startDay) std::swap(startDay, endDay); // allow dragging left
+					try {
+						CommitCreateGesture(createRowId, startDay, endDay);
+					} catch (...) {
+						OvLog(L"create gesture commit failed");
+					}
+				}
+			} else if (wasGestureActive && wasDragActive) {
 				try {
-					CommitDragGesture(dragKind, dragId, dragDeltaDays);
+					CommitDragGesture(dragKind, dragId, dragDeltaDays, dragTargetRowId);
 				} catch (...) {
 					OvLog(L"drag gesture commit failed");
 				}
@@ -1423,11 +1663,57 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		}
 	}
 
-	// Drag-move-resize ghost: a translucent preview of where the dragged
-	// task/milestone will land, plus a small tooltip with the candidate
-	// dates. Drawn from gesture state only — no COM here (PaintOverlay runs
-	// off UpdateLayeredWindow's back-buffer path, not a tick).
-	if (g_gestureActive && g_dragActive) {
+	// Drag-move-resize / row-reassign / create ghost: a translucent preview of
+	// where the dragged task/milestone will land (or the new task that will
+	// be created), plus a small tooltip with the candidate dates (+ target
+	// row for a row-reassign). Drawn from gesture state only — no COM here
+	// (PaintOverlay runs off UpdateLayeredWindow's back-buffer path, not a
+	// tick).
+	if (g_gestureActive && g_dragActive && g_dragKind == DragKind::Create) {
+		RECT band = {
+			g_dragTargetRowRect.left - g_windowOriginX,
+			g_dragTargetRowRect.top - g_windowOriginY,
+			g_dragTargetRowRect.right - g_windowOriginX,
+			g_dragTargetRowRect.bottom - g_windowOriginY
+		};
+		long lowDay = g_createAnchorDay, highDay = g_createCurrentDay;
+		if (highDay < lowDay) std::swap(lowDay, highDay);
+		// Reconstruct screen-x from day using the same reference the gesture
+		// start anchored against: g_dragLastPt/g_mouseDownPt give us ONE
+		// known (day,x) pair — the anchor itself — so every other day's x is
+		// anchorScreenXAtDown + (day - anchorDay) * pxPerDay.
+		long baseX = g_mouseDownPt.x;
+		int ghostLeft = baseX + (int)::lround((double)(lowDay - g_createAnchorDay) * (double)g_dragPxPerDay);
+		int ghostRight = baseX + (int)::lround((double)(highDay + 1 - g_createAnchorDay) * (double)g_dragPxPerDay);
+		if (ghostRight < ghostLeft + 2) ghostRight = ghostLeft + 2;
+
+		GraphicsPath ghostPath;
+		AddRoundRect(ghostPath, (REAL)ghostLeft, (REAL)band.top,
+			(REAL)(ghostRight - ghostLeft), (REAL)(band.bottom - band.top), 3.0f);
+		SolidBrush ghostFill(GpColor(90, ACCENT));
+		g.FillPath(&ghostFill, &ghostPath);
+		Pen ghostPen(GpColor(200, ACCENT), 1.5f);
+		g.DrawPath(&ghostPen, &ghostPath);
+
+		std::wstring tip = Widen(DaysToDate(lowDay)) + L" → " + Widen(DaysToDate(highDay));
+		Gdiplus::Font tipFont(L"Segoe UI", 10.0f, FontStyleRegular, UnitPixel);
+		RectF tipBounds;
+		g.MeasureString(tip.c_str(), -1, &tipFont, PointF(0, 0), &tipBounds);
+		int tipPad = 5;
+		int tipX = g_dragLastPt.x + 14;
+		int tipY = g_dragLastPt.y + 14;
+		int tipW = (int)tipBounds.Width + tipPad * 2;
+		int tipH = (int)tipBounds.Height + tipPad * 2;
+		GraphicsPath tipPath;
+		AddRoundRect(tipPath, (REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH, 3.0f);
+		SolidBrush tipBg(GpColor(235, RGB(32, 33, 36)));
+		g.FillPath(&tipBg, &tipPath);
+		StringFormat tipFmt;
+		tipFmt.SetAlignment(StringAlignmentCenter);
+		tipFmt.SetLineAlignment(StringAlignmentCenter);
+		SolidBrush tipText(Color(255, 255, 255, 255));
+		g.DrawString(tip.c_str(), -1, &tipFont, RectF((REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH), &tipFmt, &tipText);
+	} else if (g_gestureActive && g_dragActive) {
 		RECT anchor = {
 			g_dragAnchorRect.left - g_windowOriginX,
 			g_dragAnchorRect.top - g_windowOriginY,
@@ -1446,6 +1732,19 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			if (ghost.right < ghost.left + 2) ghost.right = ghost.left + 2;
 			break;
 		case DragKind::TaskBody:
+			ghost.left = anchor.left + shiftPx;
+			ghost.right = anchor.right + shiftPx;
+			if (!::IsRectEmpty(&g_dragTargetRowRect)) {
+				// Retarget the ghost's y to the row band under the pointer
+				// (vertical row-reassign), keeping the horizontal shift.
+				int bandTop = g_dragTargetRowRect.top - g_windowOriginY;
+				int bandBottom = g_dragTargetRowRect.bottom - g_windowOriginY;
+				int h = anchor.bottom - anchor.top;
+				int cy = (bandTop + bandBottom) / 2;
+				ghost.top = cy - h / 2;
+				ghost.bottom = ghost.top + h;
+			}
+			break;
 		case DragKind::Milestone:
 		default:
 			ghost.left = anchor.left + shiftPx;
@@ -1479,10 +1778,14 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			g.DrawPath(&ghostPen, &ghostPath);
 		}
 
-		// Tooltip: candidate dates near the cursor.
+		// Tooltip: candidate dates near the cursor, plus the target row when
+		// a TaskBody drag has retargeted to a different row than it started.
 		std::string candStart, candEnd;
 		ComputeDragCandidateDates(candStart, candEnd);
 		std::wstring tip = Widen(candStart) + L" → " + Widen(candEnd);
+		if (g_dragKind == DragKind::TaskBody && !g_dragTargetRowId.empty() && g_dragTargetRowId != g_dragOrigRowId) {
+			tip += L"  (" + Widen(g_dragTargetRowId) + L")";
+		}
 		Gdiplus::Font tipFont(L"Segoe UI", 10.0f, FontStyleRegular, UnitPixel);
 		RectF tipBounds;
 		g.MeasureString(tip.c_str(), -1, &tipFont, PointF(0, 0), &tipBounds);

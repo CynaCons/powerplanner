@@ -24,6 +24,13 @@
 //                       MOUSEMOVEs + LBUTTONUP posted to the overlay hwnd)
 //                       shifts a TASK bar by exactly N days, verified by
 //                       re-reading PP_DOC; selection must survive the drag.
+//   Stage 6: DRAGROW  — a synthetic drag straight down by one row-band
+//                       height row-reassigns a TASK to the adjacent row,
+//                       verified by re-reading PP_DOC.
+//   Stage 7: CREATE   — a synthetic drag anchored on an EmptyCell (a row
+//                       with no task under the pointer) creates a new task
+//                       spanning the drag, verified by re-reading PP_DOC
+//                       (task count +1, correct row, ~N-day span).
 //
 //   ppoverlay.exe <output.png>
 #include "../PowerPlannerAddin/pch.h"
@@ -39,8 +46,10 @@
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 #endif
 #include <gdiplus.h>
+#include <algorithm>
 #include <cstdio>
 #include <string>
+#include <vector>
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -615,6 +624,306 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"DRAG: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"DRAG PASS\n" : L"DRAG FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 6: DRAGROW ---------------------------------------------
+			// Vertical row-reassign: pick a TASK, record its rowId from PP_DOC,
+			// drag it straight down by one row-band height (no horizontal
+			// component) via posted LBUTTONDOWN/MOUSEMOVEs/LBUTTONUP, then
+			// re-read PP_DOC and assert the task's rowId changed to the row
+			// whose band the pointer landed in.
+			auto WNarrowFn = [](const wchar_t* wtext) -> std::string {
+				if (!wtext || !*wtext) return "";
+				int len = (int)::wcslen(wtext);
+				int nb = ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, NULL, 0, NULL, NULL);
+				std::string s(nb, '\0');
+				if (nb > 0) ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, &s[0], nb, NULL, NULL);
+				return s;
+			};
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					// Find a TASK child and, separately, every ROW_LABEL child's
+					// screen rect (to compute row-band height/order) by walking
+					// GroupItems once.
+					PowerPoint::ShapePtr taskChild;
+					std::wstring taskId;
+					struct RowRect { std::wstring rowId; float top; float height; };
+					std::vector<RowRect> rowRects;
+					if (chartRoot) {
+						PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+						long gn = grp->GetCount();
+						for (long j = 1; j <= gn; ++j) {
+							PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+							_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+							if (ckind == L"TASK" && !taskChild) {
+								taskChild = child;
+								_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								taskId = cid.length() ? (const wchar_t*)cid : L"";
+							}
+							if (ckind == L"ROW_LABEL") {
+								_bstr_t rid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								std::wstring rowId = rid.length() ? (const wchar_t*)rid : L"";
+								if (!rowId.empty()) {
+									rowRects.push_back({ rowId, child->GetTop(), child->GetHeight() });
+								}
+							}
+						}
+					}
+					std::sort(rowRects.begin(), rowRects.end(), [](const RowRect& a, const RowRect& b) { return a.top < b.top; });
+
+					HWND ov = OverlayHwnd();
+					std::string docJson = ReadGanttFromSlide(app);
+					PpDocument docPre = DocumentFromJson(docJson);
+					std::string taskIdUtf8 = WNarrowFn(taskId.c_str());
+					std::string origRowId;
+					for (const auto& t : docPre.tasks) {
+						if (t.id == taskIdUtf8) { origRowId = t.rowId; break; }
+					}
+
+					int origIdx = -1;
+					for (size_t k = 0; k < rowRects.size(); ++k) {
+						if (WNarrowFn(rowRects[k].rowId.c_str()) == origRowId) { origIdx = (int)k; break; }
+					}
+
+					if (!chartRoot || !taskChild || taskId.empty() || !ov || origIdx < 0 || origIdx + 1 >= (int)rowRects.size()) {
+						wprintf(L"DRAGROW: could not find TASK/rowId/adjacent row band (task rowId=%hs, rows=%zu)\n",
+							origRowId.c_str(), rowRects.size());
+					} else {
+						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+						float left = taskChild->GetLeft(), top = taskChild->GetTop();
+						float w = taskChild->GetWidth(), h = taskChild->GetHeight();
+						POINT screenPt = {
+							win->PointsToScreenPixelsX(left + w / 2.0f),
+							win->PointsToScreenPixelsY(top + h / 2.0f)
+						};
+						POINT clientPt = screenPt;
+						::ScreenToClient(ov, &clientPt);
+
+						// Row-band height in SCREEN pixels: derive from the two
+						// adjacent ROW_LABEL rects' point-tops via
+						// PointsToScreenPixelsY (same conversion the overlay's
+						// BuildRowBands uses), so the move lands solidly inside
+						// the next row's band regardless of zoom.
+						int rowTopScreen = win->PointsToScreenPixelsY(rowRects[origIdx].top);
+						int nextRowTopScreen = win->PointsToScreenPixelsY(rowRects[origIdx + 1].top);
+						int bandHeightPx = nextRowTopScreen - rowTopScreen;
+						std::wstring targetRowId = rowRects[origIdx + 1].rowId;
+
+						LPARAM downLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, downLp);
+						PumpFor(60);
+						const int kSteps = 5;
+						for (int s = 1; s <= kSteps; ++s) {
+							int my = clientPt.y + (int)((long)bandHeightPx * s / kSteps);
+							LPARAM moveLp = MAKELPARAM((short)clientPt.x, (short)my);
+							::PostMessageW(ov, WM_MOUSEMOVE, 0, moveLp);
+							PumpFor(60);
+						}
+						int finalY = clientPt.y + bandHeightPx;
+						LPARAM upLp = MAKELPARAM((short)clientPt.x, (short)finalY);
+						::PostMessageW(ov, WM_LBUTTONUP, 0, upLp);
+						PumpFor(800);
+
+						std::string afterJson = ReadGanttFromSlide(app);
+						PpDocument docAfter = DocumentFromJson(afterJson);
+						std::string newRowId;
+						bool foundAfter = false;
+						for (const auto& t : docAfter.tasks) {
+							if (t.id == taskIdUtf8) { newRowId = t.rowId; foundAfter = true; break; }
+						}
+
+						std::string targetRowIdUtf8 = WNarrowFn(targetRowId.c_str());
+						bool rowChanged = foundAfter && newRowId == targetRowIdUtf8;
+						if (!rowChanged) {
+							wprintf(L"DRAGROW: expected rowId '%hs', got '%hs' (orig '%hs')\n",
+								targetRowIdUtf8.c_str(), newRowId.c_str(), origRowId.c_str());
+						}
+						pass = rowChanged;
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"DRAGROW: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"DRAGROW PASS\n" : L"DRAGROW FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 7: CREATE ------------------------------------------------
+			// Find an empty cell: a row with no task under it far to the right
+			// of the chart (r_launch in the sample doc has only a milestone, no
+			// tasks), posted-drag ~10 days to the right from a point inside that
+			// row's band, then re-read PP_DOC: task count +1, new task's row
+			// matches, and its span is ~10 days (+-1 day tolerance).
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					std::string docJsonPre = ReadGanttFromSlide(app);
+					PpDocument docPre = DocumentFromJson(docJsonPre);
+					size_t taskCountBefore = docPre.tasks.size();
+
+					// r_launch has no tasks in MakeSampleDocument (only a
+					// milestone) — an empty row to anchor the create-drag in.
+					const std::string emptyRowId = "r_launch";
+					bool rowHasTask = false;
+					for (const auto& t : docPre.tasks) if (t.rowId == emptyRowId) rowHasTask = true;
+
+					// Find that row's ROW_LABEL rect (for its band's screen y)
+					// and the chart's screen rect (for an x far right of any
+					// task, inside the chart).
+					PowerPoint::ShapePtr rowLabelShape;
+					RECT chartScreenRect = {};
+					if (chartRoot) {
+						PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+						long gn = grp->GetCount();
+						float crLeft = chartRoot->GetLeft(), crTop = chartRoot->GetTop();
+						float crW = chartRoot->GetWidth(), crH = chartRoot->GetHeight();
+						PowerPoint::DocumentWindowPtr winForRect = app->GetActiveWindow();
+						chartScreenRect.left = winForRect->PointsToScreenPixelsX(crLeft);
+						chartScreenRect.top = winForRect->PointsToScreenPixelsY(crTop);
+						chartScreenRect.right = winForRect->PointsToScreenPixelsX(crLeft + crW);
+						chartScreenRect.bottom = winForRect->PointsToScreenPixelsY(crTop + crH);
+						for (long j = 1; j <= gn; ++j) {
+							PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+							_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+							if (ckind == L"ROW_LABEL") {
+								_bstr_t rid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								std::string ridUtf8 = WNarrowFn(rid.length() ? (const wchar_t*)rid : L"");
+								if (ridUtf8 == emptyRowId) { rowLabelShape = child; break; }
+							}
+						}
+					}
+
+					HWND ov = OverlayHwnd();
+					if (!chartRoot || rowHasTask || !rowLabelShape || !ov) {
+						wprintf(L"CREATE: preconditions not met (rowHasTask=%d, rowLabelShape=%d, ov=%d)\n",
+							(int)rowHasTask, rowLabelShape ? 1 : 0, ov ? 1 : 0);
+					} else {
+						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+						float labelTop = rowLabelShape->GetTop();
+						float labelH = rowLabelShape->GetHeight();
+						int bandTopScreen = win->PointsToScreenPixelsY(labelTop);
+						int bandBottomScreen = win->PointsToScreenPixelsY(labelTop + labelH);
+						int bandCyScreen = (bandTopScreen + bandBottomScreen) / 2;
+
+						// Anchor x: well inside the chart's timeline area, right
+						// of the label column but left enough that a +10-day
+						// rightward drag stays inside the chart rect.
+						int anchorXScreen = chartScreenRect.left + (int)((chartScreenRect.right - chartScreenRect.left) * 0.35);
+
+						POINT screenPt = { anchorXScreen, bandCyScreen };
+						POINT clientPt = screenPt;
+						::ScreenToClient(ov, &clientPt);
+
+						// px-per-day: derive from any TASK rect's width/day-span,
+						// same as the add-in's ComputeDragPxPerDay fallback path
+						// (documented choice: reference an existing task rect
+						// rather than PP_PROJ, since PP_PROJ's ptPerDay is in
+						// POINTS and would need a second zoom-factor lookup).
+						PowerPoint::ShapePtr refTask;
+						if (chartRoot) {
+							PowerPoint::GroupShapesPtr grp2 = chartRoot->GetGroupItems();
+							long gn2 = grp2->GetCount();
+							for (long j = 1; j <= gn2 && !refTask; ++j) {
+								PowerPoint::ShapePtr child = grp2->Item(_variant_t(j));
+								_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+								std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+								if (ckind == L"TASK") refTask = child;
+							}
+						}
+						double pxPerDay = 0.0;
+						std::string refTaskId;
+						if (refTask) {
+							_bstr_t rid = refTask->GetTags()->Item(_bstr_t(L"PP_ID"));
+							refTaskId = WNarrowFn(rid.length() ? (const wchar_t*)rid : L"");
+						}
+						for (const auto& t : docPre.tasks) {
+							if (t.id == refTaskId) {
+								long span = DateToDays(t.end) - DateToDays(t.start) + 1;
+								if (span > 0 && refTask) {
+									int rL = win->PointsToScreenPixelsX(refTask->GetLeft());
+									int rR = win->PointsToScreenPixelsX(refTask->GetLeft() + refTask->GetWidth());
+									if (rR > rL) pxPerDay = (double)(rR - rL) / (double)span;
+								}
+								break;
+							}
+						}
+
+						if (pxPerDay <= 0.0) {
+							wprintf(L"CREATE: could not derive px-per-day from a reference task\n");
+						} else {
+							const int kCreateDays = 10;
+							long shiftPx = (long)::lround(kCreateDays * pxPerDay);
+
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((short)clientPt.x, (short)clientPt.y));
+							PumpFor(60);
+							const int kSteps = 5;
+							for (int s = 1; s <= kSteps; ++s) {
+								int mx = clientPt.x + (int)(shiftPx * s / kSteps);
+								::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)mx, (short)clientPt.y));
+								PumpFor(60);
+							}
+							int finalX = clientPt.x + (int)shiftPx;
+							::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)clientPt.y));
+							PumpFor(800);
+
+							std::string docJsonAfter = ReadGanttFromSlide(app);
+							PpDocument docAfter = DocumentFromJson(docJsonAfter);
+							size_t taskCountAfter = docAfter.tasks.size();
+
+							bool countOk = (taskCountAfter == taskCountBefore + 1);
+							bool rowOk = false;
+							bool spanOk = false;
+							if (countOk) {
+								// The new task is whichever one wasn't present
+								// before (ids are assigned sequentially by
+								// NextId, so a set-difference by id is exact).
+								for (const auto& t : docAfter.tasks) {
+									bool wasPresent = false;
+									for (const auto& tb : docPre.tasks) if (tb.id == t.id) { wasPresent = true; break; }
+									if (!wasPresent) {
+										rowOk = (t.rowId == emptyRowId);
+										long spanDays = DateToDays(t.end) - DateToDays(t.start) + 1;
+										spanOk = (spanDays >= kCreateDays - 1 && spanDays <= kCreateDays + 1);
+										if (!rowOk) wprintf(L"CREATE: new task rowId '%hs' != expected '%hs'\n", t.rowId.c_str(), emptyRowId.c_str());
+										if (!spanOk) wprintf(L"CREATE: new task span %ld days, expected ~%d\n", spanDays, kCreateDays);
+										break;
+									}
+								}
+							} else {
+								wprintf(L"CREATE: task count %zu -> %zu, expected +1\n", taskCountBefore, taskCountAfter);
+							}
+							pass = countOk && rowOk && spanOk;
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"CREATE: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"CREATE PASS\n" : L"CREATE FAIL\n");
 				if (!pass) rc = 1;
 			}
 		} catch (const _com_error& e) {
