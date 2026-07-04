@@ -686,6 +686,81 @@ static bool RunThemeTokenChecks() {
 	return ok;
 }
 
+// S1 s1-rail-labels: labelPlacement model + railLabels global + rail dot/label
+// emission. Print 'LABEL OPS OK' when these pass.
+static bool RunLabelOpsChecks() {
+	bool ok = true;
+
+	// --- ops validation ---
+	PpDocument d;
+	d.rows.push_back(PpRow{"r1", "Row 1", "", false});
+	d.rows.push_back(PpRow{"r2", "Row 2", "", false});
+	d.tasks.push_back(PpTask{"tr", "Rail task", "2026-06-01", "2026-06-28", "r1", "", 50});
+	d.tasks.push_back(PpTask{"tb", "Bar task",  "2026-06-01", "2026-06-28", "r2", "", 0});
+
+	ok = Check(SetLabelPlacement(d, "tr", "rail") && d.tasks[0].labelPlacement == "rail", "SetLabelPlacement sets rail") && ok;
+	ok = Check(SetLabelPlacement(d, "tr", "both") && d.tasks[0].labelPlacement == "both", "SetLabelPlacement sets both") && ok;
+	ok = Check(SetLabelPlacement(d, "tr", "") && d.tasks[0].labelPlacement == "bar", "SetLabelPlacement normalizes empty to bar") && ok;
+	ok = Check(!SetLabelPlacement(d, "tr", "nonsense"), "SetLabelPlacement rejects invalid value") && ok;
+	ok = Check(!SetLabelPlacement(d, "missing", "rail"), "SetLabelPlacement returns false for missing task") && ok;
+	ok = Check(SetRailLabelsGlobal(d, true) && d.railLabels, "SetRailLabelsGlobal turns on") && ok;
+	ok = Check(SetRailLabelsGlobal(d, false) && !d.railLabels, "SetRailLabelsGlobal turns off") && ok;
+
+	// --- JSON round-trip + backward compatibility ---
+	SetLabelPlacement(d, "tr", "rail");
+	SetRailLabelsGlobal(d, true);
+	PpDocument rt = DocumentFromJson(DocumentToJson(d));
+	ok = Check(rt.railLabels, "round-trip preserves railLabels") && ok;
+	bool trRail = false; for (const auto& t : rt.tasks) if (t.id == "tr") trRail = (t.labelPlacement == "rail");
+	ok = Check(trRail, "round-trip preserves task labelPlacement") && ok;
+	PpDocument legacy = DocumentFromJson("{\"title\":\"legacy\",\"tasks\":[{\"id\":\"x\",\"rowId\":\"r\",\"label\":\"L\",\"start\":\"2026-01-01\",\"end\":\"2026-01-02\"}]}");
+	ok = Check(!legacy.railLabels && legacy.tasks.size() == 1 && legacy.tasks[0].labelPlacement.empty(),
+		"legacy JSON defaults railLabels=false / labelPlacement empty") && ok;
+
+	// --- layout assertions: rail label inside rail, at the task's lane; on-bar
+	// label absent for the rail task, present for the bar task ---
+	PpDocument scDoc;
+	scDoc.rows.push_back(PpRow{"r1", "Row 1", "", false});
+	scDoc.rows.push_back(PpRow{"r2", "Row 2", "", false});
+	scDoc.tasks.push_back(PpTask{"tr", "Rail task", "2026-06-01", "2026-06-28", "r1", "", 50});
+	scDoc.tasks.push_back(PpTask{"tb", "Bar task",  "2026-06-01", "2026-06-28", "r2", "", 0});
+	SetLabelPlacement(scDoc, "tr", "rail");
+
+	Scene sc; std::string mn, mx; long pad = 0; float ppd = 0.0f;
+	if (!Check(BuildProjectedScene(scDoc, 960.0f, &sc, &mn, &mx, &pad, &ppd), "label scene builds")) return false;
+
+	const Prim* railLbl = FindPrim(sc, "RAIL_TASKLBL", "tr");
+	const Prim* railDot = FindPrim(sc, "RAIL_DOT", "tr");
+	const Prim* trBar = FindPrim(sc, "TASK", "tr");
+	const Prim* tbBar = FindPrim(sc, "TASK", "tb");
+	ok = Check(railLbl != nullptr, "rail task emits a RAIL_TASKLBL") && ok;
+	ok = Check(railDot != nullptr, "rail task emits a RAIL_DOT") && ok;
+	if (railLbl) {
+		bool insideRail = railLbl->x >= MARGIN && (railLbl->x + railLbl->w) <= (MARGIN + ROW_GUTTER + 0.5f);
+		ok = Check(insideRail, "rail label rect lies inside the rail column") && ok;
+	}
+	if (railLbl && trBar) {
+		float lblCy = railLbl->y + railLbl->h / 2.0f;
+		float barCy = trBar->y + trBar->h / 2.0f;
+		ok = Check(std::fabs(lblCy - barCy) < ROW_HEIGHT / 2.0f, "rail label sits at the task's lane") && ok;
+	}
+	ok = Check(trBar && trBar->text.empty(), "rail task has NO on-bar label") && ok;
+	ok = Check(tbBar && !tbBar->text.empty(), "bar task keeps its on-bar label") && ok;
+	ok = Check(FindPrim(sc, "RAIL_TASKLBL", "tb") == nullptr, "bar task emits NO rail label") && ok;
+
+	// --- global override: railLabels=true forces the bar task into the rail ---
+	PpDocument gDoc = scDoc;
+	SetRailLabelsGlobal(gDoc, true);
+	Scene gsc; std::string gmn, gmx; long gpad = 0; float gppd = 0.0f;
+	if (Check(BuildProjectedScene(gDoc, 960.0f, &gsc, &gmn, &gmx, &gpad, &gppd), "global-rail scene builds")) {
+		ok = Check(FindPrim(gsc, "RAIL_TASKLBL", "tb") != nullptr, "global railLabels moves bar task to rail") && ok;
+		const Prim* tbBar2 = FindPrim(gsc, "TASK", "tb");
+		ok = Check(tbBar2 && tbBar2->text.empty(), "global railLabels suppresses the bar task's on-bar label") && ok;
+	}
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -785,6 +860,9 @@ int main() {
 	bool themeOk = RunThemeTokenChecks();
 	ok = themeOk && ok;
 
+	bool labelOpsOk = RunLabelOpsChecks();
+	ok = labelOpsOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -808,6 +886,9 @@ int main() {
 	}
 	if (themeOk) {
 		std::printf("THEME TOKENS OK\n");
+	}
+	if (labelOpsOk) {
+		std::printf("LABEL OPS OK\n");
 	}
 	return 0;
 }

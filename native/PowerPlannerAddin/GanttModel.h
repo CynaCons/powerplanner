@@ -9,6 +9,11 @@
 struct PpTask {
 	std::string id, label, start, end, rowId, color;
 	int percent = 0;
+	// On-bar vs rail label placement: "" (= "bar", default) | "bar" | "rail" |
+	// "both". "rail" moves the label off the bar into the left rail (dot +
+	// label at the task's lane); "both" shows it in both places. A document-wide
+	// PpDocument.railLabels override forces all tasks to rail regardless.
+	std::string labelPlacement;
 };
 struct PpMilestone {
 	std::string id, label, date, rowId, color;
@@ -41,6 +46,7 @@ struct PpText {
 struct PpDocument {
 	std::string title;
 	std::string scale = "week";
+	bool railLabels = false;  // global override: render ALL task labels in the rail
 	std::vector<PpRow> rows;
 	std::vector<PpTask> tasks;
 	std::vector<PpMilestone> milestones;

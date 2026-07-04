@@ -14,6 +14,7 @@ std::string DocumentToJson(const PpDocument& d) {
 	j["schemaVersion"] = 1;
 	j["title"] = d.title;
 	j["calendar"] = { {"scale", d.scale.empty() ? "week" : d.scale}, {"fiscalYearStart", 1}, {"workingDays", {1, 2, 3, 4, 5}}, {"holidays", json::array()} };
+	if (d.railLabels) j["railLabels"] = true;
 
 	j["rows"] = json::array();
 	for (const auto& r : d.rows) {
@@ -26,6 +27,7 @@ std::string DocumentToJson(const PpDocument& d) {
 	for (const auto& t : d.tasks) {
 		json tt = { {"id", t.id}, {"rowId", t.rowId}, {"label", t.label}, {"start", t.start}, {"end", t.end}, {"percentComplete", t.percent} };
 		if (!t.color.empty()) tt["color"] = t.color;
+		if (!t.labelPlacement.empty()) tt["labelPlacement"] = t.labelPlacement;
 		j["tasks"].push_back(tt);
 	}
 	j["milestones"] = json::array();
@@ -74,6 +76,7 @@ PpDocument DocumentFromJson(const std::string& jsonStr) {
 		std::string scale = getStr(*cal, "scale");
 		if (!scale.empty()) doc.scale = scale;
 	}
+	doc.railLabels = d.value("railLabels", false);
 	for (const auto& r : d.value("rows", json::array())) {
 		PpRow row;
 		row.id = getStr(r, "id");
@@ -91,6 +94,7 @@ PpDocument DocumentFromJson(const std::string& jsonStr) {
 		task.end = getStr(t, "end");
 		task.color = getStr(t, "color");
 		task.percent = t.value("percentComplete", 0);
+		task.labelPlacement = getStr(t, "labelPlacement");
 		doc.tasks.push_back(task);
 	}
 	for (const auto& m : d.value("milestones", json::array())) {

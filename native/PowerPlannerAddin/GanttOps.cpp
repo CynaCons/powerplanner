@@ -149,6 +149,23 @@ bool SetTaskColor(PpDocument& doc, const std::string& taskId, const std::string&
 	return false;
 }
 
+bool SetLabelPlacement(PpDocument& doc, const std::string& taskId, const std::string& placement) {
+	std::string v = placement.empty() ? "bar" : placement;
+	if (v != "bar" && v != "rail" && v != "both") return false;
+	for (auto& task : doc.tasks) {
+		if (task.id == taskId) {
+			task.labelPlacement = v;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool SetRailLabelsGlobal(PpDocument& doc, bool on) {
+	doc.railLabels = on;
+	return true;
+}
+
 std::string AddMarker(PpDocument& doc, const std::string& type, const std::string& label, const std::string& dateISO) {
 	PpMarker marker;
 	marker.id = NextId(doc, "mk");

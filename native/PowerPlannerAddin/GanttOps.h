@@ -25,6 +25,15 @@ bool SetScale(PpDocument& doc, const std::string& scale);
 // a task (mirrors SetTaskDates/SetTaskPercent's not-found semantics).
 bool SetTaskColor(PpDocument& doc, const std::string& taskId, const std::string& color);
 
+// Sets a task's label placement: "bar" | "rail" | "both" (empty string is
+// accepted and normalized to "bar"). Returns false if `placement` is not one of
+// those values, or if taskId is not a task.
+bool SetLabelPlacement(PpDocument& doc, const std::string& taskId, const std::string& placement);
+
+// Global all-rail override: when on, every task label renders in the left rail
+// regardless of each task's own labelPlacement. Always returns true.
+bool SetRailLabelsGlobal(PpDocument& doc, bool on);
+
 // Adds a marker (vertical date line + label chip), e.g. "today", "deadline",
 // or "custom". Generates a unique id ("mk<N>") and returns it, mirroring
 // AddRow/AddTask's id-return convention.

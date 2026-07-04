@@ -143,7 +143,7 @@ freshly inserted chart resemble the mockup.*
   == `ink`; today marker line == `primary` — marker `SHAPE PROPS OK`.
   - AC1 ⚙ `VISUAL S1 OK` + `SHAPE PROPS OK` + `FIT OK` + `FITPERSIST OK` +
     `REFLOW PASS`, exit 0, PNG freshly on disk.
-- [ ] **s1-rail-labels** — `labelPlacement` per task (`bar|rail|both`, empty =
+- [x] **s1-rail-labels** — `labelPlacement` per task (`bar|rail|both`, empty =
   `bar`; JSON round-trip backward compatible) + global doc flag `railLabels`
   (all-rail override). Layout/emitter: rail-placed tasks emit NO on-bar label;
   instead a rail dot (8pt, task swatch, radius 3, tagged `RAIL_DOT`/taskId) +

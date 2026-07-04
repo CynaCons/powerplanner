@@ -137,20 +137,51 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 	for (const auto& lt : L.tasks) {
 		const PpTask* t = taskById[lt.id];
 		float left = xToPt(lt.xDay), width = std::max(2.0f, lt.widthDays * ptPerDay);
-		float top = slotTop(L.rowOffsets[lt.rowIndex] + lt.subRow) + BAR_INSET;
+		float laneTop = slotTop(L.rowOffsets[lt.rowIndex] + lt.subRow);
+		float top = laneTop + BAR_INSET;
 		float h = ROW_HEIGHT - BAR_INSET * 2.0f;
+		float laneCenter = laneTop + ROW_HEIGHT / 2.0f;
+		// Label placement: "rail"/"both"/global railLabels put the label in the
+		// rail; "bar"/empty keep it on the bar. railLabels (global) suppresses
+		// the on-bar label entirely (all-rail override, R4 B4.2).
+		const std::string& place = t->labelPlacement;
+		bool railEntry = doc.railLabels || place == "rail" || place == "both";
+		bool showBarLabel = !doc.railLabels && (place.empty() || place == "bar" || place == "both");
+
 		unsigned long swatch = gt::EffectiveSwatch(t->color);
 		unsigned long track = gt::BlendOnWhite(swatch, 0.40f);
 		Style bar; bar.fill = true; bar.fillBgr = Bgr(track); bar.corner = gt::bar_radius;
 		bar.textBgr = Bgr(th.onPrimary); bar.fontSize = 11.0f; bar.align = TextAlign::Center;
 		Prim p = scene::roundRect(left, top, width, h, bar);
-		if (width > 54.0f) p.text = Widen(t->label);
+		if (width > 54.0f && showBarLabel) p.text = Widen(t->label);
 		p.tagKind = "TASK"; p.tagId = t->id; sc.prims.push_back(p);
 		if (t->percent > 0) {
 			float pw = width * (float)t->percent / 100.0f;
 			if (pw > 1.5f) {
 				Style pr; pr.fill = true; pr.fillBgr = Bgr(swatch); pr.corner = gt::bar_radius;
 				Prim u = scene::roundRect(left, top, pw, h, pr); u.tagKind = "TASK_PROGRESS"; u.tagId = t->id; sc.prims.push_back(u);
+			}
+		}
+
+		// Rail entry: 8pt swatch dot (radius 3) + task label (type.railTask) at
+		// the task's lane, inside the left rail. Ellipsized by the renderer
+		// (wordwrap off) at the rail's right padding.
+		if (railEntry) {
+			const float dotSize = 8.0f, dotX = MARGIN + 12.0f, labelX = MARGIN + 24.0f;
+			Style ds; ds.fill = true; ds.fillBgr = Bgr(swatch); ds.corner = 3.0f;
+			Prim dot = scene::roundRect(dotX, laneCenter - dotSize / 2.0f, dotSize, dotSize, ds);
+			dot.tagKind = "RAIL_DOT"; dot.tagId = t->id; sc.prims.push_back(dot);
+			Style rl; rl.textBgr = Bgr(gt::ink); rl.fontSize = 8.5f; rl.align = TextAlign::Left;
+			Prim rlbl = scene::text(labelX, laneCenter - 7.0f, MARGIN + ROW_GUTTER - labelX - 8.0f, 14.0f, Widen(t->label), rl);
+			rlbl.tagKind = "RAIL_TASKLBL"; rlbl.tagId = t->id; sc.prims.push_back(rlbl);
+
+			// With the label off the bar, a wide-enough bar (>= ~110pt) shows a
+			// right-aligned % readout (type.pct); suppressed on narrow bars.
+			if (t->percent > 0 && width >= 110.0f) {
+				char pct[8]; sprintf_s(pct, "%d%%", t->percent);
+				Style ps; ps.textBgr = Bgr(th.onPrimary); ps.fontSize = 7.0f; ps.bold = true; ps.align = TextAlign::Right;
+				Prim pctp = scene::text(left, top, width - 6.0f, h, Widen(pct), ps);
+				pctp.tagKind = "TASK_PCT"; pctp.tagId = t->id; sc.prims.push_back(pctp);
 			}
 		}
 	}
