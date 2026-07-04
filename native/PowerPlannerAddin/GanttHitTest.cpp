@@ -89,7 +89,31 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 		}
 	}
 
-	// 5) Row bands: right of the row's label column is an empty timeline cell;
+	// 5) Markers (vertical date lines): thin rendered lines, so the overlay
+	//    synthesizes each marker's hit rect as a band spanning the chart's
+	//    full vertical extent, +-edgeBandPx wide. Below task/milestone hits
+	//    (already returned above), above RowBand/EmptyCell (below). The
+	//    nearest marker wins if bands from two markers overlap (mirrors the
+	//    task-edge tie-break).
+	{
+		const HtItem* markerItem = nullptr;
+		long markerDist = edgeBandPx + 1;
+		for (const auto& it : snap.items) {
+			if (it.kind != HtItemKind::Marker) continue;
+			if (!InRect(it.rect, x, y)) continue;
+			long cx = (it.rect.left + it.rect.right) / 2;
+			long d = AbsLong(x - cx);
+			if (d < markerDist) { markerItem = &it; markerDist = d; }
+		}
+		if (markerItem) {
+			hit.zone = HtZone::Marker;
+			hit.kind = HtItemKind::Marker;
+			hit.id = markerItem->id;
+			return hit;
+		}
+	}
+
+	// 6) Row bands: right of the row's label column is an empty timeline cell;
 	//    left of / around the label column is the generic row band.
 	for (const auto& band : snap.rowBands) {
 		if (y < band.yTop || y >= band.yBottom) continue;
@@ -260,6 +284,7 @@ HtCursor GanttCursorForZone(HtZone zone) {
 		return HtCursor::SizeAll;
 	case HtZone::TaskEdgeL:
 	case HtZone::TaskEdgeR:
+	case HtZone::Marker:
 		return HtCursor::SizeWE;
 	case HtZone::EmptyCell:
 		return HtCursor::Cross;

@@ -66,6 +66,17 @@ static bool RunHitTestChecks() {
 	// Milestone.
 	ok = zoneCheck(620, 300, HtZone::Milestone, "ms-1", "hit: milestone rect is Milestone") && ok;
 
+	// Marker: a vertical date line synthesized as a +-4px band (edgeBandPx,
+	// default kHtEdgePx) spanning the chart's full vertical extent (top to
+	// bottom), independent of row bands. Placed at x=800 (clear of the
+	// task/milestone items above) so it hits regardless of y within the chart.
+	snap.items.push_back({ HtItemKind::Marker, "mk-1", { 796, 100, 804, 500 } });
+	ok = zoneCheck(800, 120, HtZone::Marker, "mk-1", "hit: marker center (near chart top) is Marker") && ok;
+	ok = zoneCheck(800, 450, HtZone::Marker, "mk-1", "hit: marker center (near chart bottom) is Marker") && ok;
+	ok = zoneCheck(796, 300, HtZone::Marker, "mk-1", "hit: marker left edge of band is Marker") && ok;
+	ok = zoneCheck(803, 300, HtZone::Marker, "mk-1", "hit: marker right edge of band is Marker") && ok;
+	ok = zoneCheck(804, 300, HtZone::EmptyCell, "row-2", "hit: 1px right of marker band falls through to EmptyCell") && ok;
+
 	// Labels (row label + title) report kind + id.
 	{
 		HtHit hit = GanttHitTestPoint(snap, 150, 200);
@@ -346,6 +357,7 @@ static bool RunCursorMapChecks() {
 		{ HtZone::TaskEdgeR,  HtCursor::SizeWE,  "cursor: TaskEdgeR -> SizeWE" },
 		{ HtZone::Milestone,  HtCursor::SizeAll, "cursor: Milestone -> SizeAll" },
 		{ HtZone::Label,      HtCursor::Arrow,   "cursor: Label -> Arrow" },
+		{ HtZone::Marker,     HtCursor::SizeWE,  "cursor: Marker -> SizeWE (ew-resize)" },
 		{ HtZone::RowBand,    HtCursor::Arrow,   "cursor: RowBand -> Arrow" },
 		{ HtZone::EmptyCell,  HtCursor::Cross,   "cursor: EmptyCell -> Cross" },
 	};
@@ -353,7 +365,7 @@ static bool RunCursorMapChecks() {
 	// If this fires, a zone was added to/removed from HtZone without updating
 	// kZoneCases above -- the exhaustiveness this test promises would silently
 	// lapse otherwise.
-	static_assert(kZoneCount == 8, "HtZone case count changed: update kZoneCases in RunCursorMapChecks");
+	static_assert(kZoneCount == 9, "HtZone case count changed: update kZoneCases in RunCursorMapChecks");
 
 	for (const auto& c : kZoneCases) {
 		ok = Check(GanttCursorForZone(c.zone) == c.expected, c.msg) && ok;

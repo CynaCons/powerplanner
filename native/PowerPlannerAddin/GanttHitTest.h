@@ -22,7 +22,8 @@ enum class HtItemKind {
 	Task,
 	Milestone,
 	RowLabel,
-	Title
+	Title,
+	Marker  // TODAY_LINE / DEADLINE / CUSTOM_MARKER vertical date lines
 };
 
 struct HtItem {
@@ -41,12 +42,17 @@ struct HtRowBand {
 // rect or child count changes.
 struct HtSnapshot {
 	HtRect chartRect;               // CHART_ROOT screen rect
-	std::vector<HtItem> items;      // TASK / MILESTONE / ROW_LABEL / TITLE rects
+	std::vector<HtItem> items;      // TASK / MILESTONE / ROW_LABEL / TITLE / Marker rects
 	std::vector<HtRowBand> rowBands;
 	// Half-width (in device pixels) of a task's resize edge band for THIS
 	// snapshot. Defaults to kHtEdgePx (4px @ 96 DPI) so existing callers that
 	// never touch this field keep the pre-DPI-awareness behavior unchanged.
-	// The overlay sets this to HtScalePx(kHtEdgePx, dpi) once per tick.
+	// The overlay sets this to HtScalePx(kHtEdgePx, dpi) once per tick. Also
+	// used as the half-width of a Marker item's synthesized hit band (see
+	// HtItemKind::Marker) — markers are thin rendered lines, so their `rect`
+	// here is NOT the rendered shape's rect (near-zero width) but a band of
+	// [x-edgeBandPx, x+edgeBandPx] spanning the chart's full vertical band,
+	// synthesized by the overlay from PP_PROJ (see Overlay.cpp's BuildRowBands).
 	long edgeBandPx = 4;
 };
 
@@ -59,6 +65,8 @@ enum class HtZone {
 	TaskEdgeR,  // within +-kHtEdgePx of a task's right edge (id = task id)
 	Milestone,  // inside a milestone marker rect (id = milestone id)
 	Label,      // inside a ROW_LABEL or TITLE text rect (kind + id)
+	Marker,     // within +-edgeBandPx of a vertical marker line (id = marker id);
+	            // below TaskBody/TaskEdge/Milestone, above RowBand/EmptyCell
 	RowBand,    // inside a row band but left of / around the label column
 	            // (rowId set), or chart background outside any band (rowId empty)
 	EmptyCell   // inside a row band's timeline area with nothing under the
@@ -197,7 +205,7 @@ HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind = HtItemKind::Ta
 enum class HtCursor {
 	Arrow,     // default: RowBand, Label, outside any special widget
 	SizeAll,   // TaskBody, Milestone: whole-item move
-	SizeWE,    // TaskEdgeL/TaskEdgeR: horizontal resize
+	SizeWE,    // TaskEdgeL/TaskEdgeR/Marker: horizontal resize (ew-resize)
 	Cross,     // EmptyCell: click-drag creates a new task here
 	Hand,      // toolbar / hover-insert-row '+' / move-chart grip chrome widgets
 	Default    // outside the chart and not over any chrome widget: let

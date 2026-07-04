@@ -41,6 +41,11 @@
 //                       with no task under the pointer) creates a new task
 //                       spanning the drag, verified by re-reading PP_DOC
 //                       (task count +1, correct row, ~N-day span).
+//   Stage 12: MARKERDRAG — a synthetic drag gesture on the "today" marker's
+//                       vertical line (located via PP_PROJ + PP_DOC, NOT the
+//                       rendered shape rect — see GanttHitTest's Marker zone)
+//                       shifts the marker by exactly N days, verified by
+//                       re-reading PP_DOC.
 //
 //   ppoverlay.exe <output.png>
 #include "../PowerPlannerAddin/pch.h"
@@ -1657,6 +1662,166 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"SCOPE: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"SCOPE PASS\n" : L"SCOPE FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 12: MARKERDRAG -------------------------------------------
+			// Select the "today" marker via a posted click at its synthesized hit
+			// band (located from PP_PROJ + PP_DOC's marker date — NOT the rendered
+			// TODAY_LINE shape's rect, which is a near-zero-width line unusable for
+			// hit-testing; see GanttHitTest's Marker zone / Overlay.cpp's
+			// BuildRowBands marker-band synthesis), then drag it horizontally by
+			// exactly N days via WM_LBUTTONDOWN + several WM_MOUSEMOVEs +
+			// WM_LBUTTONUP posted straight to the overlay hwnd, mirroring stage
+			// 5's (DRAG) mechanics exactly. Re-read PP_DOC afterward: the marker's
+			// date must have shifted by exactly N days, and the overlay's own-
+			// selection model must still report the marker's id (A2, same as DRAG).
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					auto WNarrowMk = [](const wchar_t* wtext) -> std::string {
+						if (!wtext || !*wtext) return "";
+						int len = (int)::wcslen(wtext);
+						int nb = ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, NULL, 0, NULL, NULL);
+						std::string s(nb, '\0');
+						if (nb > 0) ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, &s[0], nb, NULL, NULL);
+						return s;
+					};
+
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					std::wstring markerId;
+					if (chartRoot) {
+						PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+						long gn = grp->GetCount();
+						for (long j = 1; j <= gn && markerId.empty(); ++j) {
+							PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+							_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+							if (ckind == L"TODAY_LINE") {
+								_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								markerId = cid.length() ? (const wchar_t*)cid : L"";
+							}
+						}
+					}
+
+					HWND ov = OverlayHwnd();
+					if (!chartRoot || markerId.empty() || !ov) {
+						wprintf(L"MARKERDRAG: could not find CHART_ROOT/TODAY_LINE child or overlay hwnd\n");
+					} else {
+						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+						std::string markerIdUtf8 = WNarrowMk(markerId.c_str());
+
+						// Read PP_DOC + PP_PROJ once, before the drag (mirrors the
+						// add-in's own gesture-start read AND Overlay.cpp's
+						// BuildRowBands marker-band synthesis).
+						std::string docJsonBefore = WNarrowMk((const wchar_t*)chartRoot->GetTags()->Item(_bstr_t(L"PP_DOC")));
+						std::string projJson = WNarrowMk((const wchar_t*)chartRoot->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+						PpDocument docBefore = DocumentFromJson(docJsonBefore);
+
+						std::string origDate;
+						for (const auto& m : docBefore.markers) {
+							if (m.id == markerIdUtf8) { origDate = m.date; break; }
+						}
+
+						PpProj proj;
+						bool haveProj = ParseProj(projJson, &proj);
+
+						if (origDate.empty() || !haveProj) {
+							wprintf(L"MARKERDRAG: could not resolve marker date or PP_PROJ before drag\n");
+						} else {
+							// Same projection formula GanttBuilder/Overlay.cpp use:
+							// xPt = originX + (day - minDay + pad) * ptPerDay.
+							long dayIdx = DateToDays(origDate) - proj.minDay + proj.pad;
+							float xPt = proj.originX + (float)dayIdx * proj.ptPerDay;
+							int screenX = win->PointsToScreenPixelsX(xPt);
+							// Any y within the chart band works (the hit band spans
+							// the full chart height) — use the chart root's vertical
+							// midpoint.
+							float chartTop = chartRoot->GetTop(), chartH = chartRoot->GetHeight();
+							int screenY = win->PointsToScreenPixelsY(chartTop + chartH / 2.0f);
+							POINT screenPt = { screenX, screenY };
+							POINT clientPt = screenPt;
+							::ScreenToClient(ov, &clientPt);
+
+							SetOverlayCursorOverride(screenPt);
+
+							// Select the marker first (same click-select route as
+							// OWNSEL/DRAG) so we can also assert the selection
+							// survives the drag.
+							LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+							::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+							PumpFor(400);
+
+							const long kDragDays = 5;
+							// SCREEN px-per-day, derived the same way stage 5/DRAG
+							// does: from ptPerDay (slide points) via the actual
+							// screen-pixel/point ratio at this zoom level, which
+							// PointsToScreenPixelsX already folds in.
+							int screenX1 = win->PointsToScreenPixelsX(xPt);
+							int screenX2 = win->PointsToScreenPixelsX(xPt + proj.ptPerDay);
+							double pxPerDay = (double)(screenX2 - screenX1);
+							long shiftPx = (long)::lround(kDragDays * pxPerDay);
+
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+							PumpFor(60);
+							g_cursorOverrideUsedDuringDrag = true;
+							const int kSteps = 5;
+							for (int s = 1; s <= kSteps; ++s) {
+								int mx = clientPt.x + (int)(shiftPx * s / kSteps);
+								SetOverlayCursorOverride({ screenPt.x + (mx - clientPt.x), screenPt.y });
+								LPARAM moveLp = MAKELPARAM((short)mx, (short)clientPt.y);
+								::PostMessageW(ov, WM_MOUSEMOVE, 0, moveLp);
+								PumpFor(60);
+							}
+							int finalX = clientPt.x + (int)shiftPx;
+							SetOverlayCursorOverride({ screenPt.x + (int)shiftPx, screenPt.y });
+							LPARAM upLp = MAKELPARAM((short)finalX, (short)clientPt.y);
+							::PostMessageW(ov, WM_LBUTTONUP, 0, upLp);
+							PumpFor(800);
+
+							std::string afterJson = ReadGanttFromSlide(app);
+							PpDocument docAfter = DocumentFromJson(afterJson);
+
+							std::string newDate;
+							bool foundAfter = false;
+							for (const auto& m : docAfter.markers) {
+								if (m.id == markerIdUtf8) { newDate = m.date; foundAfter = true; break; }
+							}
+
+							std::string expectDate = DaysToDate(DateToDays(origDate) + kDragDays);
+
+							const char* gotIdUtf8 = Overlay_GetSelectedIdForTest();
+							std::string gotId = gotIdUtf8 ? gotIdUtf8 : "";
+
+							bool dateShifted = foundAfter && newDate == expectDate;
+							bool selectionKept = (gotId == markerIdUtf8);
+
+							if (!dateShifted) {
+								wprintf(L"MARKERDRAG: expected %hs, got %hs\n",
+									expectDate.c_str(), newDate.c_str());
+							}
+							if (!selectionKept) {
+								wprintf(L"MARKERDRAG: expected selected id '%hs', got '%hs'\n", markerIdUtf8.c_str(), gotId.c_str());
+							}
+							pass = dateShifted && selectionKept;
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"MARKERDRAG: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"MARKERDRAG PASS\n" : L"MARKERDRAG FAIL\n");
 				if (!pass) rc = 1;
 			}
 

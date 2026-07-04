@@ -186,9 +186,9 @@ POINT g_mouseDownPt = {};
 // without ever early-returning (the ghost still needs to paint every tick).
 bool g_gestureActive = false;
 bool g_dragActive = false;
-enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, Milestone, Create };
+enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, Milestone, Create, Marker };
 DragKind g_dragKind = DragKind::None;
-std::string g_dragId;          // task or milestone PP_ID being dragged
+std::string g_dragId;          // task, milestone, or marker PP_ID being dragged
 RECT g_dragAnchorRect = {};    // original screen rect of the dragged item at gesture start
 std::string g_dragOrigStart;   // original ISO start date (task) or date (milestone)
 std::string g_dragOrigEnd;     // original ISO end date (task); empty for milestones
@@ -748,6 +748,26 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_editRegions.clear();
 		g_hitSnapshot = HtSnapshot{};
 		g_hitSnapshot.chartRect = ToHtRect(g_chartScreenRect);
+		g_hitSnapshot.edgeBandPx = Scale((int)kHtEdgePx);
+
+		// Markers (TODAY_LINE/DEADLINE/CUSTOM_MARKER) are thin rendered lines —
+		// their shape rect is near-zero width, unusable for hit-testing. Instead
+		// synthesize each marker's hit band directly from PP_PROJ (read fresh
+		// here, never cached across commits per fix-fit-persistence: the chart
+		// frame is preserved across rebuilds, but ptPerDay/originX can still
+		// shift on a rescale) + the marker's date from PP_DOC. Read once per
+		// walk (cheap: one more Tags lookup on the already-open chart shape).
+		PpProj proj;
+		bool haveProj = ParseProj(g_chartProj, &proj);
+		std::vector<PpMarker> markers;
+		if (haveProj) {
+			_bstr_t docTag = chart->GetTags()->Item(_bstr_t(L"PP_DOC"));
+			if (docTag.length()) {
+				PpDocument markerDoc = DocumentFromJson(Narrow((const wchar_t*)docTag));
+				markers = markerDoc.markers;
+			}
+		}
+
 		for (long i = 1; i <= n; ++i) {
 			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
 			_bstr_t kind = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
@@ -755,7 +775,32 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			std::string kindStr = Narrow((const wchar_t*)kind);
 			// TASK_PROGRESS is the inner fill of a TASK bar — the TASK rect
 			// already covers it, so it does not participate in hit-testing.
-			if (kindStr != "ROW_LABEL" && kindStr != "TITLE" && kindStr != "TASK" && kindStr != "MILESTONE") continue;
+			// TODAY_LABEL/DEADLINE_LABEL/CUSTOM_MARKER_LABEL are the marker's
+			// text chip, not the line itself — also excluded (the line's own
+			// PP_KIND, handled below via the marker-band synthesis, is what
+			// drives HtZone::Marker).
+			bool isMarkerLine = kindStr == "TODAY_LINE" || kindStr == "DEADLINE" || kindStr == "CUSTOM_MARKER";
+			if (kindStr != "ROW_LABEL" && kindStr != "TITLE" && kindStr != "TASK" && kindStr != "MILESTONE" && !isMarkerLine) continue;
+			if (isMarkerLine) {
+				// Ignore the rendered rect entirely (see comment above); derive
+				// the band from PP_PROJ + this marker's date instead. If PP_PROJ
+				// didn't parse or the marker's date isn't found in PP_DOC (doc/
+				// tags out of sync mid-rebuild), skip rather than guess.
+				if (!haveProj) continue;
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				std::string idStr = Narrow((const wchar_t*)id);
+				if (idStr.empty()) continue;
+				const PpMarker* mk = nullptr;
+				for (const auto& m : markers) if (m.id == idStr) { mk = &m; break; }
+				if (!mk) continue;
+				long dayIdx = DateToDays(mk->date) - proj.minDay + proj.pad;
+				float xPt = proj.originX + (float)dayIdx * proj.ptPerDay;
+				int screenX = win->PointsToScreenPixelsX(xPt);
+				long halfBand = Scale((int)kHtEdgePx);
+				RECT mr = { screenX - halfBand, g_chartScreenRect.top, screenX + halfBand, g_chartScreenRect.bottom };
+				g_hitSnapshot.items.push_back({ HtItemKind::Marker, idStr, ToHtRect(mr) });
+				continue;
+			}
 			float left = ch->GetLeft(), top = ch->GetTop(), w = ch->GetWidth(), h = ch->GetHeight();
 			RECT rr = {
 				win->PointsToScreenPixelsX(left),
@@ -826,7 +871,8 @@ void SyncSelectionChromeFromOwnSelection() {
 		return;
 	}
 
-	HtItemKind wantKind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone : HtItemKind::Task;
+	HtItemKind wantKind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone
+		: (g_ownSelKind == "MARKER") ? HtItemKind::Marker : HtItemKind::Task;
 	for (const auto& item : g_hitSnapshot.items) {
 		if (item.kind == wantKind && item.id == g_ownSelId) {
 			g_selKind = g_ownSelKind;
@@ -1553,11 +1599,12 @@ bool HandleSetCursor(HWND hwnd) {
 }
 
 // Apply the selection effect of a completed CLICK gesture (down+up within the
-// drag threshold, same point). TaskBody/edges and Milestone select the item;
-// a RowBand hit with a row id selects the row; EmptyCell/background-RowBand
-// (empty row id)/Outside all clear the selection. Chrome is re-synced by the
-// caller's next Tick() (or immediately, for the harness's benefit, by calling
-// SyncSelectionChromeFromOwnSelection after this).
+// drag threshold, same point). TaskBody/edges, Milestone, and Marker select
+// the item; a RowBand hit with a row id selects the row; EmptyCell/
+// background-RowBand (empty row id)/Outside all clear the selection. Chrome
+// is re-synced by the caller's next Tick() (or immediately, for the
+// harness's benefit, by calling SyncSelectionChromeFromOwnSelection after
+// this).
 void ApplyClickSelection(const HtHit& hit) {
 	switch (hit.zone) {
 	case HtZone::TaskBody:
@@ -1567,6 +1614,9 @@ void ApplyClickSelection(const HtHit& hit) {
 		return;
 	case HtZone::Milestone:
 		SetOwnSelection("MILESTONE", hit.id);
+		return;
+	case HtZone::Marker:
+		SetOwnSelection("MARKER", hit.id);
 		return;
 	case HtZone::RowBand:
 		if (!hit.rowId.empty()) {
@@ -1644,16 +1694,17 @@ float ComputeDragPxPerDay(const RECT& anchorRect, long anchorSpanDays) {
 }
 
 // Begin a drag-move-resize gesture anchored at a TaskBody/TaskEdgeL/
-// TaskEdgeR/Milestone hit. Reads the document once (per A4's guidance to read
-// doc dates at gesture start) so subsequent WM_MOUSEMOVE handling stays
-// COM-free. No-ops (leaves gesture state untouched) if the doc/task/milestone
-// can't be resolved — the gesture then behaves as a plain click-vs-drag-less
-// capture (existing WM_LBUTTONUP click-select logic still applies on threshold-
-// within release).
+// TaskEdgeR/Milestone/Marker hit. Reads the document once (per A4's guidance
+// to read doc dates at gesture start) so subsequent WM_MOUSEMOVE handling
+// stays COM-free. No-ops (leaves gesture state untouched) if the doc/task/
+// milestone/marker can't be resolved — the gesture then behaves as a plain
+// click-vs-drag-less capture (existing WM_LBUTTONUP click-select logic still
+// applies on threshold-within release).
 void StartDragGesture(const HtHit& hit, POINT downPt) {
 	ResetDragGestureState();
 	if (hit.zone != HtZone::TaskBody && hit.zone != HtZone::TaskEdgeL &&
-		hit.zone != HtZone::TaskEdgeR && hit.zone != HtZone::Milestone) {
+		hit.zone != HtZone::TaskEdgeR && hit.zone != HtZone::Milestone &&
+		hit.zone != HtZone::Marker) {
 		return;
 	}
 	if (!g_app) return;
@@ -1661,12 +1712,12 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 	if (json.empty()) return;
 	PpDocument doc = DocumentFromJson(json);
 
+	HtItemKind wantKind = (hit.zone == HtZone::Milestone) ? HtItemKind::Milestone
+		: (hit.zone == HtZone::Marker) ? HtItemKind::Marker : HtItemKind::Task;
 	RECT anchorRect = {};
 	bool haveRect = false;
 	for (const auto& item : g_hitSnapshot.items) {
-		if (item.id == hit.id &&
-			((hit.zone == HtZone::Milestone && item.kind == HtItemKind::Milestone) ||
-			 (hit.zone != HtZone::Milestone && item.kind == HtItemKind::Task))) {
+		if (item.id == hit.id && item.kind == wantKind) {
 			anchorRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
 			haveRect = true;
 			break;
@@ -1674,7 +1725,21 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 	}
 	if (!haveRect) return;
 
-	if (hit.zone == HtZone::Milestone) {
+	if (hit.zone == HtZone::Marker) {
+		const PpMarker* mk = nullptr;
+		for (const auto& m : doc.markers) if (m.id == hit.id) { mk = &m; break; }
+		if (!mk) return;
+		g_dragKind = DragKind::Marker;
+		g_dragId = hit.id;
+		g_dragOrigStart = mk->date;
+		g_dragOrigEnd.clear();
+		// A marker's synthesized hit rect is a fixed-width band (2*edgeBandPx)
+		// independent of the day axis, so it carries no usable px/day scale of
+		// its own (unlike a task's rect-width / day-span) — always fall back
+		// to scanning the snapshot for a task with a usable span, exactly like
+		// the Milestone case (ComputeDragPxPerDay(rect, 0) does this already).
+		g_dragPxPerDay = ComputeDragPxPerDay(anchorRect, 0);
+	} else if (hit.zone == HtZone::Milestone) {
 		const PpMilestone* ms = nullptr;
 		for (const auto& m : doc.milestones) if (m.id == hit.id) { ms = &m; break; }
 		if (!ms) return;
@@ -1862,6 +1927,7 @@ void ComputeDragCandidateDates(DragKind kind, const std::string& origStart, cons
 		break;
 	case DragKind::TaskBody:
 	case DragKind::Milestone:
+	case DragKind::Marker:
 	default:
 		startDay += deltaDays;
 		endDay += deltaDays;
@@ -1927,6 +1993,18 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 					}
 				}
 				selKind = "MILESTONE";
+			} else if (kind == DragKind::Marker) {
+				// Markers have no length either (like milestones), but are NOT
+				// tasks, so NudgeTask's task-id fallback does not apply here —
+				// go straight to GanttOps' dedicated marker-date setter.
+				for (const auto& mk : doc.markers) {
+					if (mk.id == id) {
+						std::string newDate = DaysToDate(DateToDays(mk.date) + deltaDays);
+						changed = SetMarkerDate(doc, id, newDate);
+						break;
+					}
+				}
+				selKind = "MARKER";
 			} else if (kind == DragKind::TaskBody) {
 				// Row-reassign first (only if the target row actually differs
 				// from the task's CURRENT row — re-read fresh, not the gesture-
@@ -2676,6 +2754,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			}
 			break;
 		case DragKind::Milestone:
+		case DragKind::Marker:
 		default:
 			ghost.left = anchor.left + shiftPx;
 			ghost.right = anchor.right + shiftPx;
@@ -2698,6 +2777,14 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			g.FillPath(&ghostFill, &diamond);
 			Pen ghostPen(GpColor(220, ACCENT), 1.5f);
 			g.DrawPath(&ghostPen, &diamond);
+		} else if (g_dragKind == DragKind::Marker) {
+			// A vertical line ghost (matching the marker's own rendered
+			// shape), shifted horizontally and spanning the anchor band's
+			// full height (the anchor rect IS the synthesized hit band, which
+			// already spans the chart's full vertical extent).
+			int cx = (ghost.left + ghost.right) / 2;
+			Pen ghostPen(GpColor(220, ACCENT), 2.0f);
+			g.DrawLine(&ghostPen, cx, anchor.top, cx, anchor.bottom);
 		} else {
 			GraphicsPath ghostPath;
 			AddRoundRect(ghostPath, (REAL)ghost.left, (REAL)ghost.top,
