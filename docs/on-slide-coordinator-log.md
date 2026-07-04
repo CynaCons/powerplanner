@@ -473,3 +473,29 @@ Second user feedback wave folded as units 13-14 + a rewrite:
 
 appbar-shell amended: obeys foreground scoping, painted from GanttTheme.h, Grid
 cycle + five-scale control; deps now include V3-13 + V3-14. Backlog: 14 pending.
+
+### Review pass 2 (new/rewritten units) folded (2026-07-04)
+
+11 findings on fix-overlay-scoping / material-theme / grid-scale-options, all
+folded: material-theme gate was VACUOUS (REFLOW PASS pre-exists) -> new marker
+THEME PNG OK with unconditional Slide.Export + on-disk verification + rc=1 on
+failure; MaterialLight()/Theme live in Scene.h NOT GanttBuilder.cpp (Scene.h
+added to paths, CTX corrected in all 3 units); fixture-regen instruction DELETED
+- spec/fixtures/basic-chart.expected.json is a layout-only cross-implementation
+contract with the web TS engine (conformance.cpp never serializes separators;
+fixture removed from all allowed_paths, "fix the code, never the fixture");
+grid-scale-options gate extended to FULL suite (axis rewrite churns harness-
+exercised shape population); editor semantics corrected (inline COMMITS on
+kill-focus, card CANCELS on WA_INACTIVE, both auto-fire - scoping only
+hide-if-still-visible + NULL checks); pid trap documented (compare fg pid vs
+g_pptHwnd owner pid, NOT GetCurrentProcessId - Esc idiom is production-only);
+SCOPE stage uses exported OverlayHwnd(), editor/card hidden-OR-nonexistent;
+foreground-steal helper prints FOREGROUND STEAL FAILED + nonzero on refusal;
+deps added: material-theme <- {grid-scale-options, fix-overlay-scoping}.
+Verified-good claims recorded: harness already foregrounds PowerPoint at start
+and in SUPPRESS; Slide.Export already used argv-gated in reflow-test.cpp.
+
+DISPATCH ORDER: fix-overlay-scoping (user bug) -> fit-to-slide ->
+marker-model-ops -> marker-drag -> text-model -> text-interaction ->
+label-placement -> row-uniform-ux -> grid-scale-options -> material-theme ->
+appbar-shell -> appbar-actions -> dependency-ux -> context-menu-v3.
