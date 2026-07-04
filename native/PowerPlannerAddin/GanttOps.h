@@ -34,4 +34,20 @@ bool SetMarkerDate(PpDocument& doc, const std::string& id, const std::string& da
 // Updates a marker's label. Returns false if id is not a marker.
 bool SetMarkerLabel(PpDocument& doc, const std::string& id, const std::string& label);
 
+// Adds a text annotation. If anchorId is non-empty, the text is anchored to
+// that task/milestone id (rowId/date are ignored — anchored position is
+// derived from the anchor at layout time); if anchorId is empty, the text is
+// free-floating at the (rowId, date) cell origin. Generates a unique id
+// ("txt<N>") and returns it, mirroring AddRow/AddTask/AddMarker's
+// id-return convention.
+std::string AddText(PpDocument& doc, const std::string& label, const std::string& anchorId,
+	const std::string& rowId, const std::string& dateISO);
+// Updates a text's label. Returns false if id is not a text.
+bool SetTextLabel(PpDocument& doc, const std::string& id, const std::string& label);
+// Moves a text by adjusting its (dx, dy) point offset; for a free (non-
+// anchored) text, rowId/dateISO (if non-empty) also re-home the text to a new
+// cell. Returns false if id is not a text.
+bool MoveText(PpDocument& doc, const std::string& id, float dx, float dy,
+	const std::string& rowId = "", const std::string& dateISO = "");
+
 int OpsSelfTest();

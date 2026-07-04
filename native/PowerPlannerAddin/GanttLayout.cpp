@@ -155,5 +155,53 @@ GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStar
 		R.dependencies.push_back({ dep.id, fromX, toX });
 	}
 
+	// Step 9 — texts. Anchored text (anchorId set) tracks a task or milestone's
+	// current laid-out position (so a rebuild after the anchor's dates shift
+	// carries the text along automatically); free text (anchorId empty) is
+	// placed at its own (rowId, date) cell origin. Anchors/rows that no longer
+	// exist are silently dropped, mirroring how tasks/milestones drop when
+	// their rowId disappears (Step 4/5 above).
+	std::map<std::string, const LaidMilestone*> laidMsById;
+	for (const auto& lm : R.milestones) laidMsById[lm.id] = &lm;
+	for (const auto& txt : doc.texts) {
+		LaidText lt;
+		lt.id = txt.id;
+		lt.dx = txt.dx;
+		lt.dy = txt.dy;
+		if (!txt.anchorId.empty()) {
+			auto ft = laidById.find(txt.anchorId);
+			if (ft != laidById.end()) {
+				const LaidTask* anchor = ft->second;
+				lt.anchored = true;
+				lt.rowIndex = anchor->rowIndex;
+				lt.subRow = anchor->subRow;
+				lt.xDay = anchor->xDay;
+				lt.widthDays = anchor->widthDays;
+				R.texts.push_back(lt);
+				continue;
+			}
+			auto fm = laidMsById.find(txt.anchorId);
+			if (fm != laidMsById.end()) {
+				const LaidMilestone* anchor = fm->second;
+				lt.anchored = true;
+				lt.rowIndex = anchor->rowIndex;
+				lt.subRow = 0;
+				lt.xDay = anchor->xDay;
+				lt.widthDays = 0;
+				R.texts.push_back(lt);
+				continue;
+			}
+			continue;  // anchor no longer exists
+		}
+		auto it = rowIndex.find(txt.rowId);
+		if (it == rowIndex.end()) continue;
+		lt.anchored = false;
+		lt.rowIndex = it->second;
+		lt.subRow = 0;
+		lt.xDay = xDay(txt.date);
+		lt.widthDays = 0;
+		R.texts.push_back(lt);
+	}
+
 	return R;
 }

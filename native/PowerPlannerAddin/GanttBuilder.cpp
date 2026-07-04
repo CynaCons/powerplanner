@@ -288,6 +288,26 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 		Prim p = scene::connector(x1, y1, x2, y2, c); p.tagKind = "DEP"; p.tagId = d.id; sc.prims.push_back(p);
 	}
 
+	// Free-standing / anchored text annotations. Anchored text (L.anchored)
+	// sits at its anchor's current top-right corner (xDay+widthDays, subRow)
+	// plus (dx, dy) points, so it automatically follows the anchor across a
+	// rebuild triggered by the anchor's dates shifting (the layout pass
+	// recomputes anchor xDay/widthDays/rowIndex/subRow every call — see
+	// GanttLayout.cpp Step 9). Free text sits at its (rowId, date) cell origin
+	// plus (dx, dy). Tagged PP_KIND=TEXT / PP_ID=<id> so UpdateGantt's diff
+	// moves rather than recreates it (stable id, unlike an emission ordinal).
+	for (const auto& lt : L.texts) {
+		std::string label;
+		for (const auto& td : doc.texts) if (td.id == lt.id) label = td.label;
+		float baseX = lt.anchored ? xToPt(lt.xDay + lt.widthDays) : xToPt(lt.xDay);
+		float baseY = slotTop(L.rowOffsets[lt.rowIndex] + lt.subRow);
+		float left = baseX + lt.dx;
+		float top = baseY + lt.dy;
+		Style tx; tx.textBgr = Bgr(th.onSurface); tx.fontSize = 10.0f; tx.align = TextAlign::Left;
+		Prim t = scene::text(left, top, 120.0f, 16.0f, Widen(label), tx);
+		t.tagKind = "TEXT"; t.tagId = lt.id; sc.prims.push_back(t);
+	}
+
 	// Row labels (in the rail, indented for children).
 	for (size_t i = 0; i < L.visibleRowIds.size(); ++i) {
 		std::string label, groupId;

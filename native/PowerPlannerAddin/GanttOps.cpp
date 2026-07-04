@@ -12,6 +12,7 @@ bool IdExists(const PpDocument& doc, const std::string& id) {
 	for (const auto& br : doc.brackets) if (br.id == id) return true;
 	for (const auto& dep : doc.deps) if (dep.id == id) return true;
 	for (const auto& marker : doc.markers) if (marker.id == id) return true;
+	for (const auto& txt : doc.texts) if (txt.id == id) return true;
 	return false;
 }
 
@@ -83,6 +84,12 @@ bool DeleteById(PpDocument& doc, const std::string& id) {
 				b.rowIds.erase(std::remove(b.rowIds.begin(), b.rowIds.end(), id), b.rowIds.end());
 				return b.rowIds.empty();
 			});
+			RemoveIf(doc.texts, [&](const PpText& t) {
+				if (!t.anchorId.empty()) {
+					return std::find(deletedTaskIds.begin(), deletedTaskIds.end(), t.anchorId) != deletedTaskIds.end();
+				}
+				return t.rowId == id;
+			});
 			return true;
 		}
 	}
@@ -91,14 +98,19 @@ bool DeleteById(PpDocument& doc, const std::string& id) {
 		if (task.id == id) {
 			RemoveIf(doc.tasks, [&](const PpTask& t) { return t.id == id; });
 			RemoveIf(doc.deps, [&](const PpDependency& d) { return d.from == id || d.to == id; });
+			RemoveIf(doc.texts, [&](const PpText& t) { return t.anchorId == id; });
 			return true;
 		}
 	}
 
-	if (RemoveIf(doc.milestones, [&](const PpMilestone& m) { return m.id == id; })) return true;
+	if (RemoveIf(doc.milestones, [&](const PpMilestone& m) { return m.id == id; })) {
+		RemoveIf(doc.texts, [&](const PpText& t) { return t.anchorId == id; });
+		return true;
+	}
 	if (RemoveIf(doc.brackets, [&](const PpBracket& b) { return b.id == id; })) return true;
 	if (RemoveIf(doc.deps, [&](const PpDependency& d) { return d.id == id; })) return true;
 	if (RemoveIf(doc.markers, [&](const PpMarker& m) { return m.id == id; })) return true;
+	if (RemoveIf(doc.texts, [&](const PpText& t) { return t.id == id; })) return true;
 	return false;
 }
 
@@ -161,6 +173,46 @@ bool SetMarkerLabel(PpDocument& doc, const std::string& id, const std::string& l
 	for (auto& marker : doc.markers) {
 		if (marker.id == id) {
 			marker.label = label;
+			return true;
+		}
+	}
+	return false;
+}
+
+std::string AddText(PpDocument& doc, const std::string& label, const std::string& anchorId,
+	const std::string& rowId, const std::string& dateISO) {
+	PpText txt;
+	txt.id = NextId(doc, "txt");
+	txt.label = label;
+	txt.anchorId = anchorId;
+	if (anchorId.empty()) {
+		txt.rowId = rowId;
+		txt.date = dateISO;
+	}
+	doc.texts.push_back(txt);
+	return txt.id;
+}
+
+bool SetTextLabel(PpDocument& doc, const std::string& id, const std::string& label) {
+	for (auto& txt : doc.texts) {
+		if (txt.id == id) {
+			txt.label = label;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool MoveText(PpDocument& doc, const std::string& id, float dx, float dy,
+	const std::string& rowId, const std::string& dateISO) {
+	for (auto& txt : doc.texts) {
+		if (txt.id == id) {
+			txt.dx = dx;
+			txt.dy = dy;
+			if (txt.anchorId.empty()) {
+				if (!rowId.empty()) txt.rowId = rowId;
+				if (!dateISO.empty()) txt.date = dateISO;
+			}
 			return true;
 		}
 	}

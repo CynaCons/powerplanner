@@ -49,6 +49,17 @@ std::string DocumentToJson(const PpDocument& d) {
 		if (!m.color.empty()) mm["color"] = m.color;
 		j["markers"].push_back(mm);
 	}
+	if (!d.texts.empty()) {
+		j["texts"] = json::array();
+		for (const auto& t : d.texts) {
+			json tt = { {"id", t.id}, {"label", t.label}, {"dx", t.dx}, {"dy", t.dy} };
+			if (!t.anchorId.empty()) tt["anchorId"] = t.anchorId;
+			if (!t.rowId.empty()) tt["rowId"] = t.rowId;
+			if (!t.date.empty()) tt["date"] = t.date;
+			if (!t.color.empty()) tt["color"] = t.color;
+			j["texts"].push_back(tt);
+		}
+	}
 	j["style"] = { {"theme", "light"}, {"preset", "default"} };
 	return j.dump();
 }
@@ -117,6 +128,18 @@ PpDocument DocumentFromJson(const std::string& jsonStr) {
 		marker.date = getStr(m, "date");
 		marker.color = getStr(m, "color");
 		doc.markers.push_back(marker);
+	}
+	for (const auto& t : d.value("texts", json::array())) {
+		PpText txt;
+		txt.id = getStr(t, "id");
+		txt.label = getStr(t, "label");
+		txt.anchorId = getStr(t, "anchorId");
+		txt.rowId = getStr(t, "rowId");
+		txt.date = getStr(t, "date");
+		txt.color = getStr(t, "color");
+		txt.dx = t.value("dx", 0.0f);
+		txt.dy = t.value("dy", 0.0f);
+		doc.texts.push_back(txt);
 	}
 	return doc;
 }

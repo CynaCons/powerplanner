@@ -451,6 +451,158 @@ static bool RunMarkerOpsChecks() {
 	return ok;
 }
 
+// Text ops checks: AddText/SetTextLabel/MoveText, DeleteById's text-removal
+// (direct + cascading via row/task/milestone deletion), a JSON round-trip
+// (including the absent-field -> empty-vector backward-compat case), and a
+// layout assertion that an anchored text's laid-out rect tracks its anchor
+// task across a rebuild after the anchor's dates shift. Print 'TEXT OPS OK'
+// when these pass (after OPS HARNESS OK / DPI HELPER OK / MENU MAP OK /
+// CURSOR MAP OK / MARKER OPS OK).
+static bool RunTextOpsChecks() {
+	bool ok = true;
+
+	PpDocument doc;
+	doc.title = "Text ops sample";
+	doc.scale = "week";
+	doc.rows.push_back(PpRow{"row-1", "Row 1", "", false});
+	doc.tasks.push_back(PpTask{"task-1", "Task 1", "2026-01-01", "2026-01-05", "row-1", "", 0});
+	doc.milestones.push_back(PpMilestone{"ms-1", "Milestone 1", "2026-01-10", "row-1", ""});
+
+	// AddText: anchored.
+	const std::string anchTxt = AddText(doc, "Anchored note", "task-1", "", "");
+	ok = Check(!anchTxt.empty(), "AddText returns a non-empty id (anchored)") && ok;
+	ok = Check(doc.texts.size() == 1, "AddText appends a text") && ok;
+	ok = Check(doc.texts.back().id == anchTxt && doc.texts.back().label == "Anchored note"
+		&& doc.texts.back().anchorId == "task-1", "AddText stores label/anchorId under the returned id") && ok;
+
+	// AddText: free (anchorId empty -> rowId/date placement).
+	const std::string freeTxt = AddText(doc, "Free note", "", "row-1", "2026-01-03");
+	ok = Check(!freeTxt.empty() && freeTxt != anchTxt, "AddText returns a fresh, unique id for a free text") && ok;
+	ok = Check(doc.texts.back().anchorId.empty() && doc.texts.back().rowId == "row-1"
+		&& doc.texts.back().date == "2026-01-03", "AddText (free) stores rowId/date, no anchorId") && ok;
+	ok = Check(doc.texts.size() == 2, "AddText grew the texts list to 2") && ok;
+
+	// SetTextLabel.
+	ok = Check(SetTextLabel(doc, freeTxt, "Free note (renamed)"), "SetTextLabel returns true for existing text") && ok;
+	ok = Check(doc.texts.back().label == "Free note (renamed)", "SetTextLabel updates the label") && ok;
+	ok = Check(!SetTextLabel(doc, "missing-text", "x"), "SetTextLabel returns false for missing text") && ok;
+
+	// MoveText: dx/dy always updates; free text can also re-home rowId/date.
+	ok = Check(MoveText(doc, anchTxt, 5.0f, -3.0f), "MoveText returns true for existing (anchored) text") && ok;
+	{
+		const PpText* t = nullptr;
+		for (const auto& x : doc.texts) if (x.id == anchTxt) t = &x;
+		ok = Check(t && t->dx == 5.0f && t->dy == -3.0f, "MoveText updates dx/dy on an anchored text") && ok;
+		ok = Check(t && t->anchorId == "task-1", "MoveText does not disturb an anchored text's anchorId") && ok;
+	}
+	ok = Check(MoveText(doc, freeTxt, 2.0f, 4.0f, "row-1", "2026-01-06"), "MoveText returns true for existing (free) text") && ok;
+	{
+		const PpText* t = nullptr;
+		for (const auto& x : doc.texts) if (x.id == freeTxt) t = &x;
+		ok = Check(t && t->dx == 2.0f && t->dy == 4.0f, "MoveText updates dx/dy on a free text") && ok;
+		ok = Check(t && t->date == "2026-01-06", "MoveText re-homes a free text's date") && ok;
+	}
+	ok = Check(!MoveText(doc, "missing-text", 1.0f, 1.0f), "MoveText returns false for missing text") && ok;
+
+	// JSON round-trip: texts survive, including anchorId/rowId/date/dx/dy.
+	{
+		const std::string json = DocumentToJson(doc);
+		PpDocument roundTrip = DocumentFromJson(json);
+		ok = Check(roundTrip.texts.size() == 2, "round-trip preserves text count") && ok;
+		bool foundAnchored = false, foundFree = false;
+		for (const auto& t : roundTrip.texts) {
+			if (t.id == anchTxt) {
+				foundAnchored = Check(t.anchorId == "task-1", "round-trip preserves anchored text's anchorId")
+					&& Check(t.dx == 5.0f && t.dy == -3.0f, "round-trip preserves anchored text's dx/dy");
+			}
+			if (t.id == freeTxt) {
+				foundFree = Check(t.rowId == "row-1", "round-trip preserves free text's rowId")
+					&& Check(t.date == "2026-01-06", "round-trip preserves free text's date")
+					&& Check(t.anchorId.empty(), "round-trip preserves free text's empty anchorId");
+			}
+		}
+		ok = Check(foundAnchored, "round-trip finds the anchored text by id") && ok;
+		ok = Check(foundFree, "round-trip finds the free text by id") && ok;
+	}
+
+	// Backward compatibility: a document JSON with no "texts" field at all
+	// parses to an empty vector rather than failing/crashing.
+	ok = Check(DocumentFromJson("{\"title\":\"No texts field\"}").texts.empty(),
+		"JSON defaults missing texts field to an empty vector") && ok;
+
+	// Layout: an anchored text's laid-out rect tracks its anchor task when the
+	// anchor's dates shift (the whole point of anchoring — no separate
+	// position is stored for it).
+	{
+		GanttLayoutResult L1 = LayoutGantt(doc, "2026-01-01");
+		const LaidText* lt1 = nullptr;
+		for (const auto& t : L1.texts) if (t.id == anchTxt) lt1 = &t;
+		ok = Check(lt1 != nullptr, "layout produces a LaidText for the anchored text") && ok;
+		ok = Check(lt1 && lt1->anchored, "layout marks the anchored text as anchored") && ok;
+		// task-1 spans 2026-01-01..2026-01-05 (widthDays = 5), viewStart = 2026-01-01 -> xDay=0.
+		ok = Check(lt1 && lt1->xDay == 0 && lt1->widthDays == 5, "layout: anchored text tracks task-1's initial xDay/widthDays") && ok;
+
+		// Shift the anchor task's dates and re-run layout: the text's laid-out
+		// xDay/widthDays must move with it (same doc, same anchorId, no change
+		// to the PpText itself).
+		ok = Check(SetTaskDates(doc, "task-1", "2026-02-01", "2026-02-10"), "SetTaskDates shifts the anchor task") && ok;
+		GanttLayoutResult L2 = LayoutGantt(doc, "2026-01-01");
+		const LaidText* lt2 = nullptr;
+		for (const auto& t : L2.texts) if (t.id == anchTxt) lt2 = &t;
+		ok = Check(lt2 != nullptr, "layout still produces a LaidText for the anchored text after the shift") && ok;
+		long expectedXDay = DateToDays("2026-02-01") - DateToDays("2026-01-01");
+		ok = Check(lt2 && lt2->xDay == expectedXDay, "layout: anchored text's xDay tracks the shifted anchor") && ok;
+		ok = Check(lt2 && lt2->widthDays == 10, "layout: anchored text's widthDays tracks the shifted anchor's span") && ok;
+		ok = Check(lt2 && lt2->dx == 5.0f && lt2->dy == -3.0f, "layout: anchored text's dx/dy offset is carried through unchanged") && ok;
+	}
+
+	// Layout: a free text sits at its (rowId, date) cell origin, independent
+	// of any task.
+	{
+		GanttLayoutResult L = LayoutGantt(doc, "2026-01-01");
+		const LaidText* ltFree = nullptr;
+		for (const auto& t : L.texts) if (t.id == freeTxt) ltFree = &t;
+		ok = Check(ltFree != nullptr, "layout produces a LaidText for the free text") && ok;
+		ok = Check(ltFree && !ltFree->anchored, "layout marks the free text as not anchored") && ok;
+		long expectedFreeXDay = DateToDays("2026-01-06") - DateToDays("2026-01-01");
+		ok = Check(ltFree && ltFree->xDay == expectedFreeXDay, "layout: free text's xDay matches its own date") && ok;
+		ok = Check(ltFree && ltFree->rowIndex == 0, "layout: free text sits in row-1 (rowIndex 0)") && ok;
+	}
+
+	// DeleteById: direct delete of a free text.
+	ok = Check(DeleteById(doc, freeTxt), "DeleteById removes a text directly") && ok;
+	bool freeGone = true;
+	for (const auto& t : doc.texts) freeGone = freeGone && t.id != freeTxt;
+	ok = Check(freeGone, "deleted text is absent") && ok;
+	ok = Check(!DeleteById(doc, freeTxt), "DeleteById returns false for an already-deleted text") && ok;
+
+	// DeleteById: cascading delete when the anchor task is deleted.
+	ok = Check(DeleteById(doc, "task-1"), "DeleteById removes the anchor task") && ok;
+	bool anchoredGone = true;
+	for (const auto& t : doc.texts) anchoredGone = anchoredGone && t.id != anchTxt;
+	ok = Check(anchoredGone, "DeleteById cascades: text anchored to a deleted task is also removed") && ok;
+
+	// DeleteById: cascading delete when a milestone anchor is deleted.
+	{
+		const std::string msTxt = AddText(doc, "Milestone note", "ms-1", "", "");
+		ok = Check(DeleteById(doc, "ms-1"), "DeleteById removes the anchor milestone") && ok;
+		bool msTxtGone = true;
+		for (const auto& t : doc.texts) msTxtGone = msTxtGone && t.id != msTxt;
+		ok = Check(msTxtGone, "DeleteById cascades: text anchored to a deleted milestone is also removed") && ok;
+	}
+
+	// DeleteById: cascading delete when a free text's row is deleted.
+	{
+		const std::string rowTxt = AddText(doc, "Row note", "", "row-1", "2026-01-02");
+		ok = Check(DeleteById(doc, "row-1"), "DeleteById removes the row") && ok;
+		bool rowTxtGone = true;
+		for (const auto& t : doc.texts) rowTxtGone = rowTxtGone && t.id != rowTxt;
+		ok = Check(rowTxtGone, "DeleteById cascades: free text in a deleted row is also removed") && ok;
+	}
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -544,6 +696,9 @@ int main() {
 	bool markerOpsOk = RunMarkerOpsChecks();
 	ok = markerOpsOk && ok;
 
+	bool textOpsOk = RunTextOpsChecks();
+	ok = textOpsOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -561,6 +716,9 @@ int main() {
 	}
 	if (markerOpsOk) {
 		std::printf("MARKER OPS OK\n");
+	}
+	if (textOpsOk) {
+		std::printf("TEXT OPS OK\n");
 	}
 	return 0;
 }

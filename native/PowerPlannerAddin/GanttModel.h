@@ -27,6 +27,17 @@ struct PpRow {
 	std::string id, label, groupId;  // groupId empty => top-level
 	bool collapsed = false;
 };
+// A free-floating (or anchored) text annotation. When anchorId is non-empty,
+// the text is anchored to that task/milestone id: its position is derived
+// from the anchor shape's current layout (top-right corner) plus (dx, dy) in
+// points, so it automatically follows the anchor across a rebuild (e.g. the
+// anchor's dates shifting) without needing its own stored position. When
+// anchorId is empty, the text is free: its position is the (rowId, date)
+// cell origin plus (dx, dy) in points.
+struct PpText {
+	std::string id, label, anchorId, rowId, date, color;
+	float dx = 0, dy = 0;
+};
 struct PpDocument {
 	std::string title;
 	std::string scale = "week";
@@ -36,4 +47,5 @@ struct PpDocument {
 	std::vector<PpBracket> brackets;
 	std::vector<PpDependency> deps;
 	std::vector<PpMarker> markers;
+	std::vector<PpText> texts;
 };
