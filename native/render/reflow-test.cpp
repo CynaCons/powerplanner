@@ -6,6 +6,8 @@
 #include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttLayout.h"
 #include "../PowerPlannerAddin/GanttOps.h"
+#include "../PowerPlannerAddin/GanttTheme.h"
+#include "../PowerPlannerAddin/Scene.h"   // Bgr()
 #include <cstdio>
 #include <cmath>
 #include <string>
@@ -220,6 +222,71 @@ int wmain(int argc, wchar_t** argv) {
 				if (t.start == "2026-07-20" && t.end == "2026-08-14") { wprintf(L"REFLOW PASS\n"); rc = 0; }
 				else wprintf(L"REFLOW MISMATCH\n");
 			}
+
+		// ---- s1-visual-gate: shape-property assertions (read colors back via
+		// COM). The tokens drive the emitted fills; re-read a task bar, a
+		// milestone, and the today marker from the live shapes and compare to
+		// the GanttTheme expectation. ReflowFromSlide re-emitted the chart, so
+		// re-find CHART_ROOT fresh. Sample doc colors are all empty ⇒ swatch1
+		// track / ink diamond / primary today line.
+		{
+			PowerPoint::_SlidePtr sp = app->GetActiveWindow()->GetView()->GetSlide();
+			PowerPoint::ShapesPtr shp = sp->GetShapes();
+			long ns = shp->GetCount();
+			PowerPoint::ShapePtr g2;
+			for (long i = 1; i <= ns; ++i) {
+				PowerPoint::ShapePtr sh = shp->Item(_variant_t(i));
+				_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (k.length() && Narrow((const wchar_t*)k) == "CHART_ROOT") { g2 = sh; break; }
+			}
+			long taskFill = -1, msFill = -1, todayLine = -1;
+			if (g2) {
+				PowerPoint::GroupShapesPtr gi = g2->GetGroupItems();
+				long gm = gi->GetCount();
+				for (long i = 1; i <= gm; ++i) {
+					PowerPoint::ShapePtr ch = gi->Item(_variant_t(i));
+					_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+					_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+					std::string ks = k.length() ? Narrow((const wchar_t*)k) : "";
+					std::string is = id.length() ? Narrow((const wchar_t*)id) : "";
+					if (ks == "TASK" && is == "t1") taskFill = (long)ch->GetFill()->GetForeColor()->GetPpRGB();
+					else if (ks == "MILESTONE" && is == "m1") msFill = (long)ch->GetFill()->GetForeColor()->GetPpRGB();
+					else if (ks == "TODAY_LINE") todayLine = (long)ch->GetLine()->GetForeColor()->GetPpRGB();
+				}
+			}
+			long expTask = (long)Bgr(gt::BlendOnWhite(gt::swatch1, 0.40f));
+			long expMs = (long)Bgr(gt::ink);
+			long expToday = (long)Bgr(gt::primary);
+			wprintf(L"SHAPE PROPS: t1 fill=0x%06lX exp=0x%06lX | m1 fill=0x%06lX exp=0x%06lX | today=0x%06lX exp=0x%06lX\n",
+				taskFill, expTask, msFill, expMs, todayLine, expToday);
+			if (taskFill == expTask && msFill == expMs && todayLine == expToday) {
+				wprintf(L"SHAPE PROPS OK\n");
+			} else {
+				wprintf(L"SHAPE PROPS FAIL\n");
+				rc = 1;
+			}
+		}
+
+		// ---- s1-visual-gate: always export the slide to
+		// native/build/visual-s1.png (next to this exe, CWD-independent).
+		// Delete stale first, export at 1280x720, verify on disk. This PNG is
+		// compared BY EYE against docs/mockup/onslide-mockup.html.
+		{
+			wchar_t exePath[MAX_PATH]; ::GetModuleFileNameW(NULL, exePath, MAX_PATH);
+			std::wstring dir(exePath);
+			size_t slash = dir.find_last_of(L"\\/");
+			std::wstring pngPath = (slash == std::wstring::npos ? L"" : dir.substr(0, slash + 1)) + L"visual-s1.png";
+			::DeleteFileW(pngPath.c_str());
+			PowerPoint::_SlidePtr sv = app->GetActiveWindow()->GetView()->GetSlide();
+			sv->Export(_bstr_t(pngPath.c_str()), _bstr_t(L"PNG"), 1280, 720);
+			DWORD attr = ::GetFileAttributesW(pngPath.c_str());
+			if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+				wprintf(L"VISUAL S1 OK -> %s\n", pngPath.c_str());
+			} else {
+				wprintf(L"VISUAL FAIL\n");
+				rc = 1;
+			}
+		}
 
 		if (outPath) {
 			PowerPoint::_SlidePtr s2 = app->GetActiveWindow()->GetView()->GetSlide();

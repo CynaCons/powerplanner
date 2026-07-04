@@ -135,7 +135,7 @@ freshly inserted chart resemble the mockup.*
   - AC3 ⚙ GATE-FULL floor green (INPLACE tolerates the restyle — if it
     diffs on shape-count, the emitter changed structure: fix the emitter,
     not the stage).
-- [ ] **s1-visual-gate** — In `reflow-test.cpp`: unconditional
+- [x] **s1-visual-gate** — In `reflow-test.cpp`: unconditional
   `Slide.Export` → `native/build/visual-s1.png` (delete stale → export →
   verify on disk → `VISUAL S1 OK`, else `VISUAL FAIL` + rc=1). Pattern for the
   call exists argv-gated at ~line 100. Also add shape-property assertions
