@@ -260,3 +260,15 @@ concurrently with each other or with ppoverlay/ppreflow.
   mouse-UP click (4px threshold), SetCapture lifecycle + WM_CAPTURECHANGED cancel
   (review amendment), chrome+toolbar rebound to internal state, suppressed-pick
   mirror, Overlay_GetSelectedIdForTest hook, OWNSEL harness stage.
+- own-selection-model → validated clean rebuild, full suite + OWNSEL PASS → 488e886.
+  Clicking a bar now selects THE TASK in our model; chrome/toolbar internally driven
+  (SyncSelectionChromeFromOwnSelection each tick from the snapshot; cleared if id
+  vanishes); Esc-cancel of a gesture polled via GetAsyncKeyState in Tick (NOACTIVATE
+  window gets no WM_KEYDOWN). All remaining units touch Overlay.cpp → lane fully
+  serial from here.
+- self-review #3 dispatched (3 units since last checkpoint) over the selection-lane
+  diffs + the drag-move-resize / drag-row-and-create / rebuild-in-place specs; key
+  questions: g_mutating vs a separate gesture flag, selection loss after rebuild
+  (drag would feel broken), lParam-vs-GetCursorPos in drag handling (PostMessage
+  testability), drag↔rebuild-in-place ordering contradiction. Holding drag dispatch
+  until folded.
