@@ -3,6 +3,8 @@
 #include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttOps.h"
 #include "../PowerPlannerAddin/GanttHitTest.h"
+#include "../PowerPlannerAddin/GanttTheme.h"
+#include "../PowerPlannerAddin/GanttScene.h"
 
 #include <cstdio>
 #include <string>
@@ -622,6 +624,68 @@ static bool RunTextOpsChecks() {
 	return ok;
 }
 
+// S1 s1-theme-tokens: assert the pure scene builder colors prims from the
+// design tokens (GanttTheme.h). Builds a real scene (COM-free) and inspects
+// prim fills/lines. Print 'THEME TOKENS OK' when these pass.
+static const Prim* FindPrim(const Scene& sc, const char* kind, const char* id) {
+	for (const auto& p : sc.prims) {
+		if (p.tagKind == kind && (id == nullptr || p.tagId == id)) return &p;
+	}
+	return nullptr;
+}
+
+static bool RunThemeTokenChecks() {
+	bool ok = true;
+
+	// Blend-on-white formula is pinned (regression guard on the token helper):
+	// blend(#7A4FA3, white, .40) and blend(swatch1, white, .40), per channel.
+	ok = Check(gt::BlendOnWhite(0x7A4FA3, 0.40f) == 0xCAB9DA, "BlendOnWhite(plum,.40) == #CAB9DA") && ok;
+	ok = Check(gt::BlendOnWhite(gt::swatch1, 0.40f) == 0xB4BBF3, "BlendOnWhite(swatch1,.40) == #B4BBF3") && ok;
+	ok = Check(gt::EffectiveSwatch("") == gt::swatch1, "empty task color resolves to swatch1") && ok;
+	ok = Check(gt::EffectiveSwatch("#7A4FA3") == 0x7A4FA3, "explicit task color parses") && ok;
+	ok = Check(gt::ParseHexColor("bogus", gt::ink) == gt::ink, "malformed hex falls back to default") && ok;
+
+	PpDocument d;
+	d.title = "Theme sample";
+	d.scale = "week";
+	d.rows.push_back(PpRow{"r1", "Row 1", "", false});
+	d.rows.push_back(PpRow{"r2", "Row 2", "", false});
+	// Colored task (plum) with progress; uncolored task (⇒ swatch1).
+	d.tasks.push_back(PpTask{"tc", "Colored", "2026-06-01", "2026-06-20", "r1", "#7A4FA3", 50});
+	d.tasks.push_back(PpTask{"tp", "Plain",   "2026-06-05", "2026-06-25", "r2", "",        0});
+	d.milestones.push_back(PpMilestone{"m1", "MS", "2026-06-15", "r1", ""});
+	d.markers.push_back(PpMarker{"today", "today", "Today", "2026-06-10", ""});
+
+	Scene sc; std::string mn, mx; long pad = 0; float ppd = 0.0f;
+	if (!Check(BuildProjectedScene(d, 960.0f, &sc, &mn, &mx, &pad, &ppd), "BuildProjectedScene succeeds")) return false;
+
+	// Colored task: track = blend(plum,.40); progress = solid plum; radius = bar.radius.
+	const Prim* tc = FindPrim(sc, "TASK", "tc");
+	ok = Check(tc && tc->style.fill && tc->style.fillBgr == Bgr(gt::BlendOnWhite(0x7A4FA3, 0.40f)),
+		"colored task track fill == blend(plum,.40)") && ok;
+	ok = Check(tc && tc->style.corner == gt::bar_radius, "task bar corner radius == bar.radius") && ok;
+	const Prim* tcp = FindPrim(sc, "TASK_PROGRESS", "tc");
+	ok = Check(tcp && tcp->style.fill && tcp->style.fillBgr == Bgr(0x7A4FA3),
+		"colored task progress fill == solid plum") && ok;
+
+	// Uncolored task: track = blend(swatch1,.40).
+	const Prim* tp = FindPrim(sc, "TASK", "tp");
+	ok = Check(tp && tp->style.fillBgr == Bgr(gt::BlendOnWhite(gt::swatch1, 0.40f)),
+		"empty-color task track fill == blend(swatch1,.40)") && ok;
+
+	// Milestone diamond fill == ink; today marker line == primary.
+	const Prim* ms = FindPrim(sc, "MILESTONE", "m1");
+	ok = Check(ms && ms->style.fill && ms->style.fillBgr == Bgr(gt::ink), "milestone fill == ink") && ok;
+	const Prim* today = FindPrim(sc, "TODAY_LINE", "today");
+	ok = Check(today && today->style.line && today->style.lineBgr == Bgr(gt::primary), "today marker line == primary") && ok;
+
+	// Header band uses the headerBand token (no stray Material grey).
+	const Prim* hb = FindPrim(sc, "HEADER_BAND", nullptr);
+	ok = Check(hb && hb->style.fillBgr == Bgr(gt::headerBand), "header band fill == headerBand token") && ok;
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -718,6 +782,9 @@ int main() {
 	bool textOpsOk = RunTextOpsChecks();
 	ok = textOpsOk && ok;
 
+	bool themeOk = RunThemeTokenChecks();
+	ok = themeOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -738,6 +805,9 @@ int main() {
 	}
 	if (textOpsOk) {
 		std::printf("TEXT OPS OK\n");
+	}
+	if (themeOk) {
+		std::printf("THEME TOKENS OK\n");
 	}
 	return 0;
 }

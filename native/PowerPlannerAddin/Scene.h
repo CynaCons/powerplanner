@@ -9,6 +9,8 @@
 #include <vector>
 #include <cstdint>
 
+#include "GanttTheme.h"
+
 enum class PrimKind { Rect, RoundRect, Diamond, Line, Connector, Text };
 enum class TextAlign { Left, Center, Right };
 
@@ -19,6 +21,7 @@ struct Style {
 	unsigned long textBgr = 0;    float fontSize = 12.0f;     bool bold = false;
 	TextAlign align = TextAlign::Left;
 	bool arrowEnd = false;        // connectors
+	float corner = 0.0f;          // RoundRect corner radius in points (0 = renderer default)
 };
 
 struct Prim {
@@ -56,20 +59,22 @@ struct Theme {
 	unsigned long connector;        // dependency lines
 };
 
+// All fields sourced from GanttTheme.h (= docs/design-tokens.md). No hex
+// literals here — a token change lands once, in GanttTheme.h.
 inline Theme MaterialLight() {
 	Theme t;
-	t.surface          = 0xFFFFFF;
-	t.railSurface      = 0xF1F3F4;
-	t.divider          = 0xE8EAED;
-	t.onSurface        = 0x202124;
-	t.onSurfaceVariant = 0x5F6368;
-	t.primary          = 0x1A73E8;  // Material blue
-	t.primaryDark      = 0x1457B0;
-	t.onPrimary        = 0xFFFFFF;
-	t.milestone        = 0xF9AB00;  // amber
-	t.summary          = 0x9AA0A6;  // grey
-	t.bracket          = 0x80868B;
-	t.connector        = 0xBDC1C6;
+	t.surface          = gt::surface;
+	t.railSurface      = gt::railSurface;
+	t.divider          = gt::outline;
+	t.onSurface        = gt::ink;
+	t.onSurfaceVariant = gt::ink2;
+	t.primary          = gt::primary;
+	t.primaryDark      = gt::primary;   // progress now uses the solid swatch, not this
+	t.onPrimary        = gt::surface;   // white on-bar label
+	t.milestone        = gt::ink;       // ink diamonds (tokens §1)
+	t.summary          = gt::ink3;      // summary rail
+	t.bracket          = gt::ink3;      // structural hairline (no dedicated token)
+	t.connector        = gt::ink3;      // dependency connectors (tokens §1)
 	return t;
 }
 

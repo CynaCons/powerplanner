@@ -3,6 +3,7 @@
 #include "GanttLayout.h"
 #include "GanttJson.h"
 #include "Scene.h"
+#include "GanttScene.h"   // pure scene pipeline (Widen, layout constants, BuildGanttScene, BuildProjectedScene)
 #include "PptRenderer.h"
 #include <algorithm>
 #include <map>
@@ -13,13 +14,9 @@
 
 // ---- helpers ---------------------------------------------------------------
 
-static std::wstring Widen(const std::string& s) {
-	if (s.empty()) return L"";
-	int n = ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
-	std::wstring w(n, L'\0');
-	::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
-	return w;
-}
+// Widen() and the layout constants (MARGIN/ROW_GUTTER/...) now live in
+// GanttScene.h (shared with the ops harness). Narrow() stays here — it is only
+// used by the COM read paths below.
 static std::string Narrow(const wchar_t* w) {
 	if (!w || !*w) return "";
 	int len = (int)::wcslen(w);
@@ -28,8 +25,6 @@ static std::string Narrow(const wchar_t* w) {
 	::WideCharToMultiByte(CP_UTF8, 0, w, len, &s[0], n, NULL, NULL);
 	return s;
 }
-
-static const char* kMonthNames[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" };
 
 // Shared debug log (same file/format as Overlay.cpp's OvLog / Connect.cpp's
 // PpLog, so all three interleave in one place: %TEMP%\powerplanner-addin.log).
@@ -45,15 +40,6 @@ static void GbLog(const wchar_t* msg) {
 	std::wstring line = std::wstring(pidBuf) + msg + L"\r\n";
 	DWORD w = 0; ::WriteFile(h, line.c_str(), (DWORD)(line.size() * sizeof(wchar_t)), &w, NULL);
 	::CloseHandle(h);
-}
-
-// Layout constants in points (Material: roomy rail + row rhythm).
-namespace {
-const float MARGIN     = 36.0f;
-const float ROW_GUTTER = 140.0f;
-const float ROW_HEIGHT = 36.0f;
-const float AXIS_H     = 30.0f;
-const float BAR_INSET  = 8.0f;
 }
 
 // ---- sample document -------------------------------------------------------
@@ -93,239 +79,6 @@ PpDocument MakeSampleDocument() {
 		{ "mk2", "today",    "Today",        "2026-06-25", "" }
 	};
 	return doc;
-}
-
-// ---- scene construction (Material visual vocabulary) -----------------------
-
-static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
-	const std::string& minD, const std::string& maxD, long pad, float ptPerDay,
-	float slideW, const Theme& th)
-{
-	Scene sc;
-	const float chartW = slideW - MARGIN * 2.0f;
-	const float chartRight = MARGIN + chartW;
-	const float chartTop = MARGIN + AXIS_H;
-	const float chartBottom = chartTop + (float)L.chartRows * ROW_HEIGHT;
-	const long vs = DateToDays(minD);
-	auto xToPt = [&](long xDay) { return MARGIN + ROW_GUTTER + (float)(xDay + pad) * ptPerDay; };
-	auto slotTop = [&](int slot) { return chartTop + (float)slot * ROW_HEIGHT; };
-
-	// Timeline header band (Material table-header strip; its bottom border is the
-	// first row divider drawn below). Tagged (kind-only, no natural id — there is
-	// exactly one) so UpdateGantt's diff can match it by (kind, "") without
-	// relying on emission-order ordinals colliding with unrelated untagged
-	// shapes (see GanttBuilder.cpp's ReconcileChartRoot comment on MatchKey).
-	{ Style s; s.fill = true; s.fillBgr = Bgr(0xFAFBFC); Prim p = scene::rect(MARGIN, chartTop - AXIS_H, chartW, AXIS_H, s); p.tagKind = "HEADER_BAND"; sc.prims.push_back(p); }
-
-	// Left navigation rail + its right-edge divider (each kind-only-tagged;
-	// exactly one of each, same reasoning as HEADER_BAND above).
-	{ Style s; s.fill = true; s.fillBgr = Bgr(th.railSurface); Prim p = scene::rect(MARGIN, chartTop, ROW_GUTTER, chartBottom - chartTop, s); p.tagKind = "RAIL_FILL"; sc.prims.push_back(p); }
-	{ Style s; s.line = true; s.lineBgr = Bgr(th.divider); s.lineWeight = 1.0f; Prim p = scene::line(MARGIN + ROW_GUTTER, chartTop, MARGIN + ROW_GUTTER, chartBottom, s); p.tagKind = "RAIL_DIVIDER"; sc.prims.push_back(p); }
-
-	// Month gridlines + labels (behind bars). Tagged with the ISO "YYYY-MM"
-	// month as tagId: a NATURALLY unique, stable identity (unlike an emission
-	// ordinal) that survives the visible month SET changing size across a
-	// rebuild (e.g. a date shift that adds/drops a month at either edge) —
-	// each month's gridline/label keeps its own identity instead of every
-	// later month's ordinal shifting by one.
-	{
-		int y0 = 0, m0 = 0, dd = 0, y1 = 0, m1 = 0;
-		sscanf_s(minD.c_str(), "%d-%d-%d", &y0, &m0, &dd);
-		sscanf_s(maxD.c_str(), "%d-%d-%d", &y1, &m1, &dd);
-		int yy = y0, mm = m0;
-		while (yy < y1 || (yy == y1 && mm <= m1)) {
-			char iso[16]; sprintf_s(iso, "%04d-%02d-01", yy, mm);
-			float x = xToPt(DateToDays(iso) - vs);
-			if (x >= MARGIN + ROW_GUTTER - 1.0f && x <= chartRight) {
-				char monthId[8]; sprintf_s(monthId, "%04d-%02d", yy, mm);
-				Style g; g.line = true; g.lineBgr = Bgr(th.divider); g.lineWeight = 0.5f;
-				Prim ln = scene::line(x, chartTop, x, chartBottom, g); ln.tagKind = "AXIS_GRID"; ln.tagId = monthId; sc.prims.push_back(ln);
-				char lbl[24]; sprintf_s(lbl, "%s %d", kMonthNames[(mm - 1) % 12], yy);
-				Style al; al.textBgr = Bgr(th.onSurfaceVariant); al.fontSize = 10.0f; al.align = TextAlign::Left;
-				Prim t = scene::text(x + 3.0f, chartTop - 16.0f, 64.0f, 13.0f, Widen(lbl), al); t.tagKind = "AXIS_LABEL"; t.tagId = monthId; sc.prims.push_back(t);
-			}
-			if (++mm > 12) { mm = 1; ++yy; }
-		}
-	}
-
-	// Row dividers (Material list style), full width. Tagged with the OWNING
-	// row's id (naturally unique/stable) rather than left untagged/ordinal-
-	// matched, so a divider stays matched to "its" row even if rows are
-	// inserted/removed elsewhere and every subsequent ordinal would otherwise
-	// shift. The final bottom-of-chart divider has no owning row; it gets a
-	// fixed synthetic id since there is exactly one.
-	{
-		Style d; d.line = true; d.lineBgr = Bgr(th.divider); d.lineWeight = 0.75f;
-		for (size_t i = 0; i < L.visibleRowIds.size(); ++i) {
-			Prim p = scene::line(MARGIN, slotTop(L.rowOffsets[i]), chartRight, slotTop(L.rowOffsets[i]), d);
-			p.tagKind = "ROW_DIVIDER"; p.tagId = L.visibleRowIds[i]; sc.prims.push_back(p);
-		}
-		Prim bottom = scene::line(MARGIN, chartBottom, chartRight, chartBottom, d);
-		bottom.tagKind = "ROW_DIVIDER"; bottom.tagId = "__bottom__"; sc.prims.push_back(bottom);
-	}
-
-	// Summary bars.
-	for (const auto& s : L.summaries) {
-		float left = xToPt(s.xDay), width = std::max(2.0f, s.widthDays * ptPerDay);
-		Style su; su.fill = true; su.fillBgr = Bgr(th.summary);
-		Prim p = scene::rect(left, slotTop(s.rowIndex) + ROW_HEIGHT / 2.0f - 2.0f, width, 4.0f, su);
-		p.tagKind = "SUMMARY"; p.tagId = s.rowId; sc.prims.push_back(p);
-	}
-
-	// Task bars (+ percent-complete).
-	std::map<std::string, const PpTask*> taskById;
-	for (const auto& t : doc.tasks) taskById[t.id] = &t;
-	std::map<std::string, const LaidTask*> laidById;
-	for (const auto& lt : L.tasks) laidById[lt.id] = &lt;
-	for (const auto& lt : L.tasks) {
-		const PpTask* t = taskById[lt.id];
-		float left = xToPt(lt.xDay), width = std::max(2.0f, lt.widthDays * ptPerDay);
-		float top = slotTop(L.rowOffsets[lt.rowIndex] + lt.subRow) + BAR_INSET;
-		float h = ROW_HEIGHT - BAR_INSET * 2.0f;
-		Style bar; bar.fill = true; bar.fillBgr = Bgr(th.primary);
-		bar.textBgr = Bgr(th.onPrimary); bar.fontSize = 11.0f; bar.align = TextAlign::Center;
-		Prim p = scene::roundRect(left, top, width, h, bar);
-		if (width > 54.0f) p.text = Widen(t->label);
-		p.tagKind = "TASK"; p.tagId = t->id; sc.prims.push_back(p);
-		if (t->percent > 0) {
-			float pw = width * (float)t->percent / 100.0f;
-			if (pw > 1.5f) {
-				Style pr; pr.fill = true; pr.fillBgr = Bgr(th.primaryDark);
-				Prim u = scene::rect(left, top + h - 3.5f, pw, 3.5f, pr); u.tagKind = "TASK_PROGRESS"; u.tagId = t->id; sc.prims.push_back(u);
-			}
-		}
-	}
-
-	// Milestones (+ labels).
-	for (const auto& m : L.milestones) {
-		float cx = xToPt(m.xDay) + ptPerDay / 2.0f;
-		float cy = slotTop(L.rowOffsets[m.rowIndex]) + ROW_HEIGHT / 2.0f;
-		float sz = 13.0f;
-		std::string label;
-		for (const auto& md : doc.milestones) if (md.id == m.id) label = md.label;
-		Style d; d.fill = true; d.fillBgr = Bgr(th.milestone);
-		Prim dm = scene::diamond(cx - sz / 2.0f, cy - sz / 2.0f, sz, sz, d); dm.tagKind = "MILESTONE"; dm.tagId = m.id; sc.prims.push_back(dm);
-		Style ml; ml.textBgr = Bgr(th.onSurfaceVariant); ml.fontSize = 10.0f; ml.align = TextAlign::Left;
-		Prim t = scene::text(cx + sz / 2.0f + 3.0f, cy - 8.0f, 96.0f, 14.0f, Widen(label), ml); t.tagKind = "MILESTONE_LABEL"; t.tagId = m.id; sc.prims.push_back(t);
-	}
-
-	// Brackets (+ labels).
-	for (const auto& b : L.brackets) {
-		float left = xToPt(b.xDay), width = std::max(2.0f, b.widthDays * ptPerDay);
-		float top = slotTop(L.rowOffsets[b.topRow]) - 12.0f;
-		int bottomSlot = L.rowOffsets[b.bottomRow] + L.rowSlots[b.bottomRow];
-		float bottom = slotTop(bottomSlot) - 12.0f;
-
-		Style br; br.line = true; br.lineBgr = Bgr(th.bracket); br.lineWeight = 1.5f;
-
-		// 1. Top horizontal line
-		Prim pTop = scene::line(left, top, left + width, top, br);
-		pTop.tagKind = "BRACKET"; pTop.tagId = b.id; sc.prims.push_back(pTop);
-
-		// 2. Left vertical tick pointing DOWN (tick size 6pt)
-		Prim pLeft = scene::line(left, top, left, top + 6.0f, br);
-		pLeft.tagKind = "BRACKET_TICK"; pLeft.tagId = b.id; sc.prims.push_back(pLeft);
-
-		// 3. Right vertical tick pointing DOWN (tick size 6pt)
-		Prim pRight = scene::line(left + width, top, left + width, top + 6.0f, br);
-		pRight.tagKind = "BRACKET_TICK"; pRight.tagId = b.id; sc.prims.push_back(pRight);
-
-		// 4. Bottom horizontal line (thin/lighter, matching web's 0.4 opacity)
-		Style brBot; brBot.line = true; brBot.lineBgr = Bgr(th.divider); brBot.lineWeight = 1.0f;
-		Prim pBot = scene::line(left, bottom, left + width, bottom, brBot);
-		pBot.tagKind = "BRACKET_BOTTOM"; pBot.tagId = b.id; sc.prims.push_back(pBot);
-
-		std::string label; for (const auto& bd : doc.brackets) if (bd.id == b.id) label = bd.label;
-		Style bl; bl.textBgr = Bgr(th.bracket); bl.fontSize = 10.0f; bl.align = TextAlign::Center;
-		// Label centered just above the bracket box so it doesn't sit on the bars.
-		Prim t = scene::text(left, top - 13.0f, width, 12.0f, Widen(label), bl); t.tagKind = "BRACKET_LABEL"; t.tagId = b.id; sc.prims.push_back(t);
-	}
-
-	// Markers (Today line / Deadline lines / Custom lines). "custom" renders
-	// like "deadline" (vertical line + label chip) but with its own default
-	// accent color (Material Purple) so it's visually distinct from both the
-	// Today line and Deadline lines. (Marker.color is reserved for a future
-	// custom-color override, matching task/milestone/bracket.color, which
-	// are likewise not yet wired into scene construction.)
-	for (const auto& m : doc.markers) {
-		float mx = xToPt(DateToDays(m.date) - vs);
-		if (mx >= MARGIN + ROW_GUTTER && mx <= chartRight) {
-			bool isToday = m.type == "today";
-			bool isDeadline = m.type == "deadline";
-			unsigned long markerColor = isToday ? th.primary : (isDeadline ? 0xD93025 /* Material Red */ : 0x8E24AA /* Material Purple, custom default */);
-
-			Style ms; ms.line = true;
-			ms.lineBgr = Bgr(markerColor);
-			ms.lineWeight = 1.25f;
-			Prim ln = scene::line(mx, chartTop - AXIS_H, mx, chartBottom, ms);
-			ln.tagKind = isToday ? "TODAY_LINE" : (isDeadline ? "DEADLINE" : "CUSTOM_MARKER");
-			ln.tagId = m.id;
-			sc.prims.push_back(ln);
-
-			Style ml;
-			ml.textBgr = Bgr(markerColor);
-			ml.fontSize = 9.0f;
-			ml.align = TextAlign::Left;
-			ml.bold = true;
-			Prim t = scene::text(mx + 4.0f, chartTop - AXIS_H + 2.0f, 96.0f, 12.0f, Widen(m.label), ml);
-			t.tagKind = isToday ? "TODAY_LABEL" : (isDeadline ? "DEADLINE_LABEL" : "CUSTOM_MARKER_LABEL");
-			t.tagId = m.id;
-			sc.prims.push_back(t);
-		}
-	}
-
-	// Dependencies (elbow connectors).
-	std::map<std::string, std::pair<std::string, std::string>> depEnds;
-	for (const auto& d : doc.deps) depEnds[d.id] = { d.from, d.to };
-	for (const auto& d : L.dependencies) {
-		auto e = depEnds.find(d.id); if (e == depEnds.end()) continue;
-		const LaidTask* fr = laidById.count(e->second.first) ? laidById[e->second.first] : nullptr;
-		const LaidTask* to = laidById.count(e->second.second) ? laidById[e->second.second] : nullptr;
-		if (!fr || !to) continue;
-		float x1 = xToPt(d.fromXDay), y1 = slotTop(L.rowOffsets[fr->rowIndex] + fr->subRow) + ROW_HEIGHT / 2.0f;
-		float x2 = xToPt(d.toXDay), y2 = slotTop(L.rowOffsets[to->rowIndex] + to->subRow) + ROW_HEIGHT / 2.0f;
-		Style c; c.line = true; c.lineBgr = Bgr(th.connector); c.lineWeight = 1.0f; c.arrowEnd = true;
-		Prim p = scene::connector(x1, y1, x2, y2, c); p.tagKind = "DEP"; p.tagId = d.id; sc.prims.push_back(p);
-	}
-
-	// Free-standing / anchored text annotations. Anchored text (L.anchored)
-	// sits at its anchor's current top-right corner (xDay+widthDays, subRow)
-	// plus (dx, dy) points, so it automatically follows the anchor across a
-	// rebuild triggered by the anchor's dates shifting (the layout pass
-	// recomputes anchor xDay/widthDays/rowIndex/subRow every call — see
-	// GanttLayout.cpp Step 9). Free text sits at its (rowId, date) cell origin
-	// plus (dx, dy). Tagged PP_KIND=TEXT / PP_ID=<id> so UpdateGantt's diff
-	// moves rather than recreates it (stable id, unlike an emission ordinal).
-	for (const auto& lt : L.texts) {
-		std::string label;
-		for (const auto& td : doc.texts) if (td.id == lt.id) label = td.label;
-		float baseX = lt.anchored ? xToPt(lt.xDay + lt.widthDays) : xToPt(lt.xDay);
-		float baseY = slotTop(L.rowOffsets[lt.rowIndex] + lt.subRow);
-		float left = baseX + lt.dx;
-		float top = baseY + lt.dy;
-		Style tx; tx.textBgr = Bgr(th.onSurface); tx.fontSize = 10.0f; tx.align = TextAlign::Left;
-		Prim t = scene::text(left, top, 120.0f, 16.0f, Widen(label), tx);
-		t.tagKind = "TEXT"; t.tagId = lt.id; sc.prims.push_back(t);
-	}
-
-	// Row labels (in the rail, indented for children).
-	for (size_t i = 0; i < L.visibleRowIds.size(); ++i) {
-		std::string label, groupId;
-		for (const auto& r : doc.rows) if (r.id == L.visibleRowIds[i]) { label = r.label; groupId = r.groupId; }
-		float indent = groupId.empty() ? 0.0f : 14.0f;
-		Style rl; rl.textBgr = Bgr(groupId.empty() ? th.onSurface : th.onSurfaceVariant);
-		rl.fontSize = 11.0f; rl.bold = groupId.empty(); rl.align = TextAlign::Left;
-		Prim t = scene::text(MARGIN + 8.0f + indent, slotTop(L.rowOffsets[i]), ROW_GUTTER - 16.0f - indent, ROW_HEIGHT, Widen(label), rl);
-		t.tagKind = "ROW_LABEL"; t.tagId = L.visibleRowIds[i]; sc.prims.push_back(t);
-	}
-
-	// Title.
-	{
-		Style ti; ti.textBgr = Bgr(th.onSurface); ti.fontSize = 16.0f; ti.align = TextAlign::Left;
-		Prim t = scene::text(MARGIN, MARGIN - 26.0f, chartW, 24.0f, Widen(doc.title), ti); t.tagKind = "TITLE"; sc.prims.push_back(t);
-	}
-
-	return sc;
 }
 
 // ---- emission --------------------------------------------------------------
@@ -399,32 +152,6 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, 
 	}
 	if (outShapeCount) *outShapeCount = count;
 	return S_OK;
-}
-
-// Shared by InsertGantt/UpdateGantt: date range -> projection (pt/day), padded
-// 5% each side, then the resulting Scene. Returns false (E_FAIL-worthy) if the
-// document has no dated tasks/milestones to anchor a range on.
-static bool BuildProjectedScene(const PpDocument& doc, float slideW, Scene* outScene,
-	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
-	std::string minD, maxD;
-	auto consider = [&](const std::string& d) {
-		if (d.empty()) return;
-		if (minD.empty() || d < minD) minD = d;
-		if (maxD.empty() || d > maxD) maxD = d;
-	};
-	for (const auto& t : doc.tasks) { consider(t.start); consider(t.end); }
-	for (const auto& m : doc.milestones) consider(m.date);
-	if (minD.empty()) return false;
-
-	const long totalDays = std::max(1L, (DateToDays(maxD) - DateToDays(minD)) + 1);
-	const long pad = std::max(1L, (long)(totalDays * 0.05));
-	const float chartContentW = (slideW - MARGIN * 2.0f) - ROW_GUTTER;
-	const float ptPerDay = chartContentW / (float)(totalDays + pad * 2);
-
-	GanttLayoutResult L = LayoutGantt(doc, minD);
-	*outScene = BuildGanttScene(doc, L, minD, maxD, pad, ptPerDay, slideW, MaterialLight());
-	*outMinD = minD; *outMaxD = maxD; *outPad = pad; *outPtPerDay = ptPerDay;
-	return true;
 }
 
 // ---- diff-based (in-place) rebuild -----------------------------------------

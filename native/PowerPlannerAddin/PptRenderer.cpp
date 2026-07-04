@@ -37,6 +37,19 @@ std::vector<PowerPoint::ShapePtr> RenderScene(PowerPoint::ShapesPtr shapes, cons
 		sh->GetShadow()->PutVisible(Office::msoFalse);  // flat, Material-style
 		const Style& s = p.style;
 
+		// Rounded-rectangle corner radius (points). PowerPoint's roundrect
+		// adjustment #1 is the radius as a fraction of the SHORTER side; clamp
+		// to [0, 0.5] (0.5 = fully stadium). corner==0 leaves PowerPoint's
+		// default rounding untouched.
+		if (p.kind == PrimKind::RoundRect && s.corner > 0.0f) {
+			float shorter = (p.w < p.h ? p.w : p.h);
+			if (shorter > 0.0f) {
+				float adj = s.corner / shorter;
+				if (adj < 0.0f) adj = 0.0f; else if (adj > 0.5f) adj = 0.5f;
+				try { sh->GetAdjustments()->PutItem(1, adj); } catch (...) {}
+			}
+		}
+
 		if (p.kind == PrimKind::Line || p.kind == PrimKind::Connector) {
 			PowerPoint::LineFormatPtr lf = sh->GetLine();
 			lf->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.lineBgr);
