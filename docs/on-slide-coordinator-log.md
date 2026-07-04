@@ -368,3 +368,15 @@ concurrently with each other or with ppoverlay/ppreflow.
   selection+foreground transitions, Delete/arrows/Shift-arrows), Esc clears
   selection via tick poll; KEYS harness stage posts WM_HOTKEY (handler-correctness;
   OS delivery already probe-proven).
+- keyboard-and-cursors → validated clean rebuild; OPS+DPI+MENU+CURSOR MAP OK, all
+  9 stages incl. KEYS PASS, full suite → ec6fa7c. Pure GanttCursorForZone; scoped
+  RegisterHotKey per HOTKEY verdict (transition-edge register/unregister, per-key
+  failure tolerated, unregister in HideOverlay AND OverlayStop before
+  DestroyWindow); Delete/±1/±7 via standard commit path; Esc clears selection
+  (tick poll). KEYS stage posts WM_HOTKEY (handler correctness; OS delivery
+  probe-proven). Note: keys stolen system-wide only while a task/milestone is
+  selected AND PowerPoint foreground — mitigation is the tight gate.
+- cycle 13 — dispatched floating-editor (sonnet, FINAL unit): card editor on the
+  focusable-top-level pattern (label/start/end/percent/8 swatches, one commit =
+  one undo), SetTaskColor + absolute percent ops, EDITOR harness stage with live
+  target resolution (t4 deleted by KEYS).
