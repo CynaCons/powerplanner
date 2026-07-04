@@ -636,3 +636,20 @@ Agent-fixed harness flake: stale toolbar from prior stage swallowed the text
 click - stages that click near chrome must deselect (background click) first.
 Right-click on Text intentionally empty until context-menu-v3. Dispatched:
 label-placement (pure) + self-review checkpoint #2 in parallel (read-only).
+
+### Self-review checkpoint #2 (V3, after 8 units) — folded
+
+11 findings over b7ca884/d4eae41/e4ddbaa/c1e74ff; NO defects in shipped code
+(frame-restore math, gesture snapshots, text cascades, exception nets all
+verified). Folded forward:
+- MED marker delete dead-end (hotkey gate omits MARKER; marker zone has no
+  menu/card): tracked at appbar-actions (amended explicitly) - USER NOTE: do
+  not demo "create marker then delete it" until appbar-actions lands.
+- grid-scale-options amended: PP_PROJ meaning is a pure linear day mapping;
+  boundary-snapped padding must be an ADDITIONAL field, never overloaded.
+- appbar-shell amended: second window must reuse IsHostActiveForOverlayChrome
+  + the same test seam; no duplicated scoping logic.
+- Noted (no action): arrows are dead keys on TEXT selection (Delete works) -
+  manual-pass consistency item; BuildMenuForZone has no exhaustiveness guard
+  (Marker/Text intentionally empty until context-menu-v3); 0.25pt vs 0.5pt
+  tolerance constants live in different files.
