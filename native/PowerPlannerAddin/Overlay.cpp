@@ -1337,6 +1337,15 @@ void ForwardWheelToPowerPoint(HWND self, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	// Blanket exception net: this is a raw WndProc invoked by the Windows
+	// message loop, so any exception escaping it (a COM error from a
+	// PowerPoint call made deep inside one of the handlers below, etc.) would
+	// unwind through non-C++-aware Windows/COM frames — undefined behavior at
+	// best, a hard crash of the host PowerPoint process at worst. Every case
+	// below keeps its existing return-value semantics on the success path;
+	// only an actual throw is redirected here, falling through to the same
+	// DefWindowProcW passthrough used for unhandled messages.
+	try {
 	if (msg == WM_NCHITTEST) {
 		// Alt = escape hatch: let PowerPoint see the mouse so the user can
 		// natively select/move the whole group under the overlay.
@@ -1542,6 +1551,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		return 0;
 	}
 	return ::DefWindowProcW(hwnd, msg, wp, lp);
+	} catch (...) {
+		OvLog(L"OverlayWndProc: exception caught, falling back to DefWindowProcW");
+		return ::DefWindowProcW(hwnd, msg, wp, lp);
+	}
 }
 
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

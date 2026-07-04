@@ -505,7 +505,19 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 	}
 	std::vector<MatchKey> childKeys = BuildMatchKeys(childKindIds);
 	std::map<MatchKey, long> childIndexByKey; // 0-based into children/childKeys
-	for (long i = 0; i < (long)childKeys.size(); ++i) childIndexByKey[childKeys[i]] = i;
+	for (long i = 0; i < (long)childKeys.size(); ++i) {
+		// Untagged children (empty PP_KIND) are not shapes UpdateGantt ever
+		// emitted itself — e.g. a shape the user pasted directly into the
+		// group. Generated prims always carry a non-empty tagKind (see the
+		// BuildGanttScene call sites above), so such a child can never
+		// legitimately match a new prim; excluding it from the lookup map
+		// here (rather than relying on "no prim happens to match") makes that
+		// guarantee explicit and keeps it out of the diff in both directions:
+		// it's never selected as an add-target AND (via childMatched being
+		// forced true below) never falls into the "removed" bucket either.
+		if (childKindIds[i].first.empty()) continue;
+		childIndexByKey[childKeys[i]] = i;
+	}
 
 	// New-scene match keys.
 	std::vector<std::pair<std::string, std::string>> primKindIds;
@@ -517,6 +529,13 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 	// are brand new (must be added); which existing children have no matching
 	// new prim (must be removed).
 	std::vector<bool> childMatched(childCount ? childCount : 0, false);
+	// Untagged children always "survive": mark them matched up front so they
+	// are never geometry-synced (they hold no prim) and never counted among
+	// the removed set below; they still flow into finalOrder/regroup via the
+	// structural-path carry-through added alongside this fix.
+	for (long i = 0; i < childCount; ++i) {
+		if (childKindIds[i].first.empty()) childMatched[i] = true;
+	}
 	std::vector<long> primMatchChildIdx(sc.prims.size(), -1); // -1 = needs add
 	for (size_t p = 0; p < primKeys.size(); ++p) {
 		auto it = childIndexByKey.find(primKeys[p]);
@@ -575,71 +594,125 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
 		postUngroupKindIds[i - 1] = { k.length() ? Narrow((const wchar_t*)k) : "", id.length() ? Narrow((const wchar_t*)id) : "" };
 	}
-	std::vector<MatchKey> postUngroupKeys = BuildMatchKeys(postUngroupKindIds);
-	std::map<MatchKey, long> postUngroupIndexByKey;
-	for (long i = 0; i < (long)postUngroupKeys.size(); ++i) postUngroupIndexByKey[postUngroupKeys[i]] = i;
 
-	// Map ORIGINAL child index (pre-ungroup) -> post-ungroup Shape, keyed by
-	// the SAME (kind, id, ordinal) that identified it before the ungroup.
-	std::map<long, PowerPoint::ShapePtr> survivorByOldIdx;
-	std::vector<bool> postUngroupConsumed(postUngroupShapes.size(), false);
-	for (long i = 0; i < childCount; ++i) {
-		if (!childMatched[i]) {
+	// From here on, the group no longer exists as a single shape: its former
+	// children are loose top-level shapes on the slide (and RenderScene below
+	// adds more). Once Ungroup() above has succeeded, ANY exception thrown by
+	// the diff/sync/render logic that follows must not be allowed to propagate
+	// to UpdateGantt's catch block as-is: that would land in the InsertGantt
+	// fallback with all these loose shapes still sitting on the slide (never
+	// cleaned up, since they're no longer tagged CHART_ROOT as a group and so
+	// aren't found by the fallback's "delete any remaining CHART_ROOT" pass),
+	// producing orphaned litter plus a duplicate freshly-inserted chart. Catch
+	// everything here, best-effort delete every post-ungroup shape (survivors
+	// and to-be-removed alike) and anything newly rendered, then return E_FAIL
+	// so InsertGantt starts from a clean slide. The finalOrder.size()<2 guard
+	// below is folded into this same cleanup path for the same reason (it's
+	// also a "the structural rebuild didn't come together" case).
+	std::vector<PowerPoint::ShapePtr> renderedThisAttempt;
+	auto cleanupLoose = [&]() {
+		for (auto& sh : postUngroupShapes) {
+			if (!sh) continue;
+			try { sh->Delete(); } catch (...) {}
+		}
+		for (auto& sh : renderedThisAttempt) {
+			if (!sh) continue;
+			try { sh->Delete(); } catch (...) {}
+		}
+	};
+
+	try {
+		std::vector<MatchKey> postUngroupKeys = BuildMatchKeys(postUngroupKindIds);
+		std::map<MatchKey, long> postUngroupIndexByKey;
+		for (long i = 0; i < (long)postUngroupKeys.size(); ++i) postUngroupIndexByKey[postUngroupKeys[i]] = i;
+
+		// Map ORIGINAL child index (pre-ungroup) -> post-ungroup Shape, keyed by
+		// the SAME (kind, id, ordinal) that identified it before the ungroup.
+		std::map<long, PowerPoint::ShapePtr> survivorByOldIdx;
+		// Untagged (PP_KIND-empty) survivors carry through to finalOrder as-is —
+		// no prim ever maps to them (see childIndexByKey construction above), so
+		// they'd otherwise never be picked up by the sc.prims-driven loop below
+		// and would end up left behind, ungrouped, on the slide. Collected
+		// separately and appended after the tagged loop so ordering of the
+		// tagged/diffed shapes (which callers may rely on, e.g. selectId lookup
+		// by prim index) is unaffected.
+		std::vector<PowerPoint::ShapePtr> untaggedSurvivors;
+		std::vector<bool> postUngroupConsumed(postUngroupShapes.size(), false);
+		for (long i = 0; i < childCount; ++i) {
+			if (childKindIds[i].first.empty()) {
+				// Untagged child: never deleted, never geometry-synced, always
+				// carried through. Re-derive its post-ungroup Shape the same way
+				// as any other survivor (by re-keying on kind/id/ordinal).
+				auto it = postUngroupIndexByKey.find(childKeys[i]);
+				if (it != postUngroupIndexByKey.end() && !postUngroupConsumed[it->second]) {
+					postUngroupConsumed[it->second] = true;
+					untaggedSurvivors.push_back(postUngroupShapes[it->second]);
+				}
+				continue;
+			}
+			if (!childMatched[i]) {
+				auto it = postUngroupIndexByKey.find(childKeys[i]);
+				if (it != postUngroupIndexByKey.end() && !postUngroupConsumed[it->second]) {
+					postUngroupConsumed[it->second] = true;
+					try { postUngroupShapes[it->second]->Delete(); } catch (const _com_error&) {}
+				}
+				continue;
+			}
 			auto it = postUngroupIndexByKey.find(childKeys[i]);
 			if (it != postUngroupIndexByKey.end() && !postUngroupConsumed[it->second]) {
 				postUngroupConsumed[it->second] = true;
-				try { postUngroupShapes[it->second]->Delete(); } catch (const _com_error&) {}
+				survivorByOldIdx[i] = postUngroupShapes[it->second];
 			}
-			continue;
 		}
-		auto it = postUngroupIndexByKey.find(childKeys[i]);
-		if (it != postUngroupIndexByKey.end() && !postUngroupConsumed[it->second]) {
-			postUngroupConsumed[it->second] = true;
-			survivorByOldIdx[i] = postUngroupShapes[it->second];
-		}
-	}
 
-	PowerPoint::ShapesPtr shapes = slide->GetShapes();
-	std::vector<PowerPoint::ShapePtr> finalOrder;
-	finalOrder.reserve(sc.prims.size());
-	for (size_t p = 0; p < sc.prims.size(); ++p) {
-		const Prim& prim = sc.prims[p];
-		auto survIt = (primMatchChildIdx[p] >= 0) ? survivorByOldIdx.find(primMatchChildIdx[p]) : survivorByOldIdx.end();
-		if (survIt != survivorByOldIdx.end()) {
-			PowerPoint::ShapePtr ch = survIt->second;
-			SyncShapeGeometryAndText(ch, prim);
-			finalOrder.push_back(ch);
-		} else {
-			Scene one; one.prims.push_back(prim);
-			std::vector<PowerPoint::ShapePtr> emitted = RenderScene(shapes, one);
-			if (!emitted.empty()) finalOrder.push_back(emitted[0]);
-		}
-	}
-
-	if (finalOrder.size() < 2) return E_FAIL; // nothing sane to regroup
-
-	SAFEARRAY* saf = ::SafeArrayCreateVector(VT_BSTR, 0, (ULONG)finalOrder.size());
-	for (LONG i = 0; i < (LONG)finalOrder.size(); ++i) {
-		_bstr_t nm = finalOrder[i]->GetName();
-		::SafeArrayPutElement(saf, &i, (void*)(BSTR)nm);
-	}
-	_variant_t idx; idx.vt = VT_ARRAY | VT_BSTR; idx.parray = saf;
-	PowerPoint::ShapeRangePtr range = shapes->Range(idx);
-	PowerPoint::ShapePtr newGroup = range->Group();
-	newGroup->GetTags()->Add(_bstr_t(L"PP_KIND"), _bstr_t(L"CHART_ROOT"));
-	newGroup->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
-	newGroup->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
-	char proj[192];
-	::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
-		DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
-	newGroup->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
-
-	if (!selectId.empty()) {
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+		std::vector<PowerPoint::ShapePtr> finalOrder;
+		finalOrder.reserve(sc.prims.size() + untaggedSurvivors.size());
 		for (size_t p = 0; p < sc.prims.size(); ++p) {
-			if (sc.prims[p].tagId == selectId) { finalOrder[p]->Select(Office::msoTrue); break; }
+			const Prim& prim = sc.prims[p];
+			auto survIt = (primMatchChildIdx[p] >= 0) ? survivorByOldIdx.find(primMatchChildIdx[p]) : survivorByOldIdx.end();
+			if (survIt != survivorByOldIdx.end()) {
+				PowerPoint::ShapePtr ch = survIt->second;
+				SyncShapeGeometryAndText(ch, prim);
+				finalOrder.push_back(ch);
+			} else {
+				Scene one; one.prims.push_back(prim);
+				std::vector<PowerPoint::ShapePtr> emitted = RenderScene(shapes, one);
+				for (auto& e : emitted) renderedThisAttempt.push_back(e);
+				if (!emitted.empty()) finalOrder.push_back(emitted[0]);
+			}
 		}
+		for (auto& ch : untaggedSurvivors) finalOrder.push_back(ch);
+
+		if (finalOrder.size() < 2) { cleanupLoose(); return E_FAIL; } // nothing sane to regroup
+
+		SAFEARRAY* saf = ::SafeArrayCreateVector(VT_BSTR, 0, (ULONG)finalOrder.size());
+		for (LONG i = 0; i < (LONG)finalOrder.size(); ++i) {
+			_bstr_t nm = finalOrder[i]->GetName();
+			::SafeArrayPutElement(saf, &i, (void*)(BSTR)nm);
+		}
+		_variant_t idx; idx.vt = VT_ARRAY | VT_BSTR; idx.parray = saf;
+		PowerPoint::ShapeRangePtr range = shapes->Range(idx);
+		PowerPoint::ShapePtr newGroup = range->Group();
+		newGroup->GetTags()->Add(_bstr_t(L"PP_KIND"), _bstr_t(L"CHART_ROOT"));
+		newGroup->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
+		newGroup->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
+		char proj[192];
+		::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
+			DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
+		newGroup->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+
+		if (!selectId.empty()) {
+			for (size_t p = 0; p < sc.prims.size(); ++p) {
+				if (sc.prims[p].tagId == selectId) { finalOrder[p]->Select(Office::msoTrue); break; }
+			}
+		}
+		return S_OK;
+	} catch (...) {
+		GbLog(L"ReconcileChartRoot: exception during post-ungroup rebuild, cleaning up loose shapes");
+		cleanupLoose();
+		return E_FAIL;
 	}
-	return S_OK;
 }
 
 HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& selectId) {
