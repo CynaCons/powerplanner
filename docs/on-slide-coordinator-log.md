@@ -422,3 +422,24 @@ active; (c) manual DPI matrix in plan §4.2.1 awaits your run. Known limits:
 SUPPRESS child-select path unverifiable by automation (Selection Pane is the only
 real user path); milestone recolor not implemented (op exists pattern, small add);
 edge/milestone drag paths share commit logic but only body-drag is harness-covered.
+
+---
+
+## V3 — Row-Centric Editing + Bottom App Bar (started 2026-07-04)
+
+User feedback session distilled into `docs/on-slide-ux-plan.md` §6. Decisions
+(user, 2026-07-04): app bar primary + right-click kept (ONE shared command map) ·
+uniform rows with optional one-level hierarchy (keep `groupId`) · generic movable
+markers (Today = default label) · fit-to-slide reserves a top ~15% title zone.
+
+Backlog seeded (12 units, same SQLite DB): fit-to-slide · marker-model-ops →
+marker-drag · text-model → text-interaction · label-placement · row-uniform-ux ·
+grid-scale-options · appbar-shell → appbar-actions → { dependency-ux,
+context-menu-v3 }. Gates per unit in the DB; full V2 suite is the regression
+floor for every unit. Same protocol as V2: Sonnet sub-agents, coordinator
+validates gates from clean rebuilds, PowerPoint mutex, commit before done,
+self-review pre-dispatch and every ~3 units.
+
+Standing V2 lessons that apply verbatim: hardcoded bat source lists (new .cpp →
+every bat); snapshot gesture state before ReleaseCapture; time-bounded harness
+pumps; SetOwnSelection-only after RebuildChart; SetCursorPos lockstep in harness.

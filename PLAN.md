@@ -506,6 +506,22 @@ discovery spikes + 3 review-driven fix units), each committed with `[todo: <id>]
 - [ ] Follow-ups (small): milestone recolor op; edge/milestone drag harness
       coverage; manual DPI matrix run (plan §4.2.1); TrackPopupMenu flicker check
 
+### N8 — Row-Centric Editing + Bottom App Bar (V3) — IN PROGRESS (started 2026-07-04)
+User-feedback iteration on V2. Decisions: app bar = primary contextual surface with
+right-click as shortcut (one shared command map) · uniform rows with optional
+hierarchy · generic movable markers · fit-to-slide under a reserved title zone.
+Plan: [docs/on-slide-ux-plan.md §6](docs/on-slide-ux-plan.md); coordination via
+the same gated sub-agent loop as N7 (log: docs/on-slide-coordinator-log.md).
+- [ ] V3-1 fit-to-slide (default insert fills slide content area)
+- [ ] V3-2 marker-model-ops · V3-3 marker-drag (movable Today/deadline/custom lines)
+- [ ] V3-4 text-model · V3-5 text-interaction (free + anchored text elements)
+- [ ] V3-6 label-placement (on-bar vs left-rail task labels)
+- [ ] V3-7 row-uniform-ux (add/indent/outdent — everything is a row)
+- [ ] V3-8 grid-scale-options (timescale grid visibility/style)
+- [ ] V3-9 appbar-shell · V3-10 appbar-actions (bottom contextual app bar)
+- [ ] V3-11 dependency-ux (link mode from app bar)
+- [ ] V3-12 context-menu-v3 (menus rebuilt from shared command map)
+
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
 

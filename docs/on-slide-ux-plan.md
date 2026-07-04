@@ -88,7 +88,7 @@ The **Coordinator Agent** must oversee all sub-agents and enforce strict validat
 
 ## 4. V2 — Pure On-Slide Editor (Interaction Capture)
 
-> Status: PLANNED. Supersedes the V1 interaction model above (V1 shipped 2026-06-30,
+> Status: SHIPPED 2026-07-04 (15/15 units green, see `docs/on-slide-coordinator-log.md`). Supersedes the V1 interaction model above (V1 shipped 2026-06-30,
 > see `docs/on-slide-coordinator-log.md`). V1 facts that constrain this plan:
 > there is NO subclassable per-slide window (`FALLBACK_POLLING_ONLY`); the
 > chart-wide overlay surface exists and persists (`overlay-chart-surface`); once a
@@ -195,3 +195,71 @@ Specialized agents must be spawned with clear instructions based on this documen
 .\native\build-reflow.bat
 ```
 The Coordinator must verify build success at every step before advancing.
+
+## 6. V3 — Row-Centric Editing + Bottom App Bar
+
+> Status: PLANNED (user feedback session 2026-07-04). Builds strictly on the V2
+> interaction layer (overlay capture, own selection, drag engine, GanttOps →
+> RebuildChart, one-gesture-one-undo, shared harness).
+
+### 6.1 Vision (user feedback distilled)
+
+1. **Fit-to-slide by default** — a newly inserted chart fills the slide's content
+   area, leaving the top ~15% free for a native PowerPoint title placeholder.
+2. **Everything is a row** — no separate "category" concept in the UX. Every row is
+   equal: any row can hold tasks/milestones AND child rows (indent/outdent). A
+   category is just a row others were indented under. (The model already works this
+   way — `PpRow.groupId` — this is a UX unification, not a data migration.)
+3. **Left rail as a first-class label surface** — per-task label placement:
+   on-bar, in the left rail, or both. Rail width becomes a real layout input.
+4. **Generic movable markers** — every vertical marker (Today, deadlines, custom)
+   is draggable and label-editable; more can be added. "Today" is just a default label.
+5. **Text elements** — new `PpText` model element; free-floating or anchored to a
+   task/milestone (`anchorId`), so anchored text follows its anchor on every rebuild.
+6. **Grid + scale controls** — doc-level timescale-grid visibility/style options
+   alongside the existing D/W/M scale ops.
+7. **Bottom app bar** (PowerNote `BottomToolbar` pattern) — a docked contextual
+   strip at the bottom of the slide area; its content swaps with the internal
+   selection (task / milestone / row / marker / text / none). PRIMARY contextual
+   surface. Right-click menus stay as shortcuts, driven by the SAME command map.
+8. **Dependency UX** — create/remove dependencies from the app bar (link mode:
+   click source's Link button, then click target task). Connectors already render.
+
+**Decision record (user, 2026-07-04):** app bar primary + right-click kept (one
+shared command map) · uniform rows with optional hierarchy (keep `groupId`) ·
+generic movable markers · fit-to-slide reserves a top title zone.
+
+### 6.2 Work units (dependency-ordered)
+
+| id | unit | depends on | gate |
+|---|---|---|---|
+| V3-1 | `fit-to-slide` — InsertGantt sizes/positions CHART_ROOT to the slide content area below a reserved title zone (top ~15%). Approach: build as today, then set group frame, then ReflowFromSlide re-projects (pure layout + conformance untouched). | — | reflow harness asserts inserted frame ≈ content area → `FIT OK` |
+| V3-2 | `marker-model-ops` — pure ops: `AddMarker`, `SetMarkerDate`, `SetMarkerLabel`, delete via existing `DeleteById`; marker type `custom` allowed. | — | ops harness `MARKER OPS OK` |
+| V3-3 | `marker-drag` — hit-test zone for vertical markers (±band, DPI-scaled), ew-resize cursor, modal drag with ghost line + date tooltip, commit `SetMarkerDate`. | V3-2 | overlay harness stage `MARKERDRAG PASS` |
+| V3-4 | `text-model` — `PpText` {id,label,anchorId,rowId,date,dx,dy}; JSON round-trip; layout (anchored → relative to anchor + offset; free → row+date); emitter (`PP_KIND=TEXT`); ops Add/SetLabel/Move/Delete. | — | `TEXT OPS OK` + conformance fixtures pass |
+| V3-5 | `text-interaction` — hit zone Text, select/drag (anchored drag adjusts dx/dy; free drag moves row/date), double-click reuses card editor, Delete key works. | V3-4 | overlay harness stage `TEXT PASS` |
+| V3-6 | `label-placement` — per-task `labelPlacement` (bar\|rail\|both, default bar); rail renders task labels for rail/both; rail width a layout input; `SetLabelPlacement` op. | — | `LABEL OPS OK` + conformance |
+| V3-7 | `row-uniform-ux` — ops `AddRowAbove`, `IndentRow`, `OutdentRow` (via groupId, one level); uniform row treatment in hit zones/menus. | — | `ROW OPS OK` |
+| V3-8 | `grid-scale-options` — doc-level grid options (visibility density none\|month\|week\|day + line style); `SetGridStyle` op; renderer variants. | — | `GRID OPS OK` + conformance |
+| V3-9 | `appbar-shell` — second docked layered NOACTIVATE strip at the bottom of the slide area; PURE app-bar model `BuildAppBar(selection, doc-state) → sections/buttons` (COM-free, ops-testable); GDI+ paint, hover, click → command ids. Shows when a chart is on the active slide. | V3-2..V3-8 | ops `APPBAR MODEL OK`; overlay harness stage `APPBAR PASS` |
+| V3-10 | `appbar-actions` — ONE shared command registry (refactor menu `MapMenuCommand` into it); wire every app-bar button per context: task (nudge/dates/percent/color/placement/add-text/delete), milestone, row (add/indent/outdent/delete), marker (date/label/delete), background (scale, grid, add row/marker/text). | V3-9 | overlay harness stage `APPBARACT PASS` (button click → doc mutation) |
+| V3-11 | `dependency-ux` — app bar Link button → link mode (crosshair + banner), click target task → `AddDependency` (finish-to-start default), Esc cancels; Unlink removes deps touching selection. | V3-10 | `DEP OPS OK`; overlay harness stage `DEP PASS` |
+| V3-12 | `context-menu-v3` — right-click menus rebuilt FROM the shared command registry: add milestone/text/marker, grid + scale submenus, link mode entry. | V3-10 | `MENU MAP OK` still printed; all harness stages green |
+
+Regression gates for every unit (same suite as V2): `native\build.bat` [build] OK ·
+`build-ops.bat` all markers · `build-conformance.bat` fixtures pass ·
+`build-overlay.bat` + `ppoverlay.exe` all stages exit 0 ·
+`build-reflow.bat` + `ppreflow.exe` REFLOW PASS. PowerPoint killed before/after COM gates.
+
+### 6.3 Risks / known constraints
+
+1. **Two overlay windows** (chart overlay + app bar) must never fight for capture;
+   the app bar is outside the chart rect so NCHITTEST domains are disjoint — verify.
+2. **App bar on a NOACTIVATE window**: clicks must not activate/steal focus
+   (V2 pattern holds), and TrackPopupMenu-style flicker must not regress.
+3. **Anchored text vs rebuild-in-place diff**: TEXT shapes need stable PP_IDs so
+   `UpdateGantt` moves rather than recreates them.
+4. **Fit-to-slide vs conformance fixtures**: sizing happens AFTER pure layout
+   (frame + reflow), so fixtures stay byte-stable; do not resize inside layout.
+5. **Grid options widen PP_DOC schema**: keep JSON round-trip backward-compatible
+   (absent fields → current defaults) so existing decks load unchanged.
