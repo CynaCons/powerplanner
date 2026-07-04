@@ -600,3 +600,15 @@ bounding box aspect is NOT invariant across doc edits (observed 357.95 vs
 331.44pt height drift after a 1-day nudge) - aspect-fit recomputation could
 never restore the captured frame exactly. The uniform-scale/letterbox DECISION
 lives only in FitChartRootToSlide (insert-time). overlay.png gitignored.
+
+### marker-drag — DONE (d4eae41)
+
+Full gate from clean rebuild, exit 0: MARKERDRAG PASS + all 11 prior stages +
+INPUT NEUTRAL OK + FIT/FITPERSIST/REFLOW. First stage written under the
+input-neutral regime - pattern held (posted messages + cursor override, no
+poison violations). Marker hit bands synthesized +-edgeBandPx around
+PP_PROJ-derived x per review amendment; ew-resize cursor; ghost line + date
+tooltip; SetMarkerDate commit; selection kind MARKER. Agent-noted latent quirk
+(pre-existing, untouched): UpdateDpiScaledMetrics sets edgeBandPx then
+InvalidateHitSnapshot resets it; BuildRowBands now re-sets per walk so Marker
+hits stay DPI-correct. Dispatched: text-model (pure gate).
