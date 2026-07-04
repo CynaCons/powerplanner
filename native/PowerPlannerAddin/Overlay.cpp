@@ -68,6 +68,11 @@ std::string g_lastKind;       // last shown PP_KIND (to log on change)
 std::string g_selId;          // current selected PowerPlanner PP_ID
 std::string g_selKind;        // current selected PowerPlanner PP_KIND
 std::string g_chartProj;      // current CHART_ROOT PP_PROJ payload
+// Most recent PowerPoint-native selection of a chart child that Tick()
+// suppressed (Unselect()'d). Remembered for the future selection model;
+// not consumed by anything yet.
+std::string g_suppressedKind;
+std::string g_suppressedId;
 std::wstring g_badge = L"PowerPlanner";
 RECT g_buttonRects[BUTTON_COUNT] = {};
 RECT g_frameRect = {};
@@ -1288,18 +1293,39 @@ void Tick() {
 				PowerPoint::ShapePtr sh = sr->Item(_variant_t(1L));
 				_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
 				if (kind.length()) {
-					_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
-					g_selKind = Narrow((const wchar_t*)kind);
-					g_selId = Narrow((const wchar_t*)id);
-					float left = sh->GetLeft(), top = sh->GetTop(), w = sh->GetWidth(), h = sh->GetHeight();
-					g_selScreenRect = {
-						win->PointsToScreenPixelsX(left),
-						win->PointsToScreenPixelsY(top),
-						win->PointsToScreenPixelsX(left + w),
-						win->PointsToScreenPixelsY(top + h)
-					};
-					NormalizeRect(g_selScreenRect);
-					g_hasSelectionChrome = true;
+					std::string kindStr = Narrow((const wchar_t*)kind);
+					// The CHART_ROOT group itself must stay natively selectable
+					// (move grip, Alt+click escape hatch) — only chart CHILDREN
+					// get their PowerPoint-native selection suppressed.
+					bool isEditingThisShape = g_editHwnd && !g_editKind.empty();
+					if (kindStr != "CHART_ROOT" && !g_mutating && !isEditingThisShape) {
+						_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
+						g_suppressedKind = kindStr;
+						g_suppressedId = Narrow((const wchar_t*)id);
+						try {
+							win->GetSelection()->Unselect();
+						} catch (const _com_error&) {
+							OvLog(L"COM error unselecting suppressed chart child");
+						}
+						OvLog((L"suppressed native selection of chart child PP_KIND=" + Widen(kindStr)).c_str());
+						// Selection is now empty; leave selection-chrome state
+						// cleared (ClearSelectionState() already ran above) so
+						// the overlay does not draw chrome around a shape
+						// PowerPoint no longer considers selected.
+					} else {
+						g_selKind = kindStr;
+						_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
+						g_selId = Narrow((const wchar_t*)id);
+						float left = sh->GetLeft(), top = sh->GetTop(), w = sh->GetWidth(), h = sh->GetHeight();
+						g_selScreenRect = {
+							win->PointsToScreenPixelsX(left),
+							win->PointsToScreenPixelsY(top),
+							win->PointsToScreenPixelsX(left + w),
+							win->PointsToScreenPixelsY(top + h)
+						};
+						NormalizeRect(g_selScreenRect);
+						g_hasSelectionChrome = true;
+					}
 				}
 			}
 		}

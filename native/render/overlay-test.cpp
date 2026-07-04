@@ -9,11 +9,15 @@
 // remaining stages) — but always quits PowerPoint and releases every COM
 // pointer BEFORE CoUninitialize so POWERPNT never leaks.
 //
-//   Stage 1: ALPHA   — the overlay hwnd must be driven by UpdateLayeredWindow
-//                      (per-pixel premultiplied alpha), NOT LWA_COLORKEY.
-//                      GetLayeredWindowAttributes FAILING is the PASS
-//                      condition (ULW-driven windows have no attributes).
-//   Stage 2: CAPTURE — the overlay window is visible; capture it to PNG.
+//   Stage 1: ALPHA    — the overlay hwnd must be driven by UpdateLayeredWindow
+//                       (per-pixel premultiplied alpha), NOT LWA_COLORKEY.
+//                       GetLayeredWindowAttributes FAILING is the PASS
+//                       condition (ULW-driven windows have no attributes).
+//   Stage 2: CAPTURE  — the overlay window is visible; capture it to PNG.
+//   Stage 3: SUPPRESS — PowerPoint-native selection of a chart CHILD shape is
+//                       suppressed by the overlay's Tick() (Unselect()'d),
+//                       while selecting the CHART_ROOT group itself is left
+//                       alone (move-grip / Alt+click escape hatch).
 //
 //   ppoverlay.exe <output.png>
 #include "../PowerPlannerAddin/pch.h"
@@ -187,6 +191,177 @@ int wmain(int argc, wchar_t** argv) {
 				}
 				wprintf(pass ? L"CAPTURE PASS\n" : L"CAPTURE FAIL\n");
 				if (!pass) rc = 1;
+			}
+
+			// ---- stage 3: SUPPRESS -----------------------------------------
+			// Shape.Select() on a group MEMBER (obtained via GroupItems) does
+			// NOT reliably make that member the native selection — PowerPoint
+			// can resolve it back to the top-level group depending on
+			// view/timing. Try the direct GroupItems->Select() route first
+			// (cheapest, most deterministic when it works); fall back to the
+			// Alt+click passthrough hatch (Overlay.cpp's WM_NCHITTEST treats
+			// Alt as HTTRANSPARENT so clicks reach PowerPoint natively — one
+			// Alt+click selects the group, a second Alt+click at the same
+			// point sub-selects the child under the cursor, matching real
+			// click-into-group behavior) if the direct route doesn't stick.
+			if (rc == 0) {
+				bool pass = false;
+				bool childSelectable = true;
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					PowerPoint::ShapePtr taskChild;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+					if (!chartRoot) {
+						wprintf(L"SUPPRESS: could not find CHART_ROOT shape\n");
+						childSelectable = false;
+					} else {
+						PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+						long gn = grp->GetCount();
+						for (long j = 1; j <= gn && !taskChild; ++j) {
+							PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+							_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+							if (ckind == L"TASK" || ckind == L"TASK_PROGRESS") taskChild = child;
+						}
+					}
+
+					std::wstring landedKind;
+
+					// ---- 3a-i: direct GroupItems->Item(i)->Select() -------
+					if (chartRoot && taskChild) {
+						try {
+							taskChild->Select(Office::msoTrue);
+							PumpFor(200);
+							PowerPoint::SelectionPtr diagSel = app->GetActiveWindow()->GetSelection();
+							if (diagSel && diagSel->GetType() == PowerPoint::ppSelectionShapes) {
+								PowerPoint::ShapeRangePtr diagSr = diagSel->GetShapeRange();
+								if (diagSr && diagSr->GetCount() >= 1) {
+									PowerPoint::ShapePtr diagSh = diagSr->Item(_variant_t(1L));
+									_bstr_t dk = diagSh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+									std::wstring kindStr = dk.length() ? (const wchar_t*)dk : L"";
+									wprintf(L"SUPPRESS diag: direct GroupItems->Select landed on PP_KIND=%s\n", kindStr.empty() ? L"(none)" : kindStr.c_str());
+									if (!kindStr.empty() && kindStr != L"CHART_ROOT") landedKind = kindStr;
+								}
+							}
+						} catch (const _com_error& e) {
+							wprintf(L"SUPPRESS diag: direct GroupItems->Select threw 0x%08lX (%s)\n",
+								(unsigned long)e.Error(), e.Description().length() ? (const wchar_t*)e.Description() : L"(no description)");
+						}
+					}
+
+					// ---- 3a-ii: Alt+click passthrough fallback ------------
+					if (landedKind.empty() && chartRoot && taskChild) {
+						wprintf(L"SUPPRESS diag: direct select did not stick; trying Alt+click passthrough\n");
+						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+						float left = taskChild->GetLeft(), top = taskChild->GetTop();
+						float w = taskChild->GetWidth(), h = taskChild->GetHeight();
+						int sx = win->PointsToScreenPixelsX(left + w / 2.0f);
+						int sy = win->PointsToScreenPixelsY(top + h / 2.0f);
+
+						HWND ppHwnd = (HWND)(intptr_t)app->GetHWND();
+						::SetForegroundWindow(ppHwnd);
+						PumpFor(150);
+
+						auto altClickAt = [&](int x, int y) {
+							INPUT altDown = {}; altDown.type = INPUT_KEYBOARD; altDown.ki.wVk = VK_MENU;
+							::SendInput(1, &altDown, sizeof(INPUT));
+							::SetCursorPos(x, y);
+							PumpFor(30);
+							INPUT down = {}; down.type = INPUT_MOUSE; down.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+							INPUT up = {};   up.type = INPUT_MOUSE;   up.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+							::SendInput(1, &down, sizeof(INPUT));
+							PumpFor(30);
+							::SendInput(1, &up, sizeof(INPUT));
+							PumpFor(30);
+							INPUT altUp = {}; altUp.type = INPUT_KEYBOARD; altUp.ki.wVk = VK_MENU; altUp.ki.dwFlags = KEYEVENTF_KEYUP;
+							::SendInput(1, &altUp, sizeof(INPUT));
+						};
+
+						// The group is already selected (via COM, deterministic);
+						// a single Alt+click directly on the child, while the
+						// group is the current selection, is PowerPoint's
+						// native "select sub-object within selected group"
+						// gesture (same as a real user's second click).
+						chartRoot->Select(Office::msoTrue);
+						PumpFor(300);
+						altClickAt(sx, sy);
+						PumpFor(300);
+
+						PowerPoint::SelectionPtr diagSel2 = app->GetActiveWindow()->GetSelection();
+						if (diagSel2 && diagSel2->GetType() == PowerPoint::ppSelectionShapes) {
+							PowerPoint::ShapeRangePtr diagSr2 = diagSel2->GetShapeRange();
+							if (diagSr2 && diagSr2->GetCount() >= 1) {
+								PowerPoint::ShapePtr diagSh2 = diagSr2->Item(_variant_t(1L));
+								_bstr_t dk2 = diagSh2->GetTags()->Item(_bstr_t(L"PP_KIND"));
+								std::wstring kindStr2 = dk2.length() ? (const wchar_t*)dk2 : L"";
+								wprintf(L"SUPPRESS diag: after Alt+click x2, PP_KIND=%s\n", kindStr2.empty() ? L"(none)" : kindStr2.c_str());
+								if (!kindStr2.empty() && kindStr2 != L"CHART_ROOT") landedKind = kindStr2;
+							}
+						}
+					}
+
+					if (landedKind.empty()) {
+						childSelectable = false;
+						wprintf(L"SUPPRESS: could not produce a native chart-child selection via any route (direct select or Alt+click passthrough)\n");
+					}
+
+					bool childSuppressed = true;
+					if (childSelectable) {
+						// The overlay's Tick() must notice the current
+						// selection is a chart CHILD (not CHART_ROOT) and
+						// Unselect it within the next poll(s).
+						PumpFor(600);
+						PowerPoint::SelectionPtr sel = app->GetActiveWindow()->GetSelection();
+						childSuppressed = !sel || sel->GetType() != PowerPoint::ppSelectionShapes;
+						if (!childSuppressed) {
+							wprintf(L"SUPPRESS: chart child selection was NOT suppressed (type=%d)\n", (int)sel->GetType());
+						}
+					}
+
+					// 3b: selecting CHART_ROOT itself must be exempt and
+					// stay selected across a further poll window. Always
+					// checked, even in the degraded (child-unsimulatable)
+					// path, since it needs no simulated child selection.
+					bool rootStaysSelected = false;
+					if (chartRoot) {
+						chartRoot->Select(Office::msoTrue);
+						PumpFor(600);
+						PowerPoint::SelectionPtr sel2 = app->GetActiveWindow()->GetSelection();
+						if (sel2 && sel2->GetType() == PowerPoint::ppSelectionShapes) {
+							PowerPoint::ShapeRangePtr sr2 = sel2->GetShapeRange();
+							if (sr2 && sr2->GetCount() >= 1) {
+								PowerPoint::ShapePtr sh2 = sr2->Item(_variant_t(1L));
+								_bstr_t k2 = sh2->GetTags()->Item(_bstr_t(L"PP_KIND"));
+								std::wstring kind2 = k2.length() ? (const wchar_t*)k2 : L"";
+								rootStaysSelected = (kind2 == L"CHART_ROOT");
+							}
+						}
+						if (!rootStaysSelected) {
+							wprintf(L"SUPPRESS: CHART_ROOT selection was incorrectly suppressed\n");
+						}
+					}
+
+					pass = childSuppressed && rootStaysSelected;
+
+					if (pass && !childSelectable) {
+						wprintf(L"SUPPRESS PASS (child-select unsimulatable)\n");
+					} else {
+						wprintf(pass ? L"SUPPRESS PASS\n" : L"SUPPRESS FAIL\n");
+					}
+					if (!pass) rc = 1;
+				} catch (const _com_error& e) {
+					wprintf(L"SUPPRESS: COM error 0x%08lX\n", (unsigned long)e.Error());
+					wprintf(L"SUPPRESS FAIL\n");
+					rc = 1;
+				}
 			}
 		} catch (const _com_error& e) {
 			wprintf(L"COM error 0x%08lX: %s\n", (unsigned long)e.Error(),
