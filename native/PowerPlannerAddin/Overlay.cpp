@@ -56,6 +56,10 @@ bool     g_shown = false;
 bool     g_mutating = false;
 bool     g_inTick = false;
 ULONG_PTR g_gdiplusToken = 0;
+// PowerPoint's main window, cached each Tick() from the Application COM object.
+// Used to forward input (e.g. mouse wheel) that the overlay captures but does
+// not itself handle, so Ctrl+wheel zoom/scroll still reaches PowerPoint.
+HWND     g_pptHwnd = NULL;
 
 // 32-bpp premultiplied-alpha back buffer, pushed via UpdateLayeredWindow.
 HDC     g_bufDc = NULL;
@@ -101,7 +105,7 @@ long g_hitCacheChildCount = -1;
 // will consume this; for now it is only stored (and logged on change).
 HtHit g_lastHit;
 
-// 'Move chart' grip in the chrome (top-left): clicking it selects the
+// 'Move chart' grip in the chrome (top-right): clicking it selects the
 // CHART_ROOT group via COM so the user can still move/delete the whole chart
 // natively even though the overlay now captures every chart click.
 RECT g_gripRect = {};
@@ -289,13 +293,15 @@ int ButtonFromClientPoint(POINT pt) {
 	return -1;
 }
 
-// 'Move chart' grip: pinned to the window's top-left, inside the badge strip
-// (the strip above the chart), so it is always reachable.
+// 'Move chart' grip: pinned to the window's top-RIGHT, inside the badge strip
+// (the strip above the chart), so it is always reachable. Top-right (rather
+// than top-left) avoids colliding with the "PowerPlanner" badge chip, which
+// is drawn at the frame's top-left and can extend close to frame.left.
 void LayoutGrip(int width, int height) {
 	g_gripValid = false;
 	::SetRectEmpty(&g_gripRect);
 	if (width < GRIP_SIZE + INFL * 2 || height < BADGE_H) return;
-	g_gripRect = { INFL + 1, 2, INFL + 1 + GRIP_SIZE, 2 + GRIP_SIZE };
+	g_gripRect = { width - INFL - 1 - GRIP_SIZE, 2, width - INFL - 1, 2 + GRIP_SIZE };
 	g_gripValid = true;
 }
 
@@ -678,6 +684,26 @@ HtHit HitTestClientPoint(POINT pt) {
 	return GanttHitTestPoint(g_hitSnapshot, pt.x + g_windowOriginX, pt.y + g_windowOriginY);
 }
 
+// The overlay's HTCLIENT region swallows WM_MOUSEWHEEL/WM_MOUSEHWHEEL (they
+// route to whichever window is under the cursor, which is us), so without
+// this, Ctrl+wheel zoom and wheel-scroll are dead over the chart. Forward the
+// message on to PowerPoint's main window unchanged. Falls back to a
+// WindowFromPoint probe (excluding our own hwnd) if Tick() hasn't cached a
+// PowerPoint hwnd yet, so the forward still works before the first tick.
+void ForwardWheelToPowerPoint(HWND self, UINT msg, WPARAM wp, LPARAM lp) {
+	HWND target = g_pptHwnd;
+	if (!target || target == self) {
+		POINT screenPt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		HWND under = ::WindowFromPoint(screenPt);
+		while (under && under == self) {
+			under = ::GetParent(under);
+		}
+		target = under;
+	}
+	if (!target || target == self) return;
+	::PostMessageW(target, msg, wp, lp);
+}
+
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	if (msg == WM_NCHITTEST) {
 		// Alt = escape hatch: let PowerPoint see the mouse so the user can
@@ -694,6 +720,12 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	}
 	if (msg == WM_MOUSEACTIVATE) {
 		return MA_NOACTIVATE;
+	}
+	if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {
+		// WM_MOUSEWHEEL/HWHEEL carry screen coordinates in lp already (unlike
+		// most mouse messages), so no client-to-screen conversion is needed.
+		ForwardWheelToPowerPoint(hwnd, msg, wp, lp);
+		return 0;
 	}
 	if (msg == WM_LBUTTONDOWN) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
@@ -863,7 +895,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	LayoutHoverInsertHotspot();
 	LayoutGrip(W, H);
 
-	// 'Move chart' grip chip (top-left, in the badge strip): white chip with an
+	// 'Move chart' grip chip (top-right, in the badge strip): white chip with an
 	// accent four-way move glyph. Clicking it selects the CHART_ROOT group.
 	if (g_gripValid) {
 		GraphicsPath gripPath;
@@ -1068,13 +1100,25 @@ void RenderOverlay() {
 	if (!EnsureBackBuffer(w, h)) return;
 	try {
 		Gdiplus::Bitmap surface(w, h, w * 4, PixelFormat32bppPARGB, (BYTE*)g_bufBits);
+		if (surface.GetLastStatus() != Gdiplus::Ok) {
+			OvLog(L"overlay render skipped (bitmap status)");
+			return;
+		}
 		Gdiplus::Graphics g(&surface);
+		if (g.GetLastStatus() != Gdiplus::Ok) {
+			OvLog(L"overlay render skipped (graphics status)");
+			return;
+		}
 		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
 		g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 		g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
 		g.Clear(Gdiplus::Color(0, 0, 0, 0));
 		PaintOverlay(g, w, h);
 		g.Flush(Gdiplus::FlushIntentionSync);
+		if (g.GetLastStatus() != Gdiplus::Ok) {
+			OvLog(L"overlay render skipped (paint status)");
+			return;
+		}
 
 		POINT dst = { wr.left, wr.top };
 		POINT src = { 0, 0 };
@@ -1132,6 +1176,7 @@ void ShowOverlayForChartRect(const RECT& chart) {
 }
 
 void RebuildChart(PpDocument& doc, const std::string& selectId) {
+	InvalidateHitSnapshot();
 	PowerPoint::_SlidePtr slide = g_app->GetActiveWindow()->GetView()->GetSlide();
 	PowerPoint::ShapesPtr shapes = slide->GetShapes();
 	long n = shapes->GetCount();
@@ -1263,6 +1308,7 @@ void Tick() {
 
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
 		if (!win) { HideOverlay(); return; }
+		g_pptHwnd = (HWND)(INT_PTR)g_app->GetHWND();
 
 		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
 		PowerPoint::ShapePtr chart = FindChartRoot(slide);
@@ -1339,6 +1385,7 @@ void Tick() {
 					ReflowFromSlide(g_app, &changed);
 					if (changed) {
 						ClearSelectionState();
+						InvalidateHitSnapshot();
 						ShowOverlayForChartRect(g_chartScreenRect);
 						RequestOverlayRepaint();
 						return;
@@ -1361,6 +1408,10 @@ void Tick() {
 			OvLog(buf);
 		}
 	} catch (const _com_error&) {
+		HideOverlay();
+	} catch (const std::exception&) {
+		HideOverlay();
+	} catch (...) {
 		HideOverlay();
 	}
 }
@@ -1395,6 +1446,7 @@ void OverlayStop() {
 		g_gdiplusToken = 0;
 	}
 	g_app = nullptr;
+	g_pptHwnd = NULL;
 	g_shown = false;
 	g_lastKind.clear();
 	ClearSelectionState();
