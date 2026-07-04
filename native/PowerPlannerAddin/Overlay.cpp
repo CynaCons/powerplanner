@@ -73,10 +73,27 @@ std::string g_selId;          // current selected PowerPlanner PP_ID
 std::string g_selKind;        // current selected PowerPlanner PP_KIND
 std::string g_chartProj;      // current CHART_ROOT PP_PROJ payload
 // Most recent PowerPoint-native selection of a chart child that Tick()
-// suppressed (Unselect()'d). Remembered for the future selection model;
-// not consumed by anything yet.
+// suppressed (Unselect()'d). Mirrored into the internal selection model
+// below, then cleared.
 std::string g_suppressedKind;
 std::string g_suppressedId;
+
+// ---- internal (own) selection model ----------------------------------------
+// The source of truth for "what is selected" no longer needs PowerPoint's
+// native Selection object. Kind is one of "TASK", "MILESTONE", "ROW" (row
+// band), or empty (nothing selected). g_selId/g_selKind/g_hasSelectionChrome/
+// g_selScreenRect (above) are still what PaintOverlay/HandleToolbarButton
+// read, but they are now derived FROM this internal state each tick instead
+// of from PowerPoint's Selection.
+std::string g_ownSelKind;
+std::string g_ownSelId;
+
+// Left-button gesture tracking (down -> up), used to distinguish a click
+// (select) from a drag (does nothing yet — future unit) and to own mouse
+// capture for the duration of the gesture.
+bool g_captureActive = false;
+POINT g_mouseDownPt = {};
+const int kDragThresholdPx = 4;
 std::wstring g_badge = L"PowerPlanner";
 RECT g_buttonRects[BUTTON_COUNT] = {};
 RECT g_frameRect = {};
@@ -227,6 +244,17 @@ void ClearSelectionState() {
 	::SetRectEmpty(&g_frameRect);
 }
 
+void ClearOwnSelection() {
+	g_ownSelKind.clear();
+	g_ownSelId.clear();
+}
+
+void SetOwnSelection(const std::string& kind, const std::string& id) {
+	if (id.empty()) { ClearOwnSelection(); return; }
+	g_ownSelKind = kind;
+	g_ownSelId = id;
+}
+
 bool SameRect(const RECT& a, const RECT& b) {
 	return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
 }
@@ -267,7 +295,12 @@ const EditRegion* EditRegionFromClientPoint(POINT pt) {
 void LayoutToolbarButtons(int width, int height) {
 	g_buttonsValid = false;
 	for (int i = 0; i < BUTTON_COUNT; ++i) ::SetRectEmpty(&g_buttonRects[i]);
-	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect) || width <= 0 || height <= 0) return;
+	// The mini-toolbar binds to the internal selection: visible for a task or
+	// milestone. ROW selection (new: a row band with no task/milestone under
+	// it) does not show the toolbar. The CHART_ROOT chrome path is unrelated
+	// to the internal model and keeps its pre-existing layout behavior.
+	bool toolbarEligible = g_hasSelectionChrome && g_selKind != "ROW";
+	if (!toolbarEligible || ::IsRectEmpty(&g_frameRect) || width <= 0 || height <= 0) return;
 
 	const int buttonW = 32;
 	const int buttonH = 20;
@@ -445,6 +478,43 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_editRegions.clear();
 		InvalidateHitSnapshot();
 	}
+}
+
+// Recompute the chrome-facing selection state (g_selId/g_selKind/
+// g_hasSelectionChrome/g_selScreenRect) FROM the internal selection model
+// (g_ownSelKind/g_ownSelId) plus the current hit-test snapshot / row bands.
+// If the internally-selected element is no longer present in the snapshot
+// (deleted, or off a since-rebuilt chart), the internal selection itself is
+// cleared — there is nothing to draw chrome around.
+void SyncSelectionChromeFromOwnSelection() {
+	ClearSelectionState();
+	if (g_ownSelKind.empty() || g_ownSelId.empty()) return;
+
+	if (g_ownSelKind == "ROW") {
+		for (const auto& band : g_rowBands) {
+			if (band.rowId == g_ownSelId) {
+				g_selKind = "ROW";
+				g_selId = g_ownSelId;
+				g_selScreenRect = band.screenRect;
+				g_hasSelectionChrome = true;
+				return;
+			}
+		}
+		ClearOwnSelection();
+		return;
+	}
+
+	HtItemKind wantKind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone : HtItemKind::Task;
+	for (const auto& item : g_hitSnapshot.items) {
+		if (item.kind == wantKind && item.id == g_ownSelId) {
+			g_selKind = g_ownSelKind;
+			g_selId = g_ownSelId;
+			g_selScreenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+			g_hasSelectionChrome = true;
+			return;
+		}
+	}
+	ClearOwnSelection();
 }
 
 bool UpdateHoverFromCursor() {
@@ -684,6 +754,41 @@ HtHit HitTestClientPoint(POINT pt) {
 	return GanttHitTestPoint(g_hitSnapshot, pt.x + g_windowOriginX, pt.y + g_windowOriginY);
 }
 
+// Apply the selection effect of a completed CLICK gesture (down+up within the
+// drag threshold, same point). TaskBody/edges and Milestone select the item;
+// a RowBand hit with a row id selects the row; EmptyCell/background-RowBand
+// (empty row id)/Outside all clear the selection. Chrome is re-synced by the
+// caller's next Tick() (or immediately, for the harness's benefit, by calling
+// SyncSelectionChromeFromOwnSelection after this).
+void ApplyClickSelection(const HtHit& hit) {
+	switch (hit.zone) {
+	case HtZone::TaskBody:
+	case HtZone::TaskEdgeL:
+	case HtZone::TaskEdgeR:
+		SetOwnSelection("TASK", hit.id);
+		return;
+	case HtZone::Milestone:
+		SetOwnSelection("MILESTONE", hit.id);
+		return;
+	case HtZone::RowBand:
+		if (!hit.rowId.empty()) {
+			SetOwnSelection("ROW", hit.rowId);
+		} else {
+			ClearOwnSelection(); // empty rowId = chart background
+		}
+		return;
+	case HtZone::Label:
+		// Labels are handled by double-click-to-edit; a single click on a
+		// label does not change selection either way today.
+		return;
+	case HtZone::EmptyCell:
+	case HtZone::Outside:
+	default:
+		ClearOwnSelection();
+		return;
+	}
+}
+
 // The overlay's HTCLIENT region swallows WM_MOUSEWHEEL/WM_MOUSEHWHEEL (they
 // route to whichever window is under the cursor, which is us), so without
 // this, Ctrl+wheel zoom and wheel-scroll are dead over the chart. Forward the
@@ -731,12 +836,27 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		if (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt)) return 0;
 		// Route everything else through the semantic hit test and stash the
-		// result — the selection-model unit consumes g_lastHit next.
+		// result (kept for parity/debugging; selection itself is decided on
+		// the up, from the ORIGINAL down-hit, once we know this was a click).
 		g_lastHit = HitTestClientPoint(pt);
+		g_mouseDownPt = pt;
+		g_captureActive = true;
+		::SetCapture(hwnd);
+		return 0;
+	}
+	if (msg == WM_CAPTURECHANGED) {
+		// Some other window stole capture mid-gesture: cancel it. Selection is
+		// left exactly as it was (no click-select on this aborted gesture).
+		g_captureActive = false;
 		return 0;
 	}
 	if (msg == WM_LBUTTONUP) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+		bool wasCaptureActive = g_captureActive;
+		if (g_captureActive) {
+			g_captureActive = false;
+			::ReleaseCapture();
+		}
 		if (GripFromClientPoint(pt)) {
 			try {
 				SelectChartRoot();
@@ -761,6 +881,22 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 				OvLog(L"toolbar click failed");
 			}
 			return 0;
+		}
+		// Click-vs-drag: only a gesture that started with our WM_LBUTTONDOWN
+		// (capture was active) and stayed within the drag threshold selects.
+		// A drag (>4px) does nothing yet (next unit) and must not disturb the
+		// current selection.
+		if (wasCaptureActive) {
+			long dx = pt.x - g_mouseDownPt.x;
+			long dy = pt.y - g_mouseDownPt.y;
+			bool isClick = (dx >= -kDragThresholdPx && dx <= kDragThresholdPx &&
+				dy >= -kDragThresholdPx && dy <= kDragThresholdPx);
+			if (isClick) {
+				HtHit hit = HitTestClientPoint(g_mouseDownPt);
+				ApplyClickSelection(hit);
+				SyncSelectionChromeFromOwnSelection();
+				RequestOverlayRepaint();
+			}
 		}
 		return 0;
 	}
@@ -1138,6 +1274,11 @@ void HideOverlay() {
 	if (g_shown && g_hwnd) { ::ShowWindow(g_hwnd, SW_HIDE); g_shown = false; }
 	g_buttonsValid = false;
 	ClearSelectionState();
+	ClearOwnSelection();
+	if (g_captureActive) {
+		g_captureActive = false;
+		if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
+	}
 	ClearHoverState();
 	g_lastLeftButtonDown = false;
 	g_rowBands.clear();
@@ -1306,6 +1447,14 @@ void Tick() {
 		bool mouseStateChanged = leftButtonDown != g_lastLeftButtonDown;
 		g_lastLeftButtonDown = leftButtonDown;
 
+		// VK_ESCAPE cancels an in-progress capture gesture (drag or pending
+		// click) — it does NOT touch the internal selection itself. General
+		// Esc (deselecting a made selection) is a later unit.
+		if (g_captureActive && (::GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
+			g_captureActive = false;
+			if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
+		}
+
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
 		if (!win) { HideOverlay(); return; }
 		g_pptHwnd = (HWND)(INT_PTR)g_app->GetHWND();
@@ -1332,6 +1481,7 @@ void Tick() {
 		bool hoverChanged = UpdateHoverFromCursor();
 
 		ClearSelectionState();
+		bool chartRootNativelySelected = false;
 		PowerPoint::SelectionPtr sel = win->GetSelection();
 		if (sel && sel->GetType() == PowerPoint::ppSelectionShapes) {
 			PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
@@ -1342,7 +1492,9 @@ void Tick() {
 					std::string kindStr = Narrow((const wchar_t*)kind);
 					// The CHART_ROOT group itself must stay natively selectable
 					// (move grip, Alt+click escape hatch) — only chart CHILDREN
-					// get their PowerPoint-native selection suppressed.
+					// get their PowerPoint-native selection suppressed. Its
+					// chrome is still driven directly from PowerPoint's
+					// Selection (old path), independent of the internal model.
 					bool isEditingThisShape = g_editHwnd && !g_editKind.empty();
 					if (kindStr != "CHART_ROOT" && !g_mutating && !isEditingThisShape) {
 						_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
@@ -1354,11 +1506,16 @@ void Tick() {
 							OvLog(L"COM error unselecting suppressed chart child");
 						}
 						OvLog((L"suppressed native selection of chart child PP_KIND=" + Widen(kindStr)).c_str());
-						// Selection is now empty; leave selection-chrome state
-						// cleared (ClearSelectionState() already ran above) so
-						// the overlay does not draw chrome around a shape
-						// PowerPoint no longer considers selected.
-					} else {
+						// Mirror the suppressed native pick into the internal
+						// selection model, then clear it (one-shot).
+						std::string mirrorKind = IsTaskKind(g_suppressedKind) ? "TASK" : g_suppressedKind;
+						if (mirrorKind == "TASK" || mirrorKind == "MILESTONE") {
+							SetOwnSelection(mirrorKind, g_suppressedId);
+						}
+						g_suppressedKind.clear();
+						g_suppressedId.clear();
+					} else if (kindStr == "CHART_ROOT") {
+						chartRootNativelySelected = true;
 						g_selKind = kindStr;
 						_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
 						g_selId = Narrow((const wchar_t*)id);
@@ -1374,6 +1531,15 @@ void Tick() {
 					}
 				}
 			}
+		}
+
+		// Chrome for a chart CHILD (task/milestone/row) no longer requires
+		// PowerPoint selection — it is driven entirely from the internal
+		// selection model, kept in sync with the freshly-rebuilt snapshot /
+		// row bands above. Skipped when CHART_ROOT chrome (old path) already
+		// claimed g_selKind/g_hasSelectionChrome this tick.
+		if (!chartRootNativelySelected) {
+			SyncSelectionChromeFromOwnSelection();
 		}
 
 		if (g_hasSelectionChrome) {
@@ -1439,6 +1605,10 @@ void OverlayStart(IDispatch* app) {
 void OverlayStop() {
 	if (g_timer) { ::KillTimer(NULL, g_timer); g_timer = 0; }
 	DestroyInlineEditor();
+	if (g_captureActive) {
+		g_captureActive = false;
+		if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
+	}
 	if (g_hwnd) { ::DestroyWindow(g_hwnd); g_hwnd = NULL; }
 	FreeBackBuffer();
 	if (g_gdiplusToken) {
@@ -1450,6 +1620,7 @@ void OverlayStop() {
 	g_shown = false;
 	g_lastKind.clear();
 	ClearSelectionState();
+	ClearOwnSelection();
 	ClearHoverState();
 	g_buttonsValid = false;
 	g_rowBands.clear();
@@ -1463,3 +1634,5 @@ void OverlayStop() {
 }
 
 HWND OverlayHwnd() { return g_hwnd; }
+
+const char* Overlay_GetSelectedIdForTest() { return g_ownSelId.c_str(); }

@@ -21,3 +21,8 @@ void OverlayStop();
 
 // The overlay window handle (for tests/screen capture); NULL if not started.
 HWND OverlayHwnd();
+
+// Debug/test hook: the internally-selected element's id (task/milestone/row),
+// or empty if nothing is internally selected. Drives the harness's OWNSEL
+// stage assertion. Never touches COM.
+const char* Overlay_GetSelectedIdForTest();

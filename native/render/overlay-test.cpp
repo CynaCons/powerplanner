@@ -363,6 +363,99 @@ int wmain(int argc, wchar_t** argv) {
 					rc = 1;
 				}
 			}
+
+			// ---- stage 4: OWNSEL --------------------------------------------
+			// The overlay's OWN selection model (Overlay.cpp's g_ownSelKind/Id)
+			// must select a TASK bar purely from a synthetic click gesture
+			// (WM_LBUTTONDOWN + WM_LBUTTONUP at the same point) posted directly
+			// to the overlay hwnd — no COM Shape::Select() involved — and that
+			// selection must NOT touch PowerPoint's native Selection at all.
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					// Start from a clean slate: no native selection, so a
+					// leftover CHART_ROOT/child pick from SUPPRESS can't taint
+					// the "PowerPoint Selection has no shapes" assertion.
+					try { app->GetActiveWindow()->GetSelection()->Unselect(); } catch (const _com_error&) {}
+					PumpFor(400);
+
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					PowerPoint::ShapePtr taskChild;
+					std::wstring taskId;
+					if (chartRoot) {
+						PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+						long gn = grp->GetCount();
+						for (long j = 1; j <= gn && !taskChild; ++j) {
+							PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+							_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+							if (ckind == L"TASK") {
+								taskChild = child;
+								_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								taskId = cid.length() ? (const wchar_t*)cid : L"";
+							}
+						}
+					}
+
+					HWND ov = OverlayHwnd();
+					if (!chartRoot || !taskChild || taskId.empty() || !ov) {
+						wprintf(L"OWNSEL: could not find CHART_ROOT/TASK child or overlay hwnd\n");
+					} else {
+						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+						float left = taskChild->GetLeft(), top = taskChild->GetTop();
+						float w = taskChild->GetWidth(), h = taskChild->GetHeight();
+						POINT screenPt = {
+							win->PointsToScreenPixelsX(left + w / 2.0f),
+							win->PointsToScreenPixelsY(top + h / 2.0f)
+						};
+						POINT clientPt = screenPt;
+						::ScreenToClient(ov, &clientPt);
+
+						LPARAM lp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+						::PostMessageW(ov, WM_LBUTTONUP, 0, lp);
+						PumpFor(500);
+
+						const char* gotIdUtf8 = Overlay_GetSelectedIdForTest();
+						std::wstring gotId;
+						if (gotIdUtf8) {
+							int wn = ::MultiByteToWideChar(CP_UTF8, 0, gotIdUtf8, -1, NULL, 0);
+							if (wn > 0) { gotId.resize(wn - 1); ::MultiByteToWideChar(CP_UTF8, 0, gotIdUtf8, -1, &gotId[0], wn); }
+						}
+
+						bool idMatches = (gotId == taskId);
+						bool ppSelectionEmpty = true;
+						PowerPoint::SelectionPtr sel = app->GetActiveWindow()->GetSelection();
+						if (sel && sel->GetType() == PowerPoint::ppSelectionShapes) {
+							PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
+							if (sr && sr->GetCount() >= 1) ppSelectionEmpty = false;
+						}
+
+						if (!idMatches) {
+							wprintf(L"OWNSEL: expected selected id '%s', got '%s'\n",
+								taskId.c_str(), gotId.empty() ? L"(empty)" : gotId.c_str());
+						}
+						if (!ppSelectionEmpty) {
+							wprintf(L"OWNSEL: PowerPoint native Selection unexpectedly has shapes\n");
+						}
+						pass = idMatches && ppSelectionEmpty;
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"OWNSEL: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"OWNSEL PASS\n" : L"OWNSEL FAIL\n");
+				if (!pass) rc = 1;
+			}
 		} catch (const _com_error& e) {
 			wprintf(L"COM error 0x%08lX: %s\n", (unsigned long)e.Error(),
 				e.Description().length() ? (const wchar_t*)e.Description() : L"(no description)");
