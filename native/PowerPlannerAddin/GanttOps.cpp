@@ -122,6 +122,20 @@ bool SetTaskPercent(PpDocument& doc, const std::string& taskId, int pct) {
 	return false;
 }
 
+bool SetTaskPercentValue(PpDocument& doc, const std::string& taskId, int pct) {
+	return SetTaskPercent(doc, taskId, pct);
+}
+
+bool SetTaskColor(PpDocument& doc, const std::string& taskId, const std::string& color) {
+	for (auto& task : doc.tasks) {
+		if (task.id == taskId) {
+			task.color = color;
+			return true;
+		}
+	}
+	return false;
+}
+
 bool NudgeTask(PpDocument& doc, const std::string& taskId, long deltaDays) {
 	for (auto& task : doc.tasks) {
 		if (task.id == taskId) {

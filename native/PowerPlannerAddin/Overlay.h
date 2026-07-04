@@ -40,3 +40,20 @@ enum OverlayHotkeyIdForTest {
 	OVERLAY_HOTKEY_SHIFT_LEFT_FOR_TEST = 4,
 	OVERLAY_HOTKEY_SHIFT_RIGHT_FOR_TEST = 5,
 };
+
+// ---- floating card editor (double-click TaskBody/Milestone) test hooks ----
+// The card is a real top-level window (WS_EX_TOOLWINDOW), registered under
+// this class name (mirrors Overlay.cpp's private kCardClass, kept in sync by
+// hand since the class name itself has no other reason to be shared) so the
+// harness's EDITOR stage can find it via FindWindowW without any other
+// exported hook. Child control ids mirror Overlay.cpp's CardControlId enum
+// so the harness can resolve the start-date field via GetDlgItem instead of
+// walking children by class+z-order.
+#define PP_CARD_EDITOR_CLASS L"PowerPlannerCardEditor"
+enum OverlayCardControlIdForTest {
+	OVERLAY_CARD_ID_LABEL_FOR_TEST = 101,
+	OVERLAY_CARD_ID_START_FOR_TEST = 102,
+	OVERLAY_CARD_ID_END_FOR_TEST = 103,
+	OVERLAY_CARD_ID_PERCENT_FOR_TEST = 104,
+	OVERLAY_CARD_ID_OK_FOR_TEST = 105,
+};

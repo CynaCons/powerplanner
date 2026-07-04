@@ -425,6 +425,16 @@ int main() {
 	ok = Check(SetTaskPercent(doc, taskId, 150) && doc.tasks.back().percent == 100, "SetTaskPercent clamps high values") && ok;
 	ok = Check(SetTaskPercent(doc, taskId, -5) && doc.tasks.back().percent == 0, "SetTaskPercent clamps low values") && ok;
 
+	ok = Check(SetTaskPercentValue(doc, taskId, 42) && doc.tasks.back().percent == 42, "SetTaskPercentValue sets an absolute value") && ok;
+	ok = Check(SetTaskPercentValue(doc, taskId, 250) && doc.tasks.back().percent == 100, "SetTaskPercentValue clamps high values") && ok;
+	ok = Check(SetTaskPercentValue(doc, taskId, -50) && doc.tasks.back().percent == 0, "SetTaskPercentValue clamps low values") && ok;
+	ok = Check(!SetTaskPercentValue(doc, "missing-task", 50), "SetTaskPercentValue returns false for missing task") && ok;
+
+	ok = Check(SetTaskColor(doc, taskId, "#ff0000") && doc.tasks.back().color == "#ff0000", "SetTaskColor sets task color") && ok;
+	ok = Check(SetTaskColor(doc, taskId, "") && doc.tasks.back().color.empty(), "SetTaskColor accepts empty string to clear color") && ok;
+	ok = Check(!SetTaskColor(doc, "missing-task", "#00ff00"), "SetTaskColor returns false for missing task") && ok;
+	ok = Check(!SetTaskColor(doc, "ms-1", "#00ff00"), "SetTaskColor returns false for a non-task id (milestone)") && ok;
+
 	ok = Check(SetTitle(doc, "Updated title") && doc.title == "Updated title", "SetTitle updates title") && ok;
 
 	ok = Check(SetScale(doc, "month") && doc.scale == "month", "SetScale accepts month") && ok;

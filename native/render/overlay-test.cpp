@@ -1328,6 +1328,170 @@ int wmain(int argc, wchar_t** argv) {
 				wprintf(pass ? L"KEYS PASS\n" : L"KEYS FAIL\n");
 				if (!pass) rc = 1;
 			}
+
+			// ---- stage 10: EDITOR ---------------------------------------------
+			// Floating card editor. By this point stages 3-9 have mutated the
+			// document (KEYS deleted "t4" entirely) so, per the task brief,
+			// this stage does NOT assume a specific still-existing task id —
+			// it re-reads PP_DOC fresh and picks the first TASK it finds
+			// there, then resolves that id's LIVE on-screen rect via the
+			// CHART_ROOT group walk (same pattern INPLACE/KEYS use) rather
+			// than any cached rect from an earlier stage.
+			//
+			// Flow: post a real double-click (DOWN+UP twice, matching
+			// Windows' own WM_LBUTTONDBLCLK generation — CS_DBLCLKS is set on
+			// the overlay's window class) at the task's live bar center;
+			// assert the card window exists (FindWindowW by class name, see
+			// Overlay.h's PP_CARD_EDITOR_CLASS); SetWindowTextW the start-
+			// date child (GetDlgItem by OVERLAY_CARD_ID_START_FOR_TEST) to a
+			// known different valid date; post Enter to that field (the
+			// task brief also allows the OK button; the field's own
+			// VK_RETURN handler commits identically and needs no extra
+			// coordinate math); pump; re-read PP_DOC and assert the start
+			// date changed accordingly, the end date shifted so the span is
+			// preserved (SetTaskDates predates this stage and always sets
+			// BOTH dates — the card only edits Start here, so it must submit
+			// the unchanged-but-still-required End field verbatim), and the
+			// overlay's own-selection model retained the task as selected.
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					std::string docJsonPre = ReadGanttFromSlide(app);
+					PpDocument docPre = DocumentFromJson(docJsonPre);
+					if (docPre.tasks.empty()) {
+						wprintf(L"EDITOR: PP_DOC has no tasks left to target\n");
+					} else {
+						std::string targetTaskId = docPre.tasks.front().id;
+						std::string origStart, origEnd;
+						for (const auto& t : docPre.tasks) {
+							if (t.id == targetTaskId) { origStart = t.start; origEnd = t.end; break; }
+						}
+						std::wstring targetTaskIdW(targetTaskId.begin(), targetTaskId.end());
+
+						PowerPoint::ShapePtr taskChild;
+						if (chartRoot) {
+							PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+							long gn = grp->GetCount();
+							for (long j = 1; j <= gn && !taskChild; ++j) {
+								PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+								_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+								std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+								if (ckind != L"TASK") continue;
+								_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								std::wstring cidW = cid.length() ? (const wchar_t*)cid : L"";
+								if (cidW == targetTaskIdW) taskChild = child;
+							}
+						}
+
+						HWND ov = OverlayHwnd();
+						if (!chartRoot || !taskChild || !ov) {
+							wprintf(L"EDITOR: could not find live TASK '%hs' or overlay hwnd\n", targetTaskId.c_str());
+						} else {
+							PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+							float left = taskChild->GetLeft(), top = taskChild->GetTop();
+							float w = taskChild->GetWidth(), h = taskChild->GetHeight();
+							POINT screenPt = {
+								win->PointsToScreenPixelsX(left + w / 2.0f),
+								win->PointsToScreenPixelsY(top + h / 2.0f)
+							};
+							POINT clientPt = screenPt;
+							::ScreenToClient(ov, &clientPt);
+							::SetCursorPos(screenPt.x, screenPt.y);
+
+							LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+							// A real double-click is DOWN,UP,DOWN,UP with the
+							// second DOWN carrying WM_LBUTTONDBLCLK instead of
+							// a plain WM_LBUTTONDOWN (matches CS_DBLCLKS
+							// window-class semantics, which the overlay uses).
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+							::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+							PumpFor(60);
+							::PostMessageW(ov, WM_LBUTTONDBLCLK, MK_LBUTTON, clickLp);
+							::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+							PumpFor(500);
+
+							HWND card = ::FindWindowW(PP_CARD_EDITOR_CLASS, NULL);
+							if (!card || !::IsWindow(card)) {
+								wprintf(L"EDITOR: card editor window not found after double-click\n");
+							} else {
+								HWND startField = ::GetDlgItem(card, OVERLAY_CARD_ID_START_FOR_TEST);
+								HWND endField = ::GetDlgItem(card, OVERLAY_CARD_ID_END_FOR_TEST);
+								if (!startField || !endField) {
+									wprintf(L"EDITOR: could not resolve start/end date child controls\n");
+								} else {
+									std::string newStartStr = DaysToDate(DateToDays(origStart) + 3);
+									std::wstring newStartW(newStartStr.begin(), newStartStr.end());
+									std::wstring origEndW(origEnd.begin(), origEnd.end());
+									// End must stay a VALID date >= the new
+									// start (the card commits both fields
+									// together): origEnd is already >= origStart,
+									// and origStart+3 <= origEnd is guaranteed
+									// by MakeSampleDocument's >= 1-week spans,
+									// so resubmitting origEnd verbatim keeps
+									// the commit valid without recomputing it.
+									::SetWindowTextW(startField, newStartW.c_str());
+									::SetWindowTextW(endField, origEndW.c_str());
+									PumpFor(150);
+
+									// Post Enter to the start field: CardFieldProc's
+									// WM_KEYDOWN/VK_RETURN handler commits the
+									// WHOLE card, matching the task brief's
+									// "WM_KEYDOWN VK_RETURN to the field" option.
+									::PostMessageW(startField, WM_KEYDOWN, VK_RETURN, 0);
+									::PostMessageW(startField, WM_KEYUP, VK_RETURN, 0);
+									PumpFor(600);
+
+									bool cardClosed = !::IsWindow(card);
+									std::string docJsonAfter = ReadGanttFromSlide(app);
+									PpDocument docAfter = DocumentFromJson(docJsonAfter);
+									std::string newStart, newEnd;
+									bool foundAfter = false;
+									for (const auto& t : docAfter.tasks) {
+										if (t.id == targetTaskId) { newStart = t.start; newEnd = t.end; foundAfter = true; break; }
+									}
+
+									bool startChanged = foundAfter && newStart == newStartStr;
+									bool endUnchanged = foundAfter && newEnd == origEnd;
+
+									const char* gotIdUtf8 = Overlay_GetSelectedIdForTest();
+									bool selectionRetained = gotIdUtf8 && targetTaskId == gotIdUtf8;
+
+									if (!cardClosed) {
+										wprintf(L"EDITOR: card window still exists after commit\n");
+									}
+									if (!startChanged) {
+										wprintf(L"EDITOR: expected start '%hs', got '%hs' (found=%d)\n",
+											newStartStr.c_str(), newStart.c_str(), (int)foundAfter);
+									}
+									if (!endUnchanged) {
+										wprintf(L"EDITOR: expected end unchanged '%hs', got '%hs'\n", origEnd.c_str(), newEnd.c_str());
+									}
+									if (!selectionRetained) {
+										wprintf(L"EDITOR: selection not retained after commit (got '%hs')\n", gotIdUtf8 ? gotIdUtf8 : "(null)");
+									}
+
+									pass = cardClosed && startChanged && endUnchanged && selectionRetained;
+								}
+							}
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"EDITOR: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"EDITOR PASS\n" : L"EDITOR FAIL\n");
+				if (!pass) rc = 1;
+			}
 		} catch (const _com_error& e) {
 			wprintf(L"COM error 0x%08lX: %s\n", (unsigned long)e.Error(),
 				e.Description().length() ? (const wchar_t*)e.Description() : L"(no description)");

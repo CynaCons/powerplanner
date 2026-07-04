@@ -68,6 +68,17 @@ const Gdiplus::REAL kBaseBadgeFontPx = 11.0f;
 const Gdiplus::REAL kBaseButtonFontPx = 12.0f;
 const BYTE HOVER_WASH_ALPHA = 28;           // translucent accent wash over hovered row
 
+// ---- floating card editor metrics (96-DPI baseline, scaled via Scale()) ----
+const int kBaseCardW = 260;
+const int kBaseCardPad = 10;
+const int kBaseCardRowH = 22;
+const int kBaseCardRowGap = 6;
+const int kBaseCardLabelW = 60;   // field-label column width
+const int kBaseCardSwatchSize = 22;
+const int kBaseCardSwatchGap = 6;
+const int kBaseCardOkW = 60;
+const int kBaseCardOkH = 24;
+
 // Current DPI-scaled values, recomputed by UpdateDpiScaledMetrics() whenever
 // the overlay's window DPI changes (or on first use). Default to the 96-DPI
 // (100%) baseline so any code path that runs before the first DPI probe still
@@ -230,6 +241,63 @@ bool g_editClosing = false;
 std::string g_editKind;
 std::string g_editId;
 
+// ---- floating card editor (double-click on TaskBody/Milestone) -------------
+// A second, richer top-level focusable window (same "separate top-level
+// window hosting real Win32 child controls" pattern as the inline title/row-
+// label editor above — the NOACTIVATE overlay itself can never host a
+// focused control). Unlike the inline editor (single EDIT box, commits on
+// kill-focus), the card holds several fields + 8 color swatches and commits
+// them all in ONE undo entry when the user hits Enter/OK; losing focus or
+// Esc CANCELS instead (per the task spec) since a stray click on another
+// field mid-edit should not silently commit half-typed values.
+const wchar_t* kCardClass = L"PowerPlannerCardEditor";
+const wchar_t* kCardSwatchClass = L"PowerPlannerCardSwatch";
+
+// Fixed child control ids (GetDlgItem/EnumChildWindows-friendly; also used by
+// the harness's EDITOR stage to locate the start-date field deterministically
+// without walking children by class+z-order).
+enum CardControlId {
+	CARD_ID_LABEL = 101,
+	CARD_ID_START = 102,
+	CARD_ID_END = 103,
+	CARD_ID_PERCENT = 104,
+	CARD_ID_OK = 105,
+	CARD_ID_SWATCH_BASE = 110, // 110..117 for the 8 color swatches
+};
+constexpr int kCardSwatchCount = 8;
+
+// 8-swatch palette (RGB). Reuses Scene.h's Material primary/milestone tokens
+// as the first two entries (so the default task/milestone colors are always
+// one click away) and rounds out the rest with a small, calm Material-ish set
+// distinct enough to tell apart at swatch size. Scene.h itself has no
+// ready-made 8-color list (MaterialLight() is a themed token STRUCT, not a
+// palette array), so these are otherwise-unused literal hex values.
+const COLORREF kCardSwatches[kCardSwatchCount] = {
+	RGB(0x1A, 0x73, 0xE8), // Material blue (primary/task default)
+	RGB(0xF9, 0xAB, 0x00), // amber (milestone default)
+	RGB(0xD9, 0x30, 0x25), // red
+	RGB(0x18, 0x8E, 0x3C), // green
+	RGB(0x9C, 0x27, 0xB0), // purple
+	RGB(0x00, 0x97, 0xA7), // teal
+	RGB(0xF4, 0x71, 0x1B), // orange
+	RGB(0x5F, 0x63, 0x68), // neutral grey
+};
+
+HWND g_cardHwnd = NULL;         // top-level card window (WS_EX_TOOLWINDOW)
+HWND g_cardLabelHwnd = NULL;
+HWND g_cardStartHwnd = NULL;
+HWND g_cardEndHwnd = NULL;
+HWND g_cardPercentHwnd = NULL;
+HWND g_cardOkHwnd = NULL;
+HWND g_cardSwatchHwnd[kCardSwatchCount] = {};
+WNDPROC g_oldCardFieldProc = NULL; // shared subclass proc for the 4 EDIT children
+bool g_cardClosing = false;
+std::string g_cardKind;   // "TASK" | "MILESTONE"
+std::string g_cardId;
+int g_cardSelectedSwatch = -1; // index into kCardSwatches, or -1 = no change
+std::string g_cardOrigColor;   // color value read at open time (for "no change" baseline)
+bool g_cardInvalid = false;    // true while the red-border/invalid state is shown
+
 enum OverlayButton {
 	BTN_ADD = 0,
 	BTN_DEL = 1,
@@ -306,6 +374,11 @@ void StartNewUndoEntryIfPossible();
 void OpenInlineEditor(const EditRegion& region);
 void CommitInlineEdit();
 void CancelInlineEdit();
+void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& anchorScreenRect);
+void CommitCardEdit();
+void CancelCardEdit();
+void CloseCardEditor();
+bool IsEditSessionActive();
 void CancelDragGesture();
 void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId);
 void CommitCreateGesture(const std::string& rowId, long startDay, long endDay);
@@ -313,6 +386,8 @@ float ComputeEmptyCellPxPerDay();
 void ShowContextMenuForHit(const HtHit& hit, POINT clientPt);
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+LRESULT CALLBACK CardFieldProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 void UpdateHotkeyRegistration();
 void UnregisterAllHotkeys();
 void HandleHotkeyDelete();
@@ -839,6 +914,10 @@ void EnsureEditorWindow() {
 
 void OpenInlineEditor(const EditRegion& region) {
 	if (!g_app || g_mutating) return;
+	// Only one editor at a time: opening the simple inline box closes any
+	// open card editor first (CloseCardEditor discards uncommitted card
+	// edits, same as clicking away from the card would via WM_ACTIVATE).
+	CloseCardEditor();
 	try {
 		std::string value = CurrentEditText(region);
 		EnsureEditorWindow();
@@ -921,6 +1000,392 @@ void CommitInlineEdit() {
 void CancelInlineEdit() {
 	HideInlineEditor();
 	ClearEditTarget();
+	FocusPowerPoint();
+}
+
+// ---- floating card editor ---------------------------------------------------
+
+const PpMilestone* FindMilestone(const PpDocument& doc, const std::string& id) {
+	for (const auto& ms : doc.milestones) {
+		if (ms.id == id) return &ms;
+	}
+	return nullptr;
+}
+
+// True while EITHER editor (simple inline title/row-label box, or the richer
+// card) owns keyboard focus / is mid-edit. Single choke point so hotkey
+// registration (UpdateHotkeyRegistration) and native-selection suppression
+// (Tick()) only need one check instead of two ad hoc ones, and so a future
+// third editor kind only has to extend this function.
+bool IsEditSessionActive() {
+	return (g_editHwnd && !g_editKind.empty()) || (g_cardHwnd != NULL);
+}
+
+std::wstring FormatSwatchLabel(int idx) {
+	wchar_t buf[8];
+	::swprintf_s(buf, 8, L"%d", idx + 1);
+	return buf;
+}
+
+// Read a single wide EDIT control's text as a narrow UTF-8 string.
+std::string GetEditText(HWND hwnd) {
+	if (!hwnd) return "";
+	int len = ::GetWindowTextLengthW(hwnd);
+	std::vector<wchar_t> buf((size_t)len + 1);
+	::GetWindowTextW(hwnd, buf.data(), len + 1);
+	return Narrow(buf.data());
+}
+
+void SetEditText(HWND hwnd, const std::string& value) {
+	if (!hwnd) return;
+	::SetWindowTextW(hwnd, Widen(value).c_str());
+}
+
+// Strict ISO (YYYY-MM-DD) parse: DateToDays() silently returns 0 for garbage
+// input (sscanf_s just leaves unmatched fields as 0), so round-trip through
+// DaysToDate() and require an EXACT string match — this also rejects
+// civil-calendar nonsense like day 40 or month 13, which DaysFromCivil would
+// otherwise silently normalize into some other (wrong) date instead of failing.
+bool ParseIsoDateStrict(const std::string& text, long& outDays) {
+	int y = 0, m = 0, d = 0;
+	if (::sscanf_s(text.c_str(), "%d-%d-%d", &y, &m, &d) != 3) return false;
+	if (text.size() != 10 || text[4] != '-' || text[7] != '-') return false;
+	if (m < 1 || m > 12 || d < 1 || d > 31 || y < 1) return false;
+	long days = DateToDays(text);
+	if (DaysToDate(days) != text) return false;
+	outDays = days;
+	return true;
+}
+
+// Toggle the "invalid" visual (red border) by forcing the affected field(s)
+// to repaint via a class-level custom draw is more machinery than this needs;
+// a simple, robust cross-Windows-version approach is to tint the control's
+// background through WM_CTLCOLOREDIT (see CardWndProc) driven by g_cardInvalid,
+// plus MessageBeep so the failure is audible even if the card is off-screen
+// in a screenshot-less headless run (matches the task spec's "red border or
+// MessageBeep").
+void SetCardInvalid(bool invalid) {
+	g_cardInvalid = invalid;
+	if (g_cardStartHwnd) ::InvalidateRect(g_cardStartHwnd, NULL, TRUE);
+	if (g_cardEndHwnd) ::InvalidateRect(g_cardEndHwnd, NULL, TRUE);
+	if (invalid) ::MessageBeep(MB_ICONWARNING);
+}
+
+// Position + size every child control inside the card's client area. Called
+// once at open time (LayoutCardControls is idempotent, so it is safe to call
+// again if the card were ever resized, though the card is currently
+// fixed-size). isMilestone hides the End-date and Percent rows entirely
+// (milestones have neither) and shrinks the window accordingly.
+void LayoutCardControls(bool isMilestone) {
+	if (!g_cardHwnd) return;
+	const int pad = Scale(kBaseCardPad);
+	const int rowH = Scale(kBaseCardRowH);
+	const int rowGap = Scale(kBaseCardRowGap);
+	const int labelW = Scale(kBaseCardLabelW);
+	const int cardW = Scale(kBaseCardW);
+	const int fieldW = cardW - pad * 2 - labelW;
+	const int swatchSize = Scale(kBaseCardSwatchSize);
+	const int swatchGap = Scale(kBaseCardSwatchGap);
+
+	int y = pad;
+	auto placeRow = [&](HWND field, bool visible) {
+		if (!field) return;
+		::ShowWindow(field, visible ? SW_SHOW : SW_HIDE);
+		if (!visible) return;
+		::MoveWindow(field, pad + labelW, y, fieldW, rowH, TRUE);
+		y += rowH + rowGap;
+	};
+
+	placeRow(g_cardLabelHwnd, true);
+	placeRow(g_cardStartHwnd, true);
+	placeRow(g_cardEndHwnd, !isMilestone);
+	placeRow(g_cardPercentHwnd, !isMilestone);
+
+	// Swatch row: 8 small square buttons in a single row.
+	int swatchesW = kCardSwatchCount * swatchSize + (kCardSwatchCount - 1) * swatchGap;
+	int sx = pad + std::max(0, (cardW - pad * 2 - swatchesW) / 2);
+	for (int i = 0; i < kCardSwatchCount; ++i) {
+		if (!g_cardSwatchHwnd[i]) continue;
+		::MoveWindow(g_cardSwatchHwnd[i], sx + i * (swatchSize + swatchGap), y, swatchSize, swatchSize, TRUE);
+	}
+	y += swatchSize + rowGap;
+
+	// OK button, right-aligned.
+	const int okW = Scale(kBaseCardOkW);
+	const int okH = Scale(kBaseCardOkH);
+	if (g_cardOkHwnd) {
+		::MoveWindow(g_cardOkHwnd, cardW - pad - okW, y, okW, okH, TRUE);
+	}
+	y += okH + pad;
+
+	::SetWindowPos(g_cardHwnd, NULL, 0, 0, cardW, y, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// Create the card's top-level window + every child control, once. Idempotent
+// (like EnsureEditorWindow): a re-open just repositions/repopulates.
+void EnsureCardWindow() {
+	if (g_cardHwnd) return;
+
+	WNDCLASSEXW wc = { sizeof(wc) };
+	wc.lpfnWndProc = CardWndProc;
+	wc.hInstance = g_inst;
+	wc.hCursor = ::LoadCursor(NULL, IDC_ARROW);
+	wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+	wc.lpszClassName = kCardClass;
+	::RegisterClassExW(&wc);
+
+	g_cardHwnd = ::CreateWindowExW(
+		WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+		kCardClass, L"Edit", WS_POPUP | WS_BORDER,
+		0, 0, Scale(kBaseCardW), 200, NULL, NULL, g_inst, NULL);
+	if (!g_cardHwnd) return;
+
+	HFONT font = (HFONT)::GetStockObject(DEFAULT_GUI_FONT);
+	auto makeEdit = [&](int id, DWORD extraStyle) {
+		HWND h = ::CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | extraStyle,
+			0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)id, g_inst, NULL);
+		if (h) {
+			::SendMessageW(h, WM_SETFONT, (WPARAM)font, TRUE);
+			g_oldCardFieldProc = (WNDPROC)::SetWindowLongPtrW(h, GWLP_WNDPROC, (LONG_PTR)CardFieldProc);
+		}
+		return h;
+	};
+	g_cardLabelHwnd = makeEdit(CARD_ID_LABEL, 0);
+	g_cardStartHwnd = makeEdit(CARD_ID_START, 0);
+	g_cardEndHwnd = makeEdit(CARD_ID_END, 0);
+	g_cardPercentHwnd = makeEdit(CARD_ID_PERCENT, ES_NUMBER);
+
+	for (int i = 0; i < kCardSwatchCount; ++i) {
+		g_cardSwatchHwnd[i] = ::CreateWindowExW(0, L"BUTTON", FormatSwatchLabel(i).c_str(),
+			WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+			0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)(CARD_ID_SWATCH_BASE + i), g_inst, NULL);
+		if (g_cardSwatchHwnd[i]) ::SendMessageW(g_cardSwatchHwnd[i], WM_SETFONT, (WPARAM)font, TRUE);
+	}
+
+	g_cardOkHwnd = ::CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_DEFPUSHBUTTON,
+		0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)CARD_ID_OK, g_inst, NULL);
+	if (g_cardOkHwnd) ::SendMessageW(g_cardOkHwnd, WM_SETFONT, (WPARAM)font, TRUE);
+}
+
+// Destroy the card window + children and clear every bit of card state. Safe
+// to call whether or not a card is currently open (mirrors DestroyInlineEditor).
+void CloseCardEditor() {
+	g_cardClosing = true;
+	if (g_cardHwnd) {
+		::DestroyWindow(g_cardHwnd);
+		g_cardHwnd = NULL;
+	}
+	g_cardLabelHwnd = g_cardStartHwnd = g_cardEndHwnd = g_cardPercentHwnd = g_cardOkHwnd = NULL;
+	for (int i = 0; i < kCardSwatchCount; ++i) g_cardSwatchHwnd[i] = NULL;
+	g_oldCardFieldProc = NULL;
+	g_cardKind.clear();
+	g_cardId.clear();
+	g_cardSelectedSwatch = -1;
+	g_cardOrigColor.clear();
+	g_cardInvalid = false;
+	g_cardClosing = false;
+}
+
+// Open (or re-open, replacing any existing card per "only one editor window at
+// a time") the card for a TASK or MILESTONE hit. anchorScreenRect is the
+// item's current on-screen rect (from g_hitSnapshot), used to position the
+// card just below-right of the bar, DPI-scaled and clamped so it never opens
+// fully off whichever monitor the bar is on.
+void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& anchorScreenRect) {
+	if (!g_app || g_mutating) return;
+	// "Opening a new one closes the previous" — also covers double-clicking a
+	// DIFFERENT item while a card is already open for another.
+	CloseCardEditor();
+	CancelInlineEdit(); // the two editors are mutually exclusive at all times
+
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (json.empty()) return;
+		PpDocument doc = DocumentFromJson(json);
+
+		bool isMilestone = (kind == "MILESTONE");
+		std::string label, start, end, color;
+		int percent = 0;
+		if (isMilestone) {
+			const PpMilestone* ms = FindMilestone(doc, id);
+			if (!ms) return;
+			label = ms->label;
+			start = ms->date;
+			color = ms->color;
+		} else {
+			const PpTask* task = FindTask(doc, id);
+			if (!task) return;
+			label = task->label;
+			start = task->start;
+			end = task->end;
+			percent = task->percent;
+			color = task->color;
+		}
+
+		EnsureCardWindow();
+		if (!g_cardHwnd) return;
+
+		g_cardKind = kind;
+		g_cardId = id;
+		g_cardOrigColor = color;
+		g_cardSelectedSwatch = -1;
+		for (int i = 0; i < kCardSwatchCount; ++i) {
+			wchar_t hex[8];
+			::swprintf_s(hex, 8, L"#%02x%02x%02x", GetRValue(kCardSwatches[i]), GetGValue(kCardSwatches[i]), GetBValue(kCardSwatches[i]));
+			if (Narrow(hex) == color) { g_cardSelectedSwatch = i; break; }
+		}
+
+		SetEditText(g_cardLabelHwnd, label);
+		SetEditText(g_cardStartHwnd, start);
+		SetEditText(g_cardEndHwnd, end);
+		if (!isMilestone) SetEditText(g_cardPercentHwnd, std::to_string(percent));
+
+		LayoutCardControls(isMilestone);
+		SetCardInvalid(false);
+
+		RECT rc = anchorScreenRect;
+		NormalizeRect(rc);
+		RECT cardRect = {};
+		::GetWindowRect(g_cardHwnd, &cardRect);
+		int cardW = cardRect.right - cardRect.left;
+		int cardH = cardRect.bottom - cardRect.top;
+		int x = rc.left;
+		int y = rc.bottom + Scale(4);
+
+		HMONITOR mon = ::MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST);
+		MONITORINFO mi = { sizeof(mi) };
+		if (::GetMonitorInfoW(mon, &mi)) {
+			if (x + cardW > mi.rcWork.right) x = mi.rcWork.right - cardW;
+			if (x < mi.rcWork.left) x = mi.rcWork.left;
+			if (y + cardH > mi.rcWork.bottom) y = rc.top - cardH - Scale(4);
+			if (y < mi.rcWork.top) y = mi.rcWork.top;
+		}
+
+		::SetWindowPos(g_cardHwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+		::SetForegroundWindow(g_cardHwnd);
+		::SetFocus(g_cardLabelHwnd);
+		::SendMessageW(g_cardLabelHwnd, EM_SETSEL, 0, -1);
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error opening card editor");
+		CloseCardEditor();
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error opening card editor");
+		CloseCardEditor();
+	}
+	catch (...) {
+		OvLog(L"unknown error opening card editor");
+		CloseCardEditor();
+	}
+}
+
+// Validate + commit every field of the open card in ONE undo entry. Returns
+// without closing the card if validation fails (invalid dates: parse failure
+// or end < start) — the task spec requires the editor to STAY OPEN with a
+// red-border/beep cue rather than silently discarding the user's edits.
+void CommitCardEdit() {
+	if (!g_cardHwnd || g_cardKind.empty() || g_mutating) return;
+	std::string kind = g_cardKind;
+	std::string id = g_cardId;
+	bool isMilestone = (kind == "MILESTONE");
+
+	std::string label = GetEditText(g_cardLabelHwnd);
+	std::string startText = GetEditText(g_cardStartHwnd);
+	std::string endText = isMilestone ? startText : GetEditText(g_cardEndHwnd);
+	std::string percentText = isMilestone ? "" : GetEditText(g_cardPercentHwnd);
+
+	long startDays = 0, endDays = 0;
+	if (!ParseIsoDateStrict(startText, startDays)) {
+		SetCardInvalid(true);
+		return;
+	}
+	if (!isMilestone) {
+		if (!ParseIsoDateStrict(endText, endDays)) {
+			SetCardInvalid(true);
+			return;
+		}
+		if (endDays < startDays) {
+			SetCardInvalid(true);
+			return;
+		}
+	}
+	SetCardInvalid(false);
+
+	int percent = 0;
+	if (!isMilestone) {
+		try { percent = std::stoi(percentText); } catch (...) { percent = 0; }
+		percent = std::max(0, std::min(100, percent));
+	}
+
+	std::string color;
+	if (g_cardSelectedSwatch >= 0 && g_cardSelectedSwatch < kCardSwatchCount) {
+		wchar_t hex[8];
+		::swprintf_s(hex, 8, L"#%02x%02x%02x", GetRValue(kCardSwatches[g_cardSelectedSwatch]), GetGValue(kCardSwatches[g_cardSelectedSwatch]), GetBValue(kCardSwatches[g_cardSelectedSwatch]));
+		color = Narrow(hex);
+	} else {
+		color = g_cardOrigColor; // no swatch clicked: leave color unchanged
+	}
+
+	CloseCardEditor();
+
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (!json.empty()) {
+			PpDocument doc = DocumentFromJson(json);
+			bool changed = false;
+			changed = SetEntityLabel(doc, id, label) || changed;
+			if (isMilestone) {
+				// Milestones only have a single date field (Start doubles as
+				// the milestone's date) and no percent/color-via-task op yet
+				// (PpMilestone.color exists but GanttOps has no milestone
+				// color setter — out of scope per the task brief, which only
+				// asked for SetTaskColor). Date-only commit for milestones.
+				for (auto& ms : doc.milestones) {
+					if (ms.id == id) {
+						std::string newDate = DaysToDate(startDays);
+						if (ms.date != newDate) { ms.date = newDate; changed = true; }
+						break;
+					}
+				}
+			} else {
+				const PpTask* before = FindTask(doc, id);
+				std::string prevStart = before ? before->start : "";
+				std::string prevEnd = before ? before->end : "";
+				std::string newStart = DaysToDate(startDays);
+				std::string newEnd = DaysToDate(endDays);
+				if (newStart != prevStart || newEnd != prevEnd) {
+					changed = SetTaskDates(doc, id, newStart, newEnd) || changed;
+				}
+				int prevPercent = before ? before->percent : -1;
+				if (percent != prevPercent) {
+					changed = SetTaskPercentValue(doc, id, percent) || changed;
+				}
+				std::string prevColor = before ? before->color : "";
+				if (color != prevColor) {
+					changed = SetTaskColor(doc, id, color) || changed;
+				}
+			}
+			if (changed) RebuildChart(doc, id);
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error committing card edit");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error committing card edit");
+	}
+	catch (...) {
+		OvLog(L"unknown error committing card edit");
+	}
+	g_mutating = false;
+	SetOwnSelection(kind, id);
+	FocusPowerPoint();
+}
+
+void CancelCardEdit() {
+	CloseCardEditor();
 	FocusPowerPoint();
 }
 
@@ -1585,6 +2050,13 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		return 0;
 	}
 	if (msg == WM_LBUTTONDOWN) {
+		// While an editor (inline or card) is open, the overlay itself must
+		// not start a new gesture/selection-change underneath it — the
+		// editor's own top-level window would lose activation anyway (which
+		// cancels it), but bouncing a click through to a drag/create gesture
+		// first is exactly the kind of "gesture while editor is open" the
+		// task spec asks to suppress.
+		if (IsEditSessionActive()) return 0;
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		if (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt)) return 0;
 		// Route everything else through the semantic hit test and stash the
@@ -1769,6 +2241,24 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	if (msg == WM_LBUTTONDBLCLK) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		HtHit hit = HitTestClientPoint(pt);
+		if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
+			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone) {
+			// The floating card editor (V2): double-clicking a bar or
+			// milestone opens the richer editor instead of the simpler
+			// TITLE/ROW_LABEL inline box. Resolve the item's CURRENT screen
+			// rect from the hit snapshot (same source g_lastHit/drag-start
+			// use) so the card anchors to where the bar actually is now.
+			const char* wantKindStr = (hit.zone == HtZone::Milestone) ? "MILESTONE" : "TASK";
+			for (const auto& item : g_hitSnapshot.items) {
+				bool kindMatches = (hit.zone == HtZone::Milestone) ? (item.kind == HtItemKind::Milestone) : (item.kind == HtItemKind::Task);
+				if (kindMatches && item.id == hit.id) {
+					RECT screenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+					OpenCardEditor(wantKindStr, hit.id, screenRect);
+					return 0;
+				}
+			}
+			return 0;
+		}
 		if (hit.zone == HtZone::Label) {
 			const char* kindStr = (hit.kind == HtItemKind::Title) ? "TITLE" : "ROW_LABEL";
 			for (const auto& region : g_editRegions) {
@@ -1864,6 +2354,76 @@ LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		return 0;
 	}
 	return g_oldEditProc ? ::CallWindowProcW(g_oldEditProc, hwnd, msg, wp, lp) : ::DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Subclass shared by the card's 4 EDIT children (label/start/end/percent).
+// Enter commits the WHOLE card (not just this field — matches the task
+// spec's "Enter ... commits ALL changed fields in ONE commit"); Esc cancels
+// the whole card. Kill-focus does nothing here (unlike the inline editor):
+// focus moving between the card's OWN child controls (Tab, or clicking
+// another field/swatch) must NOT cancel or commit — only WM_ACTIVATE
+// (focus leaving the card window entirely) does that; see CardWndProc.
+LRESULT CALLBACK CardFieldProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (msg == WM_KEYDOWN) {
+		if (wp == VK_RETURN) {
+			CommitCardEdit();
+			return 0;
+		}
+		if (wp == VK_ESCAPE) {
+			CancelCardEdit();
+			return 0;
+		}
+	}
+	// Typing into a field that was showing the invalid cue clears it
+	// immediately (re-validation happens for real on the next commit
+	// attempt) so the red border doesn't linger once the user starts fixing
+	// their input.
+	if (msg == WM_CHAR && g_cardInvalid) {
+		SetCardInvalid(false);
+	}
+	return g_oldCardFieldProc ? ::CallWindowProcW(g_oldCardFieldProc, hwnd, msg, wp, lp) : ::DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (msg == WM_CLOSE) {
+		CancelCardEdit();
+		return 0;
+	}
+	if (msg == WM_COMMAND) {
+		int id = LOWORD(wp);
+		int notify = HIWORD(wp);
+		if (id == CARD_ID_OK && notify == BN_CLICKED) {
+			CommitCardEdit();
+			return 0;
+		}
+		if (id >= CARD_ID_SWATCH_BASE && id < CARD_ID_SWATCH_BASE + kCardSwatchCount && notify == BN_CLICKED) {
+			g_cardSelectedSwatch = id - CARD_ID_SWATCH_BASE;
+			return 0;
+		}
+	}
+	if (msg == WM_CTLCOLOREDIT && g_cardInvalid) {
+		HWND ctl = (HWND)lp;
+		if (ctl == g_cardStartHwnd || ctl == g_cardEndHwnd) {
+			HDC dc = (HDC)wp;
+			::SetBkColor(dc, RGB(0xFD, 0xE7, 0xE9)); // pale red wash: the "red border" invalid cue
+			static HBRUSH invalidBrush = ::CreateSolidBrush(RGB(0xFD, 0xE7, 0xE9));
+			return (LRESULT)invalidBrush;
+		}
+	}
+	// Losing activation (focus leaving the card entirely — clicking the
+	// slide, Alt+Tab, etc.) cancels per the task spec. Activation moving
+	// between the card's OWN child controls does NOT generate WM_ACTIVATE
+	// on the top-level window (only WM_KILLFOCUS on the child, which the
+	// subclass above deliberately ignores), so this only fires on a genuine
+	// focus-loss.
+	if (msg == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE && !g_cardClosing) {
+		CancelCardEdit();
+		return 0;
+	}
+	if (msg == WM_DESTROY && hwnd == g_cardHwnd) {
+		g_cardHwnd = NULL;
+	}
+	return ::DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 void EnsureWindow() {
@@ -2328,6 +2888,7 @@ void HideOverlay() {
 	g_buttonsValid = false;
 	ClearSelectionState();
 	ClearOwnSelection();
+	CloseCardEditor(); // chart/slide went away (or is hidden): no editor can stay meaningfully open
 	UnregisterAllHotkeys(); // no selection left to Delete/Nudge; release any stolen keys
 
 	if (g_captureActive) {
@@ -2542,7 +3103,7 @@ void UpdateHotkeyRegistration() {
 		foregroundIsOurs = (fgPid == ::GetCurrentProcessId());
 	}
 
-	bool notMidGesture = !g_gestureActive && !g_mutating && !(g_editHwnd && !g_editKind.empty());
+	bool notMidGesture = !g_gestureActive && !g_mutating && !IsEditSessionActive();
 
 	bool shouldRegister = selectionIsTaskOrMilestone && foregroundIsOurs && notMidGesture;
 
@@ -2965,7 +3526,7 @@ void Tick() {
 					// get their PowerPoint-native selection suppressed. Its
 					// chrome is still driven directly from PowerPoint's
 					// Selection (old path), independent of the internal model.
-					bool isEditingThisShape = g_editHwnd && !g_editKind.empty();
+					bool isEditingThisShape = IsEditSessionActive();
 					if (kindStr != "CHART_ROOT" && !g_mutating && !isEditingThisShape) {
 						_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
 						g_suppressedKind = kindStr;
@@ -3076,6 +3637,7 @@ void OverlayStart(IDispatch* app) {
 void OverlayStop() {
 	if (g_timer) { ::KillTimer(NULL, g_timer); g_timer = 0; }
 	DestroyInlineEditor();
+	CloseCardEditor();
 	if (g_captureActive) {
 		g_captureActive = false;
 		if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
