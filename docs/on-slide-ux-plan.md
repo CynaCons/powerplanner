@@ -135,6 +135,37 @@ Regression gates for every unit: `native\build.bat` [build] OK ·
 `build-conformance.bat` fixtures pass · `build-ops.bat` OPS HARNESS OK ·
 `build-reflow.bat` + `ppreflow.exe` REFLOW PASS.
 
+#### 4.2.1 U10 manual verification matrix (DPI × monitor)
+
+U10's automated gate (ops harness `HtScalePx`/edge-band unit tests, printing
+`DPI HELPER OK`) only proves the scaling math is correct in isolation. The
+add-in runs IN-PROCESS in POWERPNT.EXE, a per-monitor-DPI-aware process, so
+`PointsToScreenPixelsX/Y` and `GetCursorPos` coordinates already arrive in
+PowerPoint's DPI context — the overlay's chart-alignment was never the risk.
+What DID need manual eyes: our own chrome's pixel constants (badge, toolbar
+buttons, grip, hover '+' button, selection handles, frame inflation, tooltip)
+staying usable (not hairline/unreadable at 150-200%, not comically oversized
+at 100%), and hit zones (edge-resize bands) staying reachable at every scale.
+This is user visual feedback, not a hard CI gate — run it opportunistically
+across scale-factor/monitor changes, not on every commit.
+
+Checklist — for each of the 4 Windows scale factors (100%, 125%, 150%, 200%),
+on both the primary monitor and a secondary monitor with a DIFFERENT scale
+factor if one is available (e.g. primary 100% / secondary 150%), verify:
+
+| check | what to look for |
+|---|---|
+| **Overlay↔chart alignment** | Selection frame, badge, and toolbar sit exactly over the CHART_ROOT shape with no visible offset/drift; drag the PowerPoint window between monitors of different scale and confirm the overlay follows without a lag/misalignment frame. |
+| **Chrome usability** | Badge text, toolbar button labels (Add/Del/-/+), and the tooltip text are legible (not hairline-thin, not clipped) at each scale; nothing looks pixel-doubled/blurry in a way that suggests a missed scale. |
+| **Hit zones** | Task edge-resize cursor zone (±4px @ 96dpi, scaled per `HtScalePx`) is reachable and gives a resize (not a body-drag) right at the bar edge; the hover '+' insert-row button and the 'move chart' grip are both clickable at their visually-drawn location (no dead-zone offset from the visible chip). |
+| **Drag threshold** | A deliberate small jiggle at mouse-down does not start a drag (click-vs-drag threshold scales with DPI so it stays ~the same physical distance across scale factors). |
+
+Results (fill in per run — date, scale factors covered, monitor config, pass/fail + notes):
+
+| date | scale factor(s) | monitor config | result | notes |
+|---|---|---|---|---|
+| _(pending)_ | 100/125/150/200% | _(pending)_ | _(pending)_ | _(pending — run manually per the checklist above and record here)_ |
+
 ### 4.3 Risks / known constraints
 
 1. **Suppression is best-effort**: Selection Pane / Tab-cycling can still select

@@ -15,6 +15,16 @@ long AbsLong(long v) {
 
 } // namespace
 
+int HtScalePx(int basePx, int dpi) {
+	if (dpi <= 0) dpi = kHtBaseDpi;
+	// Round-half-away-from-zero, matching MulDiv(basePx, dpi, 96)'s rounding
+	// for the positive values this is ever called with.
+	long long num = (long long)basePx * (long long)dpi;
+	long long den = (long long)kHtBaseDpi;
+	if (num >= 0) return (int)((num + den / 2) / den);
+	return (int)((num - den / 2) / den);
+}
+
 HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 	HtHit hit;
 	if (!InRect(snap.chartRect, x, y)) {
@@ -24,17 +34,20 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 
 	// 1) Task resize edges win over everything else (thin bars stay resizable
 	//    even when a neighbour's body or a milestone overlaps the band). Across
-	//    tasks, the nearest edge wins.
+	//    tasks, the nearest edge wins. The edge band's half-width is DPI-scaled
+	//    (snap.edgeBandPx), defaulting to kHtEdgePx (4px @ 96 DPI) so existing
+	//    callers that never set it keep the original behavior.
+	long edgeBandPx = snap.edgeBandPx;
 	const HtItem* edgeItem = nullptr;
 	bool edgeIsLeft = false;
-	long edgeDist = kHtEdgePx + 1;
+	long edgeDist = edgeBandPx + 1;
 	for (const auto& it : snap.items) {
 		if (it.kind != HtItemKind::Task) continue;
 		if (y < it.rect.top || y >= it.rect.bottom) continue;
 		long dl = AbsLong(x - it.rect.left);
 		long dr = AbsLong(x - it.rect.right);
-		if (dl <= kHtEdgePx && dl < edgeDist) { edgeItem = &it; edgeIsLeft = true; edgeDist = dl; }
-		if (dr <= kHtEdgePx && dr < edgeDist) { edgeItem = &it; edgeIsLeft = false; edgeDist = dr; }
+		if (dl <= edgeBandPx && dl < edgeDist) { edgeItem = &it; edgeIsLeft = true; edgeDist = dl; }
+		if (dr <= edgeBandPx && dr < edgeDist) { edgeItem = &it; edgeIsLeft = false; edgeDist = dr; }
 	}
 	if (edgeItem) {
 		hit.zone = edgeIsLeft ? HtZone::TaskEdgeL : HtZone::TaskEdgeR;

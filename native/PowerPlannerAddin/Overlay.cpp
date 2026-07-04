@@ -43,12 +43,49 @@ const COLORREF HANDLE_INNER = RGB(138, 180, 248);
 const COLORREF SURFACE = RGB(255, 255, 255);
 const COLORREF SURFACE_VARIANT = RGB(241, 243, 244);
 const COLORREF TEXT = RGB(60, 64, 67);
-const int INFL = 5;                         // frame inset from shape edge (px)
-const int BADGE_H = 20;                     // badge strip height (px)
-const int TOOLBAR_H = 28;                   // floating action toolbar height (px)
-const int BUTTON_COUNT = 4;
-const int ROW_INSERT_BUTTON = 16;
+// ---- DPI-scaled chrome metrics ---------------------------------------------
+// All chrome pixel constants below are expressed at the 96-DPI (100% Windows
+// scaling) baseline and scaled per-tick through HtScalePx (MulDiv(base,dpi,96)
+// — see GanttHitTest.h/.cpp, which is COM-free so it's shared with the ops
+// harness). The overlay runs IN-PROCESS in POWERPNT.EXE, a per-monitor-DPI-
+// aware process, so COM coordinates (PointsToScreenPixels, GetCursorPos)
+// already come back in PowerPoint's DPI context and need no scaling — only
+// OUR chrome's hardcoded pixel metrics do, or they stay 96-DPI-sized (a few mm
+// on screen) and become unusably small at 150-200%.
+const int kBaseInfl = 5;                    // frame inset from shape edge (px)
+const int kBaseBadgeH = 20;                 // badge strip height (px)
+const int kBaseToolbarH = 28;               // floating action toolbar height (px)
+const int BUTTON_COUNT = 4;                 // not a pixel metric: unscaled
+const int kBaseRowInsertButton = 16;
+const int kBaseButtonW = 32;
+const int kBaseButtonH = 20;
+const int kBaseButtonGap = 4;
+const int kBaseGripSize = 16;
+const int kBaseDragThresholdPx = 4;
+const int kBaseTooltipPad = 5;
+const Gdiplus::REAL kBaseTooltipFontPx = 10.0f;
+const Gdiplus::REAL kBaseBadgeFontPx = 11.0f;
+const Gdiplus::REAL kBaseButtonFontPx = 12.0f;
 const BYTE HOVER_WASH_ALPHA = 28;           // translucent accent wash over hovered row
+
+// Current DPI-scaled values, recomputed by UpdateDpiScaledMetrics() whenever
+// the overlay's window DPI changes (or on first use). Default to the 96-DPI
+// (100%) baseline so any code path that runs before the first DPI probe still
+// behaves exactly as before this unit.
+int g_dpi = 96;
+int INFL = kBaseInfl;
+int BADGE_H = kBaseBadgeH;
+int TOOLBAR_H = kBaseToolbarH;
+int ROW_INSERT_BUTTON = kBaseRowInsertButton;
+int g_buttonW = kBaseButtonW;
+int g_buttonH = kBaseButtonH;
+int g_buttonGap = kBaseButtonGap;
+int GRIP_SIZE = kBaseGripSize;
+int kDragThresholdPx = kBaseDragThresholdPx;
+int g_tooltipPad = kBaseTooltipPad;
+Gdiplus::REAL g_tooltipFontPx = kBaseTooltipFontPx;
+Gdiplus::REAL g_badgeFontPx = kBaseBadgeFontPx;
+Gdiplus::REAL g_buttonFontPx = kBaseButtonFontPx;
 
 PowerPoint::_ApplicationPtr g_app;
 HWND     g_hwnd = NULL;
@@ -95,7 +132,7 @@ std::string g_ownSelId;
 // gesture.
 bool g_captureActive = false;
 POINT g_mouseDownPt = {};
-const int kDragThresholdPx = 4;
+// kDragThresholdPx (DPI-scaled) is declared with the other chrome metrics above.
 
 // ---- drag-move-resize gesture state -----------------------------------------
 // A gesture is anchored on WM_LBUTTONDOWN over a draggable hit zone (task body
@@ -171,7 +208,7 @@ HtHit g_lastHit;
 // natively even though the overlay now captures every chart click.
 RECT g_gripRect = {};
 bool g_gripValid = false;
-const int GRIP_SIZE = 16;
+// GRIP_SIZE (DPI-scaled) is declared with the other chrome metrics above.
 
 std::string g_hoverRowId;
 RECT g_hoverBandRect = {};
@@ -323,6 +360,68 @@ void InvalidateHitSnapshot() {
 	g_hitCacheChildCount = -1;
 }
 
+// Scale a 96-DPI ("100%") chrome pixel constant to the overlay's current DPI
+// (g_dpi). Thin wrapper around GanttHitTest.h's HtScalePx (MulDiv(base,dpi,96)
+// — COM-free, shared with the ops harness) so every chrome metric below goes
+// through the same rounding rule.
+int Scale(int basePx) {
+	return HtScalePx(basePx, g_dpi);
+}
+
+Gdiplus::REAL ScaleF(Gdiplus::REAL basePx) {
+	return (Gdiplus::REAL)HtScalePx((int)std::lround((double)basePx * 4.0), g_dpi) / 4.0f;
+}
+
+// Recompute every DPI-scaled chrome metric from g_dpi. Called whenever g_dpi
+// changes (see UpdateDpiForWindow) so LayoutToolbarButtons/LayoutGrip/
+// LayoutHoverInsertHotspot/PaintOverlay/ShowOverlayForChartRect and the drag
+// threshold all pick up the new scale together, and the hit snapshot (whose
+// edgeBandPx mirrors kDragThresholdPx's underlying kHtEdgePx scale) is
+// invalidated so the next tick's BuildRowBands rebuilds it at the new DPI.
+void UpdateDpiScaledMetrics() {
+	INFL = Scale(kBaseInfl);
+	BADGE_H = Scale(kBaseBadgeH);
+	TOOLBAR_H = Scale(kBaseToolbarH);
+	ROW_INSERT_BUTTON = Scale(kBaseRowInsertButton);
+	g_buttonW = Scale(kBaseButtonW);
+	g_buttonH = Scale(kBaseButtonH);
+	g_buttonGap = Scale(kBaseButtonGap);
+	GRIP_SIZE = Scale(kBaseGripSize);
+	kDragThresholdPx = Scale(kBaseDragThresholdPx);
+	g_tooltipPad = Scale(kBaseTooltipPad);
+	g_tooltipFontPx = ScaleF(kBaseTooltipFontPx);
+	g_badgeFontPx = ScaleF(kBaseBadgeFontPx);
+	g_buttonFontPx = ScaleF(kBaseButtonFontPx);
+	g_hitSnapshot.edgeBandPx = Scale((int)kHtEdgePx);
+	InvalidateHitSnapshot();
+	g_buttonsValid = false;
+}
+
+// Probe hwnd's current DPI (per-monitor: differs across monitors and can
+// change mid-session if the window is dragged to a different-DPI monitor or
+// the user changes scaling live). Falls back to 96 if GetDpiForWindow is
+// unavailable (older Windows) — dynamically resolved since the SDK/import lib
+// used here may predate it on some build machines. Returns true if g_dpi
+// changed (caller then calls UpdateDpiScaledMetrics() + repaints/relayouts).
+bool UpdateDpiForWindow(HWND hwnd) {
+	int newDpi = 96;
+	if (hwnd) {
+		static UINT(WINAPI * pGetDpiForWindow)(HWND) = []() {
+			HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+			return user32 ? (UINT(WINAPI*)(HWND))::GetProcAddress(user32, "GetDpiForWindow") : nullptr;
+		}();
+		if (pGetDpiForWindow) {
+			UINT dpi = pGetDpiForWindow(hwnd);
+			if (dpi > 0) newDpi = (int)dpi;
+		}
+	}
+	if (newDpi != g_dpi) {
+		g_dpi = newDpi;
+		return true;
+	}
+	return false;
+}
+
 void ClearHoverState() {
 	g_hoverRowId.clear();
 	::SetRectEmpty(&g_hoverBandRect);
@@ -352,15 +451,17 @@ void LayoutToolbarButtons(int width, int height) {
 	bool toolbarEligible = g_hasSelectionChrome && g_selKind != "ROW";
 	if (!toolbarEligible || ::IsRectEmpty(&g_frameRect) || width <= 0 || height <= 0) return;
 
-	const int buttonW = 32;
-	const int buttonH = 20;
-	const int gap = 4;
+	const int buttonW = g_buttonW;
+	const int buttonH = g_buttonH;
+	const int gap = g_buttonGap;
 	const int totalW = BUTTON_COUNT * buttonW + (BUTTON_COUNT - 1) * gap;
-	int x = g_frameRect.left + 6;
+	const int pad6 = Scale(6);
+	const int pad3 = Scale(3);
+	int x = g_frameRect.left + pad6;
 	int y = g_frameRect.bottom + INFL;
-	if (x + totalW + 6 > width) x = std::max(INFL, width - totalW - INFL - 6);
+	if (x + totalW + pad6 > width) x = std::max(INFL, width - totalW - INFL - pad6);
 	if (x < INFL) x = INFL;
-	if (y + buttonH + 3 > height) y = height - TOOLBAR_H + (TOOLBAR_H - buttonH) / 2;
+	if (y + buttonH + pad3 > height) y = height - TOOLBAR_H + (TOOLBAR_H - buttonH) / 2;
 	if (y < INFL) y = INFL;
 	for (int i = 0; i < BUTTON_COUNT; ++i) {
 		g_buttonRects[i] = { x + i * (buttonW + gap), y, x + i * (buttonW + gap) + buttonW, y + buttonH };
@@ -383,8 +484,9 @@ int ButtonFromClientPoint(POINT pt) {
 void LayoutGrip(int width, int height) {
 	g_gripValid = false;
 	::SetRectEmpty(&g_gripRect);
+	const int pad2 = Scale(2);
 	if (width < GRIP_SIZE + INFL * 2 || height < BADGE_H) return;
-	g_gripRect = { width - INFL - 1 - GRIP_SIZE, 2, width - INFL - 1, 2 + GRIP_SIZE };
+	g_gripRect = { width - INFL - 1 - GRIP_SIZE, pad2, width - INFL - 1, pad2 + GRIP_SIZE };
 	g_gripValid = true;
 }
 
@@ -401,10 +503,12 @@ void LayoutHoverInsertHotspot() {
 	int bandTop = g_hoverBandRect.top - g_windowOriginY;
 	int bandBottom = g_hoverBandRect.bottom - g_windowOriginY;
 	int cy = (bandTop + bandBottom) / 2;
-	int left = g_chartScreenRect.left - g_windowOriginX + 6;
+	const int pad6 = Scale(6);
+	const int pad4 = Scale(4);
+	int left = g_chartScreenRect.left - g_windowOriginX + pad6;
 	for (const auto& band : g_rowBands) {
 		if (band.rowId == g_hoverRowId) {
-			left = std::max((int)(g_chartScreenRect.left - g_windowOriginX + 4), band.screenLeftGutter - g_windowOriginX - ROW_INSERT_BUTTON - 4);
+			left = std::max((int)(g_chartScreenRect.left - g_windowOriginX + pad4), band.screenLeftGutter - g_windowOriginX - ROW_INSERT_BUTTON - pad4);
 			break;
 		}
 	}
@@ -1672,17 +1776,18 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 
 		int cx = (g_gripRect.left + g_gripRect.right) / 2;
 		int cy = (g_gripRect.top + g_gripRect.bottom) / 2;
-		Pen glyph(GpColor(255, ACCENT), 1.4f);
-		g.DrawLine(&glyph, cx - 4, cy, cx + 4, cy);
-		g.DrawLine(&glyph, cx, cy - 4, cx, cy + 4);
-		g.DrawLine(&glyph, cx - 4, cy, cx - 2, cy - 2);
-		g.DrawLine(&glyph, cx - 4, cy, cx - 2, cy + 2);
-		g.DrawLine(&glyph, cx + 4, cy, cx + 2, cy - 2);
-		g.DrawLine(&glyph, cx + 4, cy, cx + 2, cy + 2);
-		g.DrawLine(&glyph, cx, cy - 4, cx - 2, cy - 2);
-		g.DrawLine(&glyph, cx, cy - 4, cx + 2, cy - 2);
-		g.DrawLine(&glyph, cx, cy + 4, cx - 2, cy + 2);
-		g.DrawLine(&glyph, cx, cy + 4, cx + 2, cy + 2);
+		int g4 = Scale(4), g2 = Scale(2);
+		Pen glyph(GpColor(255, ACCENT), ScaleF(1.4f));
+		g.DrawLine(&glyph, cx - g4, cy, cx + g4, cy);
+		g.DrawLine(&glyph, cx, cy - g4, cx, cy + g4);
+		g.DrawLine(&glyph, cx - g4, cy, cx - g2, cy - g2);
+		g.DrawLine(&glyph, cx - g4, cy, cx - g2, cy + g2);
+		g.DrawLine(&glyph, cx + g4, cy, cx + g2, cy - g2);
+		g.DrawLine(&glyph, cx + g4, cy, cx + g2, cy + g2);
+		g.DrawLine(&glyph, cx, cy - g4, cx - g2, cy - g2);
+		g.DrawLine(&glyph, cx, cy - g4, cx + g2, cy - g2);
+		g.DrawLine(&glyph, cx, cy + g4, cx - g2, cy + g2);
+		g.DrawLine(&glyph, cx, cy + g4, cx + g2, cy + g2);
 	}
 
 	if (!g_hoverRowId.empty() && !::IsRectEmpty(&g_hoverBandRect) && !(::GetKeyState(VK_LBUTTON) & 0x8000)) {
@@ -1702,7 +1807,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		g.DrawLine(&edge, (INT)band.left, (INT)band.bottom, (INT)band.right, (INT)band.bottom);
 		// Solid accent bar on the left edge.
 		SolidBrush bar(GpColor(255, ACCENT));
-		g.FillRectangle(&bar, (INT)band.left, (INT)band.top, 3, (INT)(band.bottom - band.top));
+		g.FillRectangle(&bar, (INT)band.left, (INT)band.top, Scale(3), (INT)(band.bottom - band.top));
 
 		if (g_hoverInsertValid) {
 			INT ex = (INT)g_hoverInsertRect.left, ey = (INT)g_hoverInsertRect.top;
@@ -1713,11 +1818,12 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			Pen plusPen(GpColor(255, ACCENT), 1.0f);
 			g.DrawEllipse(&plusPen, ex, ey, ew, eh);
 
-			Pen glyphPen(GpColor(255, ACCENT), 2.0f);
+			Pen glyphPen(GpColor(255, ACCENT), ScaleF(2.0f));
 			int cx = (g_hoverInsertRect.left + g_hoverInsertRect.right) / 2;
 			int cy = (g_hoverInsertRect.top + g_hoverInsertRect.bottom) / 2;
-			g.DrawLine(&glyphPen, cx - 4, cy, cx + 4, cy);
-			g.DrawLine(&glyphPen, cx, cy - 4, cx, cy + 4);
+			int g4 = Scale(4);
+			g.DrawLine(&glyphPen, cx - g4, cy, cx + g4, cy);
+			g.DrawLine(&glyphPen, cx, cy - g4, cx, cy + g4);
 		}
 	}
 
@@ -1754,12 +1860,13 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		g.DrawPath(&ghostPen, &ghostPath);
 
 		std::wstring tip = Widen(DaysToDate(lowDay)) + L" → " + Widen(DaysToDate(highDay));
-		Gdiplus::Font tipFont(L"Segoe UI", 10.0f, FontStyleRegular, UnitPixel);
+		Gdiplus::Font tipFont(L"Segoe UI", g_tooltipFontPx, FontStyleRegular, UnitPixel);
 		RectF tipBounds;
 		g.MeasureString(tip.c_str(), -1, &tipFont, PointF(0, 0), &tipBounds);
-		int tipPad = 5;
-		int tipX = g_dragLastPt.x + 14;
-		int tipY = g_dragLastPt.y + 14;
+		int tipPad = g_tooltipPad;
+		int tipOffset = Scale(14);
+		int tipX = g_dragLastPt.x + tipOffset;
+		int tipY = g_dragLastPt.y + tipOffset;
 		int tipW = (int)tipBounds.Width + tipPad * 2;
 		int tipH = (int)tipBounds.Height + tipPad * 2;
 		GraphicsPath tipPath;
@@ -1844,12 +1951,13 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		if (g_dragKind == DragKind::TaskBody && !g_dragTargetRowId.empty() && g_dragTargetRowId != g_dragOrigRowId) {
 			tip += L"  (" + Widen(g_dragTargetRowId) + L")";
 		}
-		Gdiplus::Font tipFont(L"Segoe UI", 10.0f, FontStyleRegular, UnitPixel);
+		Gdiplus::Font tipFont(L"Segoe UI", g_tooltipFontPx, FontStyleRegular, UnitPixel);
 		RectF tipBounds;
 		g.MeasureString(tip.c_str(), -1, &tipFont, PointF(0, 0), &tipBounds);
-		int tipPad = 5;
-		int tipX = g_dragLastPt.x + 14;
-		int tipY = g_dragLastPt.y + 14;
+		int tipPad = g_tooltipPad;
+		int tipOffset = Scale(14);
+		int tipX = g_dragLastPt.x + tipOffset;
+		int tipY = g_dragLastPt.y + tipOffset;
 		int tipW = (int)tipBounds.Width + tipPad * 2;
 		int tipH = (int)tipBounds.Height + tipPad * 2;
 		GraphicsPath tipPath;
@@ -1869,16 +1977,21 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	REAL fx = (REAL)frame.left, fy = (REAL)frame.top;
 	REAL fw = (REAL)(frame.right - frame.left), fh = (REAL)(frame.bottom - frame.top);
 
-	// Soft halo behind the frame, then the crisp accent frame itself.
+	// Soft halo behind the frame, then the crisp accent frame itself. Stroke
+	// widths and the halo's outward inflation are DPI-scaled so the chrome
+	// stays proportioned (not hairline-thin) at high scale factors.
+	REAL haloInfl = ScaleF(1.5f);
+	REAL haloPenW = ScaleF(4.0f);
+	REAL framePenW = ScaleF(2.0f);
 	{
 		GraphicsPath halo;
-		AddRoundRect(halo, fx - 1.5f, fy - 1.5f, fw + 3.0f, fh + 3.0f, 4.5f);
-		Pen haloPen(GpColor(56, ACCENT), 4.0f);
+		AddRoundRect(halo, fx - haloInfl, fy - haloInfl, fw + haloInfl * 2.0f, fh + haloInfl * 2.0f, 4.5f);
+		Pen haloPen(GpColor(56, ACCENT), haloPenW);
 		g.DrawPath(&haloPen, &halo);
 
 		GraphicsPath framePath;
 		AddRoundRect(framePath, fx, fy, fw, fh, 3.0f);
-		Pen framePen(GpColor(255, ACCENT), 2.0f);
+		Pen framePen(GpColor(255, ACCENT), framePenW);
 		g.DrawPath(&framePen, &framePath);
 	}
 
@@ -1886,22 +1999,23 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	int mx = (frame.left + frame.right) / 2, my = (frame.top + frame.bottom) / 2;
 	int xs[3] = { (int)frame.left, mx, (int)frame.right };
 	int ys[3] = { (int)frame.top, my, (int)frame.bottom };
+	int handleR = Scale(3);
 	for (int i = 0; i < 3; ++i)
 		for (int j = 0; j < 3; ++j) {
 			if (i == 1 && j == 1) continue;
-			DrawHandle(g, xs[i], ys[j], 3);
+			DrawHandle(g, xs[i], ys[j], handleR);
 		}
 
 	// badge: filled Material chip with white label at top-left
-	int bw = 96, bh = BADGE_H - 4;
-	int badgeTop = std::max(2, (int)frame.top - BADGE_H - 3);
+	int bw = Scale(96), bh = BADGE_H - Scale(4);
+	int badgeTop = std::max(Scale(2), (int)frame.top - BADGE_H - Scale(3));
 	{
 		GraphicsPath badgePath;
 		AddRoundRect(badgePath, fx, (REAL)badgeTop, (REAL)bw, (REAL)bh, 4.0f);
 		SolidBrush badgeBrush(GpColor(255, ACCENT));
 		g.FillPath(&badgeBrush, &badgePath);
 
-		Gdiplus::Font badgeFont(L"Segoe UI", 11.0f, FontStyleRegular, UnitPixel);
+		Gdiplus::Font badgeFont(L"Segoe UI", g_badgeFontPx, FontStyleRegular, UnitPixel);
 		StringFormat sf;
 		sf.SetAlignment(StringAlignmentCenter);
 		sf.SetLineAlignment(StringAlignmentCenter);
@@ -1913,8 +2027,9 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 
 	// floating Material mini-toolbar
 	if (g_buttonsValid) {
+		int bgPad6 = Scale(6), bgPad3 = Scale(3);
 		RECT bg = g_buttonRects[0];
-		bg.left -= 6; bg.top -= 3; bg.right = g_buttonRects[BUTTON_COUNT - 1].right + 6; bg.bottom += 3;
+		bg.left -= bgPad6; bg.top -= bgPad3; bg.right = g_buttonRects[BUTTON_COUNT - 1].right + bgPad6; bg.bottom += bgPad3;
 		GraphicsPath bgPath;
 		AddRoundRect(bgPath, (REAL)bg.left, (REAL)bg.top,
 			(REAL)(bg.right - bg.left), (REAL)(bg.bottom - bg.top), 5.0f);
@@ -1923,7 +2038,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		Pen bgPen(GpColor(255, RGB(218, 220, 224)), 1.0f);
 		g.DrawPath(&bgPen, &bgPath);
 
-		Gdiplus::Font btnFont(L"Segoe UI", 12.0f, FontStyleBold, UnitPixel);
+		Gdiplus::Font btnFont(L"Segoe UI", g_buttonFontPx, FontStyleBold, UnitPixel);
 		StringFormat sf;
 		sf.SetAlignment(StringAlignmentCenter);
 		sf.SetLineAlignment(StringAlignmentCenter);
@@ -2065,6 +2180,12 @@ void HideOverlay() {
 void ShowOverlayForChartRect(const RECT& chart) {
 	EnsureWindow();
 	if (!g_hwnd) return;
+	// Re-probe DPI on every (re)position: the overlay can be dragged to a
+	// different-DPI monitor, or the user can change scaling live, between
+	// ticks. A change invalidates the hit snapshot + forces a relayout/repaint
+	// (via UpdateDpiScaledMetrics) so chrome and hit zones never lag behind.
+	bool dpiChanged = UpdateDpiForWindow(g_hwnd);
+	if (dpiChanged) UpdateDpiScaledMetrics();
 	int chartW = chart.right - chart.left;
 	int chartH = chart.bottom - chart.top;
 	int wx = chart.left - INFL, wy = chart.top - INFL - BADGE_H;
@@ -2072,9 +2193,9 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	g_windowOriginX = wx;
 	g_windowOriginY = wy;
 	UpdateSelectionFrameFromScreen();
-	const int toolbarMinW = 2 * (INFL + 6) + BUTTON_COUNT * 32 + (BUTTON_COUNT - 1) * 4;
+	const int toolbarMinW = 2 * (INFL + Scale(6)) + BUTTON_COUNT * g_buttonW + (BUTTON_COUNT - 1) * g_buttonGap;
 	if (ww < toolbarMinW) ww = toolbarMinW;
-	if (wh < BADGE_H + TOOLBAR_H + INFL * 2 + 8) wh = BADGE_H + TOOLBAR_H + INFL * 2 + 8;
+	if (wh < BADGE_H + TOOLBAR_H + INFL * 2 + Scale(8)) wh = BADGE_H + TOOLBAR_H + INFL * 2 + Scale(8);
 	LayoutToolbarButtons(ww, wh);
 	LayoutGrip(ww, wh);
 	RECT oldWindow = {};
@@ -2082,7 +2203,7 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	bool hadWindow = ::GetWindowRect(g_hwnd, &oldWindow) != FALSE;
 	::SetWindowPos(g_hwnd, HWND_TOPMOST, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 	g_shown = true;
-	if (!wasShown || !hadWindow || oldWindow.left != wx || oldWindow.top != wy || oldWindow.right - oldWindow.left != ww || oldWindow.bottom - oldWindow.top != wh) {
+	if (dpiChanged || !wasShown || !hadWindow || oldWindow.left != wx || oldWindow.top != wy || oldWindow.right - oldWindow.left != ww || oldWindow.bottom - oldWindow.top != wh) {
 		RequestOverlayRepaint();
 	}
 }
@@ -2398,6 +2519,11 @@ void OverlayStop() {
 	::SetRectEmpty(&g_gripRect);
 	::SetRectEmpty(&g_frameRect);
 	::SetRectEmpty(&g_chartScreenRect);
+	// Reset DPI state to the 96-DPI (100%) baseline so a fresh OverlayStart()
+	// (e.g. the next harness run in the same process) re-probes rather than
+	// carrying over a stale scale factor.
+	g_dpi = 96;
+	UpdateDpiScaledMetrics();
 }
 
 HWND OverlayHwnd() { return g_hwnd; }

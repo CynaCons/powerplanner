@@ -95,6 +95,22 @@ static DWORD WINAPI WatchdogProc(LPVOID) {
 	return 0;
 }
 
+// Match PowerPoint's DPI awareness (per-monitor-DPI-aware, V2 where available)
+// so PointsToScreenPixels and our window coordinates agree exactly like they
+// do for the real add-in, which inherits this from POWERPNT.EXE. Resolved
+// dynamically via GetProcAddress: SetProcessDpiAwarenessContext is Win10
+// 1703+ only, so this falls back to the older process-DPI-aware API (still
+// better than unaware, just not per-monitor) on older Windows / SDKs.
+static void SetHarnessDpiAwareness() {
+	HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+	if (user32) {
+		typedef BOOL(WINAPI * SetProcessDpiAwarenessContextFn)(DPI_AWARENESS_CONTEXT);
+		auto pSetCtx = (SetProcessDpiAwarenessContextFn)::GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+		if (pSetCtx && pSetCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) return;
+	}
+	::SetProcessDPIAware();
+}
+
 int wmain(int argc, wchar_t** argv) {
 	const wchar_t* outPath = (argc > 1) ? argv[1] : L"overlay.png";
 
@@ -105,9 +121,7 @@ int wmain(int argc, wchar_t** argv) {
 	HANDLE wd = ::CreateThread(NULL, 0, WatchdogProc, NULL, 0, NULL);
 	if (wd) ::CloseHandle(wd);
 
-	// Match PowerPoint's DPI awareness so PointsToScreenPixels and our window
-	// coordinates agree (the real add-in inherits this from PowerPoint).
-	::SetProcessDPIAware();
+	SetHarnessDpiAwareness();
 	::CoInitialize(NULL);
 	GdiplusStartupInput gsi; ULONG_PTR tok; GdiplusStartup(&tok, &gsi, NULL);
 	int rc = 0;
