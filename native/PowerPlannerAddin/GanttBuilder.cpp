@@ -31,6 +31,22 @@ static std::string Narrow(const wchar_t* w) {
 
 static const char* kMonthNames[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" };
 
+// Shared debug log (same file/format as Overlay.cpp's OvLog / Connect.cpp's
+// PpLog, so all three interleave in one place: %TEMP%\powerplanner-addin.log).
+static void GbLog(const wchar_t* msg) {
+	wchar_t path[MAX_PATH];
+	DWORD n = ::GetTempPathW(MAX_PATH, path);
+	if (!n || n > MAX_PATH) return;
+	::wcscat_s(path, MAX_PATH, L"powerplanner-addin.log");
+	HANDLE h = ::CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (h == INVALID_HANDLE_VALUE) return;
+	wchar_t pidBuf[48];
+	::swprintf_s(pidBuf, 48, L"[ganttbuilder %lu @%lu] ", ::GetCurrentProcessId(), ::GetTickCount());
+	std::wstring line = std::wstring(pidBuf) + msg + L"\r\n";
+	DWORD w = 0; ::WriteFile(h, line.c_str(), (DWORD)(line.size() * sizeof(wchar_t)), &w, NULL);
+	::CloseHandle(h);
+}
+
 // Layout constants in points (Material: roomy rail + row rhythm).
 namespace {
 const float MARGIN     = 36.0f;
@@ -95,14 +111,23 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 	auto slotTop = [&](int slot) { return chartTop + (float)slot * ROW_HEIGHT; };
 
 	// Timeline header band (Material table-header strip; its bottom border is the
-	// first row divider drawn below).
-	{ Style s; s.fill = true; s.fillBgr = Bgr(0xFAFBFC); sc.prims.push_back(scene::rect(MARGIN, chartTop - AXIS_H, chartW, AXIS_H, s)); }
+	// first row divider drawn below). Tagged (kind-only, no natural id — there is
+	// exactly one) so UpdateGantt's diff can match it by (kind, "") without
+	// relying on emission-order ordinals colliding with unrelated untagged
+	// shapes (see GanttBuilder.cpp's ReconcileChartRoot comment on MatchKey).
+	{ Style s; s.fill = true; s.fillBgr = Bgr(0xFAFBFC); Prim p = scene::rect(MARGIN, chartTop - AXIS_H, chartW, AXIS_H, s); p.tagKind = "HEADER_BAND"; sc.prims.push_back(p); }
 
-	// Left navigation rail + its right-edge divider.
-	{ Style s; s.fill = true; s.fillBgr = Bgr(th.railSurface); sc.prims.push_back(scene::rect(MARGIN, chartTop, ROW_GUTTER, chartBottom - chartTop, s)); }
-	{ Style s; s.line = true; s.lineBgr = Bgr(th.divider); s.lineWeight = 1.0f; sc.prims.push_back(scene::line(MARGIN + ROW_GUTTER, chartTop, MARGIN + ROW_GUTTER, chartBottom, s)); }
+	// Left navigation rail + its right-edge divider (each kind-only-tagged;
+	// exactly one of each, same reasoning as HEADER_BAND above).
+	{ Style s; s.fill = true; s.fillBgr = Bgr(th.railSurface); Prim p = scene::rect(MARGIN, chartTop, ROW_GUTTER, chartBottom - chartTop, s); p.tagKind = "RAIL_FILL"; sc.prims.push_back(p); }
+	{ Style s; s.line = true; s.lineBgr = Bgr(th.divider); s.lineWeight = 1.0f; Prim p = scene::line(MARGIN + ROW_GUTTER, chartTop, MARGIN + ROW_GUTTER, chartBottom, s); p.tagKind = "RAIL_DIVIDER"; sc.prims.push_back(p); }
 
-	// Month gridlines + labels (behind bars).
+	// Month gridlines + labels (behind bars). Tagged with the ISO "YYYY-MM"
+	// month as tagId: a NATURALLY unique, stable identity (unlike an emission
+	// ordinal) that survives the visible month SET changing size across a
+	// rebuild (e.g. a date shift that adds/drops a month at either edge) —
+	// each month's gridline/label keeps its own identity instead of every
+	// later month's ordinal shifting by one.
 	{
 		int y0 = 0, m0 = 0, dd = 0, y1 = 0, m1 = 0;
 		sscanf_s(minD.c_str(), "%d-%d-%d", &y0, &m0, &dd);
@@ -112,22 +137,31 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 			char iso[16]; sprintf_s(iso, "%04d-%02d-01", yy, mm);
 			float x = xToPt(DateToDays(iso) - vs);
 			if (x >= MARGIN + ROW_GUTTER - 1.0f && x <= chartRight) {
+				char monthId[8]; sprintf_s(monthId, "%04d-%02d", yy, mm);
 				Style g; g.line = true; g.lineBgr = Bgr(th.divider); g.lineWeight = 0.5f;
-				Prim ln = scene::line(x, chartTop, x, chartBottom, g); ln.tagKind = "AXIS_GRID"; sc.prims.push_back(ln);
+				Prim ln = scene::line(x, chartTop, x, chartBottom, g); ln.tagKind = "AXIS_GRID"; ln.tagId = monthId; sc.prims.push_back(ln);
 				char lbl[24]; sprintf_s(lbl, "%s %d", kMonthNames[(mm - 1) % 12], yy);
 				Style al; al.textBgr = Bgr(th.onSurfaceVariant); al.fontSize = 10.0f; al.align = TextAlign::Left;
-				Prim t = scene::text(x + 3.0f, chartTop - 16.0f, 64.0f, 13.0f, Widen(lbl), al); t.tagKind = "AXIS_LABEL"; sc.prims.push_back(t);
+				Prim t = scene::text(x + 3.0f, chartTop - 16.0f, 64.0f, 13.0f, Widen(lbl), al); t.tagKind = "AXIS_LABEL"; t.tagId = monthId; sc.prims.push_back(t);
 			}
 			if (++mm > 12) { mm = 1; ++yy; }
 		}
 	}
 
-	// Row dividers (Material list style), full width.
+	// Row dividers (Material list style), full width. Tagged with the OWNING
+	// row's id (naturally unique/stable) rather than left untagged/ordinal-
+	// matched, so a divider stays matched to "its" row even if rows are
+	// inserted/removed elsewhere and every subsequent ordinal would otherwise
+	// shift. The final bottom-of-chart divider has no owning row; it gets a
+	// fixed synthetic id since there is exactly one.
 	{
 		Style d; d.line = true; d.lineBgr = Bgr(th.divider); d.lineWeight = 0.75f;
-		for (size_t i = 0; i < L.visibleRowIds.size(); ++i)
-			sc.prims.push_back(scene::line(MARGIN, slotTop(L.rowOffsets[i]), chartRight, slotTop(L.rowOffsets[i]), d));
-		sc.prims.push_back(scene::line(MARGIN, chartBottom, chartRight, chartBottom, d));
+		for (size_t i = 0; i < L.visibleRowIds.size(); ++i) {
+			Prim p = scene::line(MARGIN, slotTop(L.rowOffsets[i]), chartRight, slotTop(L.rowOffsets[i]), d);
+			p.tagKind = "ROW_DIVIDER"; p.tagId = L.visibleRowIds[i]; sc.prims.push_back(p);
+		}
+		Prim bottom = scene::line(MARGIN, chartBottom, chartRight, chartBottom, d);
+		bottom.tagKind = "ROW_DIVIDER"; bottom.tagId = "__bottom__"; sc.prims.push_back(bottom);
 	}
 
 	// Summary bars.
@@ -172,7 +206,7 @@ static Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 		Style d; d.fill = true; d.fillBgr = Bgr(th.milestone);
 		Prim dm = scene::diamond(cx - sz / 2.0f, cy - sz / 2.0f, sz, sz, d); dm.tagKind = "MILESTONE"; dm.tagId = m.id; sc.prims.push_back(dm);
 		Style ml; ml.textBgr = Bgr(th.onSurfaceVariant); ml.fontSize = 10.0f; ml.align = TextAlign::Left;
-		Prim t = scene::text(cx + sz / 2.0f + 3.0f, cy - 8.0f, 96.0f, 14.0f, Widen(label), ml); t.tagKind = "MILESTONE_LABEL"; sc.prims.push_back(t);
+		Prim t = scene::text(cx + sz / 2.0f + 3.0f, cy - 8.0f, 96.0f, 14.0f, Widen(label), ml); t.tagKind = "MILESTONE_LABEL"; t.tagId = m.id; sc.prims.push_back(t);
 	}
 
 	// Brackets (+ labels).
@@ -341,6 +375,344 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, 
 	}
 	if (outShapeCount) *outShapeCount = count;
 	return S_OK;
+}
+
+// Shared by InsertGantt/UpdateGantt: date range -> projection (pt/day), padded
+// 5% each side, then the resulting Scene. Returns false (E_FAIL-worthy) if the
+// document has no dated tasks/milestones to anchor a range on.
+static bool BuildProjectedScene(const PpDocument& doc, float slideW, Scene* outScene,
+	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
+	std::string minD, maxD;
+	auto consider = [&](const std::string& d) {
+		if (d.empty()) return;
+		if (minD.empty() || d < minD) minD = d;
+		if (maxD.empty() || d > maxD) maxD = d;
+	};
+	for (const auto& t : doc.tasks) { consider(t.start); consider(t.end); }
+	for (const auto& m : doc.milestones) consider(m.date);
+	if (minD.empty()) return false;
+
+	const long totalDays = std::max(1L, (DateToDays(maxD) - DateToDays(minD)) + 1);
+	const long pad = std::max(1L, (long)(totalDays * 0.05));
+	const float chartContentW = (slideW - MARGIN * 2.0f) - ROW_GUTTER;
+	const float ptPerDay = chartContentW / (float)(totalDays + pad * 2);
+
+	GanttLayoutResult L = LayoutGantt(doc, minD);
+	*outScene = BuildGanttScene(doc, L, minD, maxD, pad, ptPerDay, slideW, MaterialLight());
+	*outMinD = minD; *outMaxD = maxD; *outPad = pad; *outPtPerDay = ptPerDay;
+	return true;
+}
+
+// ---- diff-based (in-place) rebuild -----------------------------------------
+//
+// A Prim's (tagKind, tagId) is not a unique shape identity by itself: several
+// prims can legitimately share both (e.g. a bracket emits two BRACKET_TICK
+// prims for the same bracket id; untagged prims — AXIS_GRID/AXIS_LABEL, row
+// dividers, TITLE — share ("", "") entirely). The match key adds an ordinal
+// that counts repeats of the same (tagKind, tagId) pair IN EMISSION ORDER, so
+// as long as BuildGanttScene stays deterministic for a given document shape
+// (it does — same std::vector iteration order every call), the Nth prim of a
+// given (kind, id) in the old scene always corresponds to the Nth prim of
+// that (kind, id) in the new scene, letting untagged/repeated-id shapes still
+// diff safely alongside uniquely-tagged ones.
+namespace {
+struct MatchKey {
+	std::string kind, id;
+	int ordinal;
+	bool operator<(const MatchKey& o) const {
+		if (kind != o.kind) return kind < o.kind;
+		if (id != o.id) return id < o.id;
+		return ordinal < o.ordinal;
+	}
+};
+
+std::vector<MatchKey> BuildMatchKeys(const std::vector<std::pair<std::string, std::string>>& kindIds) {
+	std::map<std::pair<std::string, std::string>, int> seen;
+	std::vector<MatchKey> out;
+	out.reserve(kindIds.size());
+	for (const auto& ki : kindIds) {
+		int ord = seen[ki]++;
+		out.push_back({ ki.first, ki.second, ord });
+	}
+	return out;
+}
+
+// Push one Prim's geometry (+ text, for non-line shapes) onto an EXISTING
+// shape. Used by both the pure move/resize path and the survivor shapes in
+// the structural (ungroup/regroup) path — geometry sync is identical either
+// way, only what happens to the group afterward differs.
+void SyncShapeGeometryAndText(PowerPoint::ShapePtr ch, const Prim& prim) {
+	if (prim.kind == PrimKind::Line || prim.kind == PrimKind::Connector) {
+		ch->PutLeft((float)std::min(prim.x, prim.x2));
+		ch->PutTop((float)std::min(prim.y, prim.y2));
+		float w = std::fabs(prim.x2 - prim.x), h = std::fabs(prim.y2 - prim.y);
+		ch->PutWidth(w > 0.0f ? w : 0.01f);
+		ch->PutHeight(h > 0.0f ? h : 0.01f);
+		return;
+	}
+	ch->PutLeft(prim.x);
+	ch->PutTop(prim.y);
+	ch->PutWidth(prim.w > 0.0f ? prim.w : 0.01f);
+	ch->PutHeight(prim.h > 0.0f ? prim.h : 0.01f);
+	// Every AddShape/AddTextbox shape has a TextFrame; always reconcile text
+	// (including clearing it if the prim's text became empty, e.g. a task
+	// bar shrinking below the label-fit threshold).
+	PowerPoint::TextFramePtr tf = ch->GetTextFrame();
+	// AddShape/AddTextbox default the TextFrame to ppAutoSizeShapeToFitText:
+	// left alone, PowerPoint grows the shape's Height to fit its text on a
+	// LATER idle/redraw pass (not synchronously with PutText/PutHeight),
+	// fighting the explicit Height set just above. This matters far more once
+	// a shape is under UpdateGantt's diff-based reconcile: repeated
+	// move/resize/retext edits each re-set Height, and a stray autosize-to-
+	// fit-text growth on the NEXT tick silently corrupts row-band geometry
+	// (observed empirically: ROW_LABEL boxes growing well past their intended
+	// one-row height a tick after a reconcile, breaking row hit-testing).
+	// ppAutoSizeNone makes Height/Width purely OURS to own; set it every sync
+	// so it's re-asserted even if something external ever re-enabled it.
+	tf->PutAutoSize(PowerPoint::ppAutoSizeNone);
+	PowerPoint::TextRangePtr tr = tf->GetTextRange();
+	_bstr_t cur = tr->GetText();
+	std::wstring curText = cur.length() ? (const wchar_t*)cur : L"";
+	while (!curText.empty() && (curText.back() == L'\r' || curText.back() == L'\n')) curText.pop_back();
+	if (curText != prim.text) tr->PutText(_bstr_t(prim.text.c_str()));
+}
+} // namespace
+
+// Reconcile `doc`'s freshly-computed scene against the EXISTING CHART_ROOT
+// group's children. Returns true (and leaves the group's identity/child-set
+// alone) when the reconciliation could be done via property mutation alone
+// (or add/remove of only the shapes that actually changed); returns false if
+// the caller should fall back to a full InsertGantt re-emit (e.g. the group
+// vanished from under us, or an unexpected COM failure).
+static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_SlidePtr slide,
+	PowerPoint::ShapePtr group, const PpDocument& doc, const std::string& selectId) {
+	const float slideW = (float)app->GetActivePresentation()->GetPageSetup()->GetSlideWidth();
+	Scene sc; std::string minD, maxD; long pad = 0; float ptPerDay = 0.0f;
+	if (!BuildProjectedScene(doc, slideW, &sc, &minD, &maxD, &pad, &ptPerDay)) return E_FAIL;
+
+	PowerPoint::GroupShapesPtr items = group->GetGroupItems();
+	long childCount = items->GetCount();
+
+	// Snapshot existing children + their match keys (COM: one pass, cheap).
+	std::vector<PowerPoint::ShapePtr> children(childCount ? childCount : 0);
+	std::vector<std::pair<std::string, std::string>> childKindIds(childCount ? childCount : 0);
+	for (long i = 1; i <= childCount; ++i) {
+		PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+		children[i - 1] = ch;
+		_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+		_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+		childKindIds[i - 1] = { k.length() ? Narrow((const wchar_t*)k) : "", id.length() ? Narrow((const wchar_t*)id) : "" };
+	}
+	std::vector<MatchKey> childKeys = BuildMatchKeys(childKindIds);
+	std::map<MatchKey, long> childIndexByKey; // 0-based into children/childKeys
+	for (long i = 0; i < (long)childKeys.size(); ++i) childIndexByKey[childKeys[i]] = i;
+
+	// New-scene match keys.
+	std::vector<std::pair<std::string, std::string>> primKindIds;
+	primKindIds.reserve(sc.prims.size());
+	for (const auto& p : sc.prims) primKindIds.push_back({ p.tagKind, p.tagId });
+	std::vector<MatchKey> primKeys = BuildMatchKeys(primKindIds);
+
+	// Classify: which new prims match an existing child (update-in-place) vs.
+	// are brand new (must be added); which existing children have no matching
+	// new prim (must be removed).
+	std::vector<bool> childMatched(childCount ? childCount : 0, false);
+	std::vector<long> primMatchChildIdx(sc.prims.size(), -1); // -1 = needs add
+	for (size_t p = 0; p < primKeys.size(); ++p) {
+		auto it = childIndexByKey.find(primKeys[p]);
+		if (it != childIndexByKey.end() && !childMatched[it->second]) {
+			primMatchChildIdx[p] = it->second;
+			childMatched[it->second] = true;
+		}
+	}
+	bool anyRemoved = false;
+	for (long i = 0; i < childCount; ++i) if (!childMatched[i]) { anyRemoved = true; break; }
+	bool anyAdded = false;
+	for (size_t p = 0; p < primMatchChildIdx.size(); ++p) if (primMatchChildIdx[p] < 0) { anyAdded = true; break; }
+
+	if (!anyAdded && !anyRemoved) {
+		// Pure move/resize/retext: mutate matched children in place, no
+		// ungroup/regroup, no delete/recreate. Group identity is untouched.
+		for (size_t p = 0; p < sc.prims.size(); ++p) {
+			SyncShapeGeometryAndText(children[primMatchChildIdx[p]], sc.prims[p]);
+		}
+		group->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
+		char proj[192];
+		::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
+			DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
+		group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+
+		if (!selectId.empty()) {
+			for (size_t p = 0; p < sc.prims.size(); ++p) {
+				if (sc.prims[p].tagId == selectId) { children[primMatchChildIdx[p]]->Select(Office::msoTrue); break; }
+			}
+		}
+		return S_OK;
+	}
+
+	// Structural change (adds and/or removes): ungroup, apply property
+	// updates to the shapes that survive, delete the ones that didn't match,
+	// add brand-new shapes for the unmatched new prims, then regroup and
+	// retag. This still avoids the OLD behavior of nuking EVERY shape: only
+	// the actually-added/removed elements churn identity.
+	//
+	// IMPORTANT: Shape::Ungroup() invalidates the pre-ungroup Shape references
+	// obtained via GroupShapes::Item() (confirmed empirically — reusing them
+	// after Ungroup() silently writes properties onto the WRONG now-top-level
+	// shape, observed as ROW_LABEL shapes acquiring some unrelated shape's
+	// height). Re-derive every surviving shape from the POST-ungroup range by
+	// re-reading its PP_KIND/PP_ID tags (tags belong to the shape, not the
+	// group, so they survive Ungroup intact) and re-keying with the SAME
+	// MatchKey scheme used for the pre-ungroup snapshot.
+	PowerPoint::ShapeRangePtr ungrouped = group->Ungroup();
+	long ungroupedCount = ungrouped->GetCount();
+	std::vector<PowerPoint::ShapePtr> postUngroupShapes(ungroupedCount ? ungroupedCount : 0);
+	std::vector<std::pair<std::string, std::string>> postUngroupKindIds(ungroupedCount ? ungroupedCount : 0);
+	for (long i = 1; i <= ungroupedCount; ++i) {
+		PowerPoint::ShapePtr sh = ungrouped->Item(_variant_t(i));
+		postUngroupShapes[i - 1] = sh;
+		_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+		_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
+		postUngroupKindIds[i - 1] = { k.length() ? Narrow((const wchar_t*)k) : "", id.length() ? Narrow((const wchar_t*)id) : "" };
+	}
+	std::vector<MatchKey> postUngroupKeys = BuildMatchKeys(postUngroupKindIds);
+	std::map<MatchKey, long> postUngroupIndexByKey;
+	for (long i = 0; i < (long)postUngroupKeys.size(); ++i) postUngroupIndexByKey[postUngroupKeys[i]] = i;
+
+	// Map ORIGINAL child index (pre-ungroup) -> post-ungroup Shape, keyed by
+	// the SAME (kind, id, ordinal) that identified it before the ungroup.
+	std::map<long, PowerPoint::ShapePtr> survivorByOldIdx;
+	std::vector<bool> postUngroupConsumed(postUngroupShapes.size(), false);
+	for (long i = 0; i < childCount; ++i) {
+		if (!childMatched[i]) {
+			auto it = postUngroupIndexByKey.find(childKeys[i]);
+			if (it != postUngroupIndexByKey.end() && !postUngroupConsumed[it->second]) {
+				postUngroupConsumed[it->second] = true;
+				try { postUngroupShapes[it->second]->Delete(); } catch (const _com_error&) {}
+			}
+			continue;
+		}
+		auto it = postUngroupIndexByKey.find(childKeys[i]);
+		if (it != postUngroupIndexByKey.end() && !postUngroupConsumed[it->second]) {
+			postUngroupConsumed[it->second] = true;
+			survivorByOldIdx[i] = postUngroupShapes[it->second];
+		}
+	}
+
+	PowerPoint::ShapesPtr shapes = slide->GetShapes();
+	std::vector<PowerPoint::ShapePtr> finalOrder;
+	finalOrder.reserve(sc.prims.size());
+	for (size_t p = 0; p < sc.prims.size(); ++p) {
+		const Prim& prim = sc.prims[p];
+		auto survIt = (primMatchChildIdx[p] >= 0) ? survivorByOldIdx.find(primMatchChildIdx[p]) : survivorByOldIdx.end();
+		if (survIt != survivorByOldIdx.end()) {
+			PowerPoint::ShapePtr ch = survIt->second;
+			SyncShapeGeometryAndText(ch, prim);
+			finalOrder.push_back(ch);
+		} else {
+			Scene one; one.prims.push_back(prim);
+			std::vector<PowerPoint::ShapePtr> emitted = RenderScene(shapes, one);
+			if (!emitted.empty()) finalOrder.push_back(emitted[0]);
+		}
+	}
+
+	if (finalOrder.size() < 2) return E_FAIL; // nothing sane to regroup
+
+	SAFEARRAY* saf = ::SafeArrayCreateVector(VT_BSTR, 0, (ULONG)finalOrder.size());
+	for (LONG i = 0; i < (LONG)finalOrder.size(); ++i) {
+		_bstr_t nm = finalOrder[i]->GetName();
+		::SafeArrayPutElement(saf, &i, (void*)(BSTR)nm);
+	}
+	_variant_t idx; idx.vt = VT_ARRAY | VT_BSTR; idx.parray = saf;
+	PowerPoint::ShapeRangePtr range = shapes->Range(idx);
+	PowerPoint::ShapePtr newGroup = range->Group();
+	newGroup->GetTags()->Add(_bstr_t(L"PP_KIND"), _bstr_t(L"CHART_ROOT"));
+	newGroup->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
+	newGroup->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
+	char proj[192];
+	::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
+		DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
+	newGroup->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+
+	if (!selectId.empty()) {
+		for (size_t p = 0; p < sc.prims.size(); ++p) {
+			if (sc.prims[p].tagId == selectId) { finalOrder[p]->Select(Office::msoTrue); break; }
+		}
+	}
+	return S_OK;
+}
+
+HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& selectId) {
+	if (!pApp) return E_POINTER;
+	try {
+		PowerPoint::_ApplicationPtr app(pApp);
+		PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+
+		PowerPoint::ShapePtr group;
+		long n = shapes->GetCount();
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") { group = sh; break; }
+		}
+		if (!group) {
+			// No existing chart to reconcile against: full emit.
+			int cnt = 0;
+			return InsertGantt(pApp, doc, &cnt, selectId);
+		}
+
+		HRESULT hr = ReconcileChartRoot(app, slide, group, doc, selectId);
+		if (SUCCEEDED(hr)) return hr;
+
+		wchar_t buf[96];
+		::swprintf_s(buf, 96, L"UpdateGantt: ReconcileChartRoot failed hr=0x%08lX, falling back to InsertGantt", (unsigned long)hr);
+		GbLog(buf);
+
+		// Reconciliation failed for some reason: fall back to a full re-emit.
+		// The group may be in a partially-ungrouped state if ReconcileChartRoot
+		// threw mid-way; best effort cleanup: delete any remaining CHART_ROOT
+		// before re-inserting so we never end up with two.
+		try {
+			long n2 = shapes->GetCount();
+			for (long i = 1; i <= n2; ++i) {
+				PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+				_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") { sh->Delete(); break; }
+			}
+		} catch (const _com_error&) {}
+		int cnt = 0;
+		return InsertGantt(pApp, doc, &cnt, selectId);
+	}
+	catch (const _com_error& e) {
+		// Best-effort fallback even on an unexpected COM error during the
+		// reconcile attempt itself.
+		wchar_t buf[96];
+		::swprintf_s(buf, 96, L"UpdateGantt: COM error 0x%08lX during reconcile, falling back to InsertGantt", (unsigned long)e.Error());
+		GbLog(buf);
+		try {
+			int cnt = 0;
+			return InsertGantt(pApp, doc, &cnt, selectId);
+		} catch (...) {}
+		return e.Error() ? e.Error() : E_FAIL;
+	}
+	catch (const std::exception&) {
+		GbLog(L"UpdateGantt: std::exception during reconcile, falling back to InsertGantt");
+		try {
+			int cnt = 0;
+			return InsertGantt(pApp, doc, &cnt, selectId);
+		} catch (...) {}
+		return E_FAIL;
+	}
+	catch (...) {
+		GbLog(L"UpdateGantt: unknown exception during reconcile, falling back to InsertGantt");
+		try {
+			int cnt = 0;
+			return InsertGantt(pApp, doc, &cnt, selectId);
+		} catch (...) {}
+		return E_FAIL;
+	}
 }
 
 std::string ReadGanttFromSlide(IDispatch* pApp) {

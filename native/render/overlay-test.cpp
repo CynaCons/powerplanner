@@ -47,6 +47,7 @@
 #endif
 #include <gdiplus.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -528,6 +529,21 @@ int wmain(int argc, wchar_t** argv) {
 						POINT clientPt = screenPt;
 						::ScreenToClient(ov, &clientPt);
 
+						// Park the REAL OS cursor at the gesture point before posting
+						// synthetic messages. WM_LBUTTONDOWN/MOUSEMOVE/UP here are
+						// POSTED (not real hardware input), but the SUPPRESS stage
+						// earlier used SendInput (real hardware events) and left the
+						// physical cursor parked wherever that was — a later
+						// SetCapture() in this window can make Windows resync with a
+						// REAL WM_MOUSEMOVE at that STALE physical position, which
+						// then interleaves with our posted synthetic moves and can
+						// spuriously retarget an in-progress row-reassign drag
+						// (observed: DRAGROW intermittently not detecting the row
+						// change because a stray real mousemove at the old SUPPRESS
+						// click point raced with our posted moves). Moving the real
+						// cursor here makes any such stray event harmless (same point).
+						::SetCursorPos(screenPt.x, screenPt.y);
+
 						// Select it first (same click-select route as OWNSEL) so we
 						// can also assert the selection survives the drag.
 						LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
@@ -576,15 +592,24 @@ int wmain(int argc, wchar_t** argv) {
 							PumpFor(60);
 							// Several intermediate moves (not a single jump) so
 							// g_dragActive latches on the first > 4px move, matching
-							// a real drag gesture.
+							// a real drag gesture. SetCursorPos tracks each posted move:
+							// while this window holds capture, Windows can deliver a
+							// REAL WM_MOUSEMOVE reporting the actual (else-stale)
+							// physical cursor position, which would otherwise interleave
+							// with — and can even arrive AFTER — our posted synthetic
+							// moves (confirmed empirically via the DRAGROW stage's
+							// row-target flake). Keeping the real cursor in sync makes
+							// any such stray event harmless.
 							const int kSteps = 5;
 							for (int s = 1; s <= kSteps; ++s) {
 								int mx = clientPt.x + (int)(shiftPx * s / kSteps);
+								::SetCursorPos(screenPt.x + (mx - clientPt.x), screenPt.y);
 								LPARAM moveLp = MAKELPARAM((short)mx, (short)clientPt.y);
 								::PostMessageW(ov, WM_MOUSEMOVE, 0, moveLp);
 								PumpFor(60);
 							}
 							int finalX = clientPt.x + (int)shiftPx;
+							::SetCursorPos(screenPt.x + (int)shiftPx, screenPt.y);
 							LPARAM upLp = MAKELPARAM((short)finalX, (short)clientPt.y);
 							::PostMessageW(ov, WM_LBUTTONUP, 0, upLp);
 							PumpFor(800);
@@ -723,18 +748,48 @@ int wmain(int argc, wchar_t** argv) {
 						int bandHeightPx = nextRowTopScreen - rowTopScreen;
 						std::wstring targetRowId = rowRects[origIdx + 1].rowId;
 
+						// See the DRAG stage's SetCursorPos comment: park the real
+						// cursor at the gesture point first so a stray real
+						// WM_MOUSEMOVE (from Windows resyncing on SetCapture) can't
+						// race our posted moves with a stale position.
+						::SetCursorPos(screenPt.x, screenPt.y);
+
 						LPARAM downLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
 						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, downLp);
 						PumpFor(60);
 						const int kSteps = 5;
 						for (int s = 1; s <= kSteps; ++s) {
 							int my = clientPt.y + (int)((long)bandHeightPx * s / kSteps);
+							// ROOT CAUSE (confirmed empirically): while this window
+							// holds mouse capture, Windows periodically delivers a
+							// REAL WM_MOUSEMOVE reporting wherever the PHYSICAL cursor
+							// actually is. We only ever POST synthetic messages here
+							// (which move the overlay's notion of pointer position but
+							// NOT the real OS cursor), so if the real cursor is left
+							// parked at the gesture's start point, that stray real
+							// event keeps reporting the ORIGINAL y — and, being a live
+							// event (not a one-time backlog), it can interleave
+							// with and even follow our LAST posted move, latching the
+							// WRONG row right before commit. Moving the real cursor to
+							// match at every step makes any such stray event harmless
+							// (same position we intend).
+							::SetCursorPos(screenPt.x, screenPt.y + (my - clientPt.y));
 							LPARAM moveLp = MAKELPARAM((short)clientPt.x, (short)my);
 							::PostMessageW(ov, WM_MOUSEMOVE, 0, moveLp);
 							PumpFor(60);
 						}
 						int finalY = clientPt.y + bandHeightPx;
-						LPARAM upLp = MAKELPARAM((short)clientPt.x, (short)finalY);
+						LPARAM finalMoveLp = MAKELPARAM((short)clientPt.x, (short)finalY);
+						// Re-assert the FINAL target position (both real cursor and
+						// posted message) a few more times before committing, so any
+						// live stray real-cursor mousemove reports the SAME (correct)
+						// position rather than a stale one.
+						for (int extra = 0; extra < 3; ++extra) {
+							::SetCursorPos(screenPt.x, screenPt.y + bandHeightPx);
+							::PostMessageW(ov, WM_MOUSEMOVE, 0, finalMoveLp);
+							PumpFor(60);
+						}
+						LPARAM upLp = finalMoveLp;
 						::PostMessageW(ov, WM_LBUTTONUP, 0, upLp);
 						PumpFor(800);
 
@@ -879,15 +934,20 @@ int wmain(int argc, wchar_t** argv) {
 							const int kCreateDays = 10;
 							long shiftPx = (long)::lround(kCreateDays * pxPerDay);
 
+							// See the DRAG stage's SetCursorPos comment.
+							::SetCursorPos(screenPt.x, screenPt.y);
+
 							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((short)clientPt.x, (short)clientPt.y));
 							PumpFor(60);
 							const int kSteps = 5;
 							for (int s = 1; s <= kSteps; ++s) {
 								int mx = clientPt.x + (int)(shiftPx * s / kSteps);
+								::SetCursorPos(screenPt.x + (mx - clientPt.x), screenPt.y);
 								::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)mx, (short)clientPt.y));
 								PumpFor(60);
 							}
 							int finalX = clientPt.x + (int)shiftPx;
+							::SetCursorPos(screenPt.x + (int)shiftPx, screenPt.y);
 							::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)clientPt.y));
 							PumpFor(800);
 
@@ -924,6 +984,183 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"CREATE: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"CREATE PASS\n" : L"CREATE FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 8: INPLACE ---------------------------------------------
+			// Rebuild-in-place: a pure move/resize gesture (a body drag, same
+			// mechanics as stage 5/DRAG but on a DIFFERENT task — "t2" — so it
+			// doesn't interact with stage 5's already-shifted "t1"-ish task)
+			// must NOT delete/recreate the CHART_ROOT group. Record the group's
+			// COM Shape Id + child count before the drag; after it, both must be
+			// UNCHANGED (same COM identity => RebuildChart's UpdateGantt path
+			// reconciled in place rather than falling back to delete+InsertGantt),
+			// while the dragged bar's Left and PP_DOC dates must have actually
+			// moved (the gesture really committed).
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					if (!chartRoot) {
+						wprintf(L"INPLACE: could not find CHART_ROOT\n");
+					} else {
+						int rootIdBefore = chartRoot->GetId();
+						long childCountBefore = chartRoot->GetGroupItems()->GetCount();
+
+						PowerPoint::ShapePtr taskChild;
+						const std::wstring kTargetTaskId = L"t2";
+						{
+							PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+							long gn = grp->GetCount();
+							for (long j = 1; j <= gn && !taskChild; ++j) {
+								PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+								_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+								std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+								if (ckind != L"TASK") continue;
+								_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								std::wstring cidW = cid.length() ? (const wchar_t*)cid : L"";
+								if (cidW == kTargetTaskId) taskChild = child;
+							}
+						}
+
+						HWND ov = OverlayHwnd();
+						if (!taskChild || !ov) {
+							wprintf(L"INPLACE: could not find TASK '%s' or overlay hwnd\n", kTargetTaskId.c_str());
+						} else {
+							PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+							float left = taskChild->GetLeft(), top = taskChild->GetTop();
+							float w = taskChild->GetWidth(), h = taskChild->GetHeight();
+							POINT screenPt = {
+								win->PointsToScreenPixelsX(left + w / 2.0f),
+								win->PointsToScreenPixelsY(top + h / 2.0f)
+							};
+							POINT clientPt = screenPt;
+							::ScreenToClient(ov, &clientPt);
+
+							// See the DRAG stage's SetCursorPos comment.
+							::SetCursorPos(screenPt.x, screenPt.y);
+
+							LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+							::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+							PumpFor(400);
+
+							std::string docJsonBefore = ReadGanttFromSlide(app);
+							PpDocument docBefore = DocumentFromJson(docJsonBefore);
+							std::string taskIdUtf8 = WNarrowFn(kTargetTaskId.c_str());
+							std::string origStart, origEnd;
+							for (const auto& t : docBefore.tasks) {
+								if (t.id == taskIdUtf8) { origStart = t.start; origEnd = t.end; break; }
+							}
+
+							std::string projJson = WNarrowFn((const wchar_t*)chartRoot->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+							long minDay = 0, pad = 0; float ptPerDay = 1.0f, originX = 0.0f;
+							::sscanf_s(projJson.c_str(), "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%f,\"originX\":%f}",
+								&minDay, &pad, &ptPerDay, &originX);
+
+							if (origStart.empty() || ptPerDay <= 0.0f) {
+								wprintf(L"INPLACE: could not resolve task dates or ptPerDay before drag\n");
+							} else {
+								const long kDragDays = 5;
+								int screenLeft = win->PointsToScreenPixelsX(left);
+								int screenRight = win->PointsToScreenPixelsX(left + w);
+								double pxPerPt = (screenRight > screenLeft) ? (double)(screenRight - screenLeft) / (double)w : 1.0;
+								long shiftPx = (long)::lround(kDragDays * ptPerDay * pxPerPt);
+
+								::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+								PumpFor(60);
+								const int kSteps = 5;
+								for (int s = 1; s <= kSteps; ++s) {
+									int mx = clientPt.x + (int)(shiftPx * s / kSteps);
+									::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)mx, (short)clientPt.y));
+									PumpFor(60);
+								}
+								int finalX = clientPt.x + (int)shiftPx;
+								::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)clientPt.y));
+								PumpFor(800);
+
+								// Re-find CHART_ROOT by tag (NOT the cached shape
+								// pointer — if UpdateGantt fell back to delete+
+								// recreate, the old COM pointer would be stale).
+								PowerPoint::ShapePtr chartRootAfter;
+								long n2 = shapes->GetCount();
+								for (long i = 1; i <= n2 && !chartRootAfter; ++i) {
+									PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+									_bstr_t k2 = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+									std::wstring kind2 = k2.length() ? (const wchar_t*)k2 : L"";
+									if (kind2 == L"CHART_ROOT") chartRootAfter = sh;
+								}
+
+								bool sameShapeId = false;
+								bool sameChildCount = false;
+								int rootIdAfter = -1;
+								long childCountAfter = -1;
+								float leftAfter = 0.0f;
+								if (chartRootAfter) {
+									rootIdAfter = chartRootAfter->GetId();
+									childCountAfter = chartRootAfter->GetGroupItems()->GetCount();
+									sameShapeId = (rootIdAfter == rootIdBefore);
+									sameChildCount = (childCountAfter == childCountBefore);
+
+									PowerPoint::GroupShapesPtr grpAfter = chartRootAfter->GetGroupItems();
+									long gnAfter = grpAfter->GetCount();
+									for (long j = 1; j <= gnAfter; ++j) {
+										PowerPoint::ShapePtr child = grpAfter->Item(_variant_t(j));
+										_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+										std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+										if (ckind != L"TASK") continue;
+										_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+										std::wstring cidW = cid.length() ? (const wchar_t*)cid : L"";
+										if (cidW == kTargetTaskId) { leftAfter = child->GetLeft(); break; }
+									}
+								}
+
+								std::string afterJson = ReadGanttFromSlide(app);
+								PpDocument docAfter = DocumentFromJson(afterJson);
+								std::string newStart, newEnd;
+								bool foundAfter = false;
+								for (const auto& t : docAfter.tasks) {
+									if (t.id == taskIdUtf8) { newStart = t.start; newEnd = t.end; foundAfter = true; break; }
+								}
+								std::string expectStart = DaysToDate(DateToDays(origStart) + kDragDays);
+								std::string expectEnd = DaysToDate(DateToDays(origEnd) + kDragDays);
+								bool datesShifted = foundAfter && newStart == expectStart && newEnd == expectEnd;
+								bool leftMoved = std::fabs(leftAfter - left) > 0.5f;
+
+								if (!chartRootAfter) {
+									wprintf(L"INPLACE: CHART_ROOT missing after drag\n");
+								}
+								if (!sameShapeId) {
+									wprintf(L"INPLACE: chart root Shape Id changed %d -> %d (delete/recreate happened)\n", rootIdBefore, rootIdAfter);
+								}
+								if (!sameChildCount) {
+									wprintf(L"INPLACE: child count changed %ld -> %ld\n", childCountBefore, childCountAfter);
+								}
+								if (!leftMoved) {
+									wprintf(L"INPLACE: dragged bar's Left did not change (before=%.2f after=%.2f)\n", left, leftAfter);
+								}
+								if (!datesShifted) {
+									wprintf(L"INPLACE: expected %hs..%hs, got %hs..%hs\n",
+										expectStart.c_str(), expectEnd.c_str(), newStart.c_str(), newEnd.c_str());
+								}
+								pass = chartRootAfter && sameShapeId && sameChildCount && leftMoved && datesShifted;
+							}
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"INPLACE: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"INPLACE PASS\n" : L"INPLACE FAIL\n");
 				if (!pass) rc = 1;
 			}
 		} catch (const _com_error& e) {

@@ -40,6 +40,49 @@ static void PpLog(const wchar_t* msg)
 	::CloseHandle(h);
 }
 
+// Late-bound Application.StartNewUndoEntry — same idiom as
+// native/render/undo-probe.cpp's CallStartNewUndoEntry/InvokeName and
+// Overlay.cpp's StartNewUndoEntryIfPossible (kept as a separate copy here
+// since Connect.cpp and Overlay.cpp are different translation units with no
+// shared internal-linkage helpers). Called at the START of MutateChart,
+// before any mutation, so the whole ribbon/context-menu edit — including
+// UpdateGantt's occasional ungroup/regroup — collapses into ONE undo entry.
+// Best-effort: swallows failure, logs the HRESULT via PpLog.
+static void StartNewUndoEntryIfPossible(IDispatch* appDisp) {
+	if (!appDisp) return;
+	try {
+		DISPID dispid = 0;
+		LPOLESTR name = const_cast<LPOLESTR>(L"StartNewUndoEntry");
+		HRESULT hrIds = appDisp->GetIDsOfNames(IID_NULL, &name, 1, LOCALE_USER_DEFAULT, &dispid);
+		if (FAILED(hrIds)) {
+			wchar_t buf[80];
+			::swprintf_s(buf, 80, L"StartNewUndoEntry: GetIDsOfNames failed hr=0x%08lX", (unsigned long)hrIds);
+			PpLog(buf);
+			return;
+		}
+		DISPPARAMS dp = {};
+		EXCEPINFO ei = {};
+		UINT argErr = 0;
+		HRESULT hrInv = appDisp->Invoke(dispid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, &ei, &argErr);
+		if (FAILED(hrInv)) {
+			wchar_t buf[80];
+			::swprintf_s(buf, 80, L"StartNewUndoEntry: Invoke failed hr=0x%08lX", (unsigned long)hrInv);
+			PpLog(buf);
+		}
+		if (ei.bstrDescription) ::SysFreeString(ei.bstrDescription);
+		if (ei.bstrSource) ::SysFreeString(ei.bstrSource);
+		if (ei.bstrHelpFile) ::SysFreeString(ei.bstrHelpFile);
+	}
+	catch (const _com_error& e) {
+		wchar_t buf[80];
+		::swprintf_s(buf, 80, L"StartNewUndoEntry: COM error 0x%08lX", (unsigned long)e.Error());
+		PpLog(buf);
+	}
+	catch (...) {
+		PpLog(L"StartNewUndoEntry: unknown error");
+	}
+}
+
 static std::string Narrow(const wchar_t* w) {
 	if (!w || !*w) return "";
 	int len = (int)::wcslen(w);
@@ -391,20 +434,14 @@ void CConnect::MutateChart(const std::function<bool(PpDocument&, std::string& ou
 			return;
 		}
 
-		PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
-		PowerPoint::ShapesPtr shapes = slide->GetShapes();
-		long n = shapes->GetCount();
-		for (long i = 1; i <= n; ++i) {
-			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
-			_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
-			if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") {
-				sh->Delete();
-				break;
-			}
-		}
+		// Undo entry MUST start before any COM mutation so the whole edit
+		// (including UpdateGantt's occasional ungroup/regroup on a structural
+		// change) collapses into one undo step (see StartNewUndoEntryIfPossible
+		// above; idiom copied from native/render/undo-probe.cpp,
+		// VERDICT: GROUPING_WORKS in native/build/undo-probe.txt).
+		StartNewUndoEntryIfPossible(m_pApp);
 
-		int cnt = 0;
-		HRESULT hr = InsertGantt(m_pApp, doc, &cnt, selectId);
+		HRESULT hr = UpdateGantt(m_pApp, doc, selectId);
 		if (FAILED(hr)) {
 			::MessageBoxW(NULL, L"Could not rebuild the chart after the edit.", L"PowerPlanner", MB_OK | MB_ICONERROR);
 		}

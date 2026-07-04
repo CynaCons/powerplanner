@@ -208,6 +208,7 @@ void HandleToolbarButton(int button);
 void HandleHoverInsertRow();
 void RebuildChart(PpDocument& doc, const std::string& selectId);
 void OvLog(const wchar_t* msg);
+void StartNewUndoEntryIfPossible();
 void OpenInlineEditor(const EditRegion& region);
 void CommitInlineEdit();
 void CancelInlineEdit();
@@ -755,6 +756,50 @@ void CancelInlineEdit() {
 	HideInlineEditor();
 	ClearEditTarget();
 	FocusPowerPoint();
+}
+
+// Late-bound Application.StartNewUndoEntry (idiom copied from
+// native/render/undo-probe.cpp's CallStartNewUndoEntry/InvokeName): called at
+// the START of a user-gesture commit, before any mutation, so every COM edit
+// that follows — including a delete+recreate ungroup/regroup — collapses into
+// ONE undo entry (VERDICT: GROUPING_WORKS in native/build/undo-probe.txt; no
+// trailing call needed). Best-effort: swallows failure, just logs the HRESULT
+// from GetIDsOfNames/Invoke so a missing/broken API on some PowerPoint build
+// degrades to "no grouping" rather than a crash.
+void StartNewUndoEntryIfPossible() {
+	if (!g_app) return;
+	try {
+		IDispatch* appDisp = g_app;
+		DISPID dispid = 0;
+		LPOLESTR name = const_cast<LPOLESTR>(L"StartNewUndoEntry");
+		HRESULT hrIds = appDisp->GetIDsOfNames(IID_NULL, &name, 1, LOCALE_USER_DEFAULT, &dispid);
+		if (FAILED(hrIds)) {
+			wchar_t buf[80];
+			::swprintf_s(buf, 80, L"StartNewUndoEntry: GetIDsOfNames failed hr=0x%08lX", (unsigned long)hrIds);
+			OvLog(buf);
+			return;
+		}
+		DISPPARAMS dp = {};
+		EXCEPINFO ei = {};
+		UINT argErr = 0;
+		HRESULT hrInv = appDisp->Invoke(dispid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, &ei, &argErr);
+		if (FAILED(hrInv)) {
+			wchar_t buf[80];
+			::swprintf_s(buf, 80, L"StartNewUndoEntry: Invoke failed hr=0x%08lX", (unsigned long)hrInv);
+			OvLog(buf);
+		}
+		if (ei.bstrDescription) ::SysFreeString(ei.bstrDescription);
+		if (ei.bstrSource) ::SysFreeString(ei.bstrSource);
+		if (ei.bstrHelpFile) ::SysFreeString(ei.bstrHelpFile);
+	}
+	catch (const _com_error& e) {
+		wchar_t buf[80];
+		::swprintf_s(buf, 80, L"StartNewUndoEntry: COM error 0x%08lX", (unsigned long)e.Error());
+		OvLog(buf);
+	}
+	catch (...) {
+		OvLog(L"StartNewUndoEntry: unknown error");
+	}
 }
 
 // Append a debug line (shared with Connect's log).
@@ -2029,23 +2074,21 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	}
 }
 
+// Single choke point for every user-gesture commit (drag, create, toolbar
+// button, hover-insert row, inline-edit) — see CommitDragGesture/
+// CommitCreateGesture/HandleToolbarButton/HandleHoverInsertRow/
+// CommitInlineEdit, all of which call this. StartNewUndoEntryIfPossible()
+// MUST run before the mutation is applied to PowerPoint so the whole gesture
+// (including UpdateGantt's occasional ungroup/regroup on structural edits)
+// collapses into one undo entry. UpdateGantt reconciles the existing
+// CHART_ROOT in place when possible (pure move/resize/retext never deletes
+// or regroups anything) and only falls back to a full delete+re-emit
+// (InsertGantt) internally if reconciliation itself fails.
 void RebuildChart(PpDocument& doc, const std::string& selectId) {
+	StartNewUndoEntryIfPossible();
 	InvalidateHitSnapshot();
-	PowerPoint::_SlidePtr slide = g_app->GetActiveWindow()->GetView()->GetSlide();
-	PowerPoint::ShapesPtr shapes = slide->GetShapes();
-	long n = shapes->GetCount();
-	for (long i = 1; i <= n; ++i) {
-		PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
-		_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
-		if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") {
-			sh->Delete();
-			break;
-		}
-	}
-
-	int cnt = 0;
-	HRESULT hr = InsertGantt(g_app, doc, &cnt, selectId);
-	if (FAILED(hr)) OvLog(L"InsertGantt failed after toolbar edit");
+	HRESULT hr = UpdateGantt(g_app, doc, selectId);
+	if (FAILED(hr)) OvLog(L"UpdateGantt failed after gesture commit");
 }
 
 void HandleToolbarButton(int button) {

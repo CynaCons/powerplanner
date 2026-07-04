@@ -13,6 +13,21 @@ PpDocument MakeSampleDocument();
 // PowerPoint.Application (IDispatch). On success returns S_OK and sets *outShapeCount.
 HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, const std::string& selectId = "");
 
+// Diff-based rebuild: if an existing CHART_ROOT is present on the active
+// slide, recompute the layout/scene for `doc` and reconcile it against the
+// CURRENT children by (PP_KIND, PP_ID, ordinal) identity — move/resize and
+// retext shapes in place, add only brand-new shapes, delete only removed
+// ones, and refresh the group's PP_DOC/PP_PROJ tags. Ungroup/regroup only
+// happens when the child SET actually changed (adds or removes); a pure
+// move/resize/retext edit (drag, nudge, percent-without-crossing-zero,
+// inline-edit text) never deletes or regroups anything, so the group's own
+// COM shape identity and its total child count are stable across the call.
+// Falls back to a full InsertGantt (delete + re-emit) if no CHART_ROOT is
+// present yet, or if anything throws — callers should treat this the same
+// as InsertGantt (S_OK / failure HRESULT), and never assume in-place
+// reconciliation actually happened (check shape identity if that matters).
+HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& selectId = "");
+
 // Read the embedded document JSON back from the active slide's chart group
 // (PP_DOC on the CHART_ROOT). Returns "" if no PowerPlanner chart is present.
 std::string ReadGanttFromSlide(IDispatch* pApp);
