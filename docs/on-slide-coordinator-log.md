@@ -283,3 +283,16 @@ concurrently with each other or with ppoverlay/ppreflow.
   capture lifecycle, mirror race-free, wheel forwarding (minor GetParent nit),
   no capture leaks. Same SetOwnSelection rule pre-noted on rebuild-in-place.
 - cycle 6 — dispatched drag-move-resize (sonnet) with amendments.
+- drag-move-resize → validated clean rebuild, full suite + DRAG PASS → 9fbb001.
+  Modal drag engine: ghost + date tooltip in PaintOverlay, day snapping from
+  snapshot px-per-day (COM-free moves), NudgeTask/SetTaskDates(new op) commits,
+  ParseProj extracted to GanttBuilder.h. Agent found+fixed 2 real bugs:
+  (a) ReleaseCapture delivers WM_CAPTURECHANGED SYNCHRONOUSLY → snapshot gesture
+  state before releasing (else drags never commit); (b) SyncSelectionChrome right
+  after RebuildChart hits the invalidated snapshot and clears selection → set
+  own-selection only, let next Tick resync (toolbar-path convention). Stale Tick
+  auto-reflow block removed per review #3. Harness covers TaskBody drag only;
+  edge/milestone paths share commit logic but are uncovered (noted).
+- cycle 7 — dispatched drag-row-and-create (sonnet): vertical row retarget in
+  body drags + phantom-bar create on EmptyCell; stages DRAGROW then CREATE (CREATE
+  last; exit-on-first-fail makes CREATE PASS prove both; coordinator checks both).
