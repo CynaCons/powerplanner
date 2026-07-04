@@ -224,3 +224,18 @@ concurrently with each other or with ppoverlay/ppreflow.
   diffs and the selection-suppression / own-selection-model specs before further
   Overlay-lane dispatch (4 units landed since last checkpoint; both next units sit
   on the rewritten Overlay.cpp).
+- self-review #2 result — selection-suppression SAFE as specced (grip/Alt whole-group
+  path provably doesn't fight child-unselect; kind==CHART_ROOT check is one line in
+  Tick's existing selection read). Folded: (a) own-selection-model AMENDED to own the
+  SetCapture/ReleaseCapture/WM_CAPTURECHANGED lifecycle + 4px click-vs-drag threshold
+  now (avoids drag-unit retrofit); (b) NEW unit fix-capture-hardening — catch-all in
+  Tick (only _com_error caught today = crash risk), GDI+ GetLastStatus before ULW push,
+  WM_MOUSEWHEEL forward (Ctrl+wheel dead over chart), InvalidateHitSnapshot on
+  RebuildChart/ReflowFromSlide (stale-cache sequences), grip/badge overlap; (c) NEW
+  unit overlay-context-menu — right-click over chart is dead by design since capture;
+  overlay owns TrackPopupMenu with semantic zone-dependent items, pure
+  zone→menu→op mapping tested in ops (MENU MAP OK), after own-selection-model +
+  hardening. Clean: GDI+ lifetime/RAII, ULW resize handling, g_inTick cannot latch
+  (RAII unwind). Noted, not blocking: Alt-tap can pop PowerPoint KeyTips (UX wart).
+  TOKEN MODE: per user, sub-agents now run on Sonnet with condensed prompts.
+- cycle 3 — dispatched selection-suppression (sonnet).
