@@ -488,17 +488,23 @@ Delivered via the `onslide-coordinator` loop (13 gated units, log at
 - [x] Key architecture finding: no subclassable per-slide window → all interaction
       runs through our overlay + 150ms poller (`FALLBACK_POLLING_ONLY`)
 
-### N7 — Pure On-Slide Editor (V2, think-cell interaction capture) — PLANNED
-The chart's shapes become a render target only: the overlay captures ALL mouse input
-over the chart (HTCLIENT), suppresses PowerPoint-native selection of chart internals,
-and provides semantic drag interactions (move/resize/row-reassign/drag-to-create),
-per-pixel-alpha chrome, floating date/label editors, in-place rebuild with atomic
-undo, and add-in DPI awareness. Full unit breakdown + gates:
+### N7 — Pure On-Slide Editor (V2, think-cell interaction capture) — COMPLETE (2026-07-04)
+The chart's shapes are now a render target only: the overlay captures ALL mouse input
+over the chart, suppresses PowerPoint-native selection of chart internals, and
+provides the full think-cell interaction set. 15 gated units (10 planned + 2
+discovery spikes + 3 review-driven fix units), each committed with `[todo: <id>]`;
+10-stage COM harness green from clean rebuild. Log:
+[docs/on-slide-coordinator-log.md](docs/on-slide-coordinator-log.md), plan:
 [docs/on-slide-ux-plan.md §4](docs/on-slide-ux-plan.md)
-- [ ] U1 capture-surface · U2 selection-suppression · U3 alpha-overlay
-- [ ] U4 own-selection-model · U5 drag-move-resize · U6 drag-row-and-create
-- [ ] U7 rebuild-in-place (atomic undo) · U8 floating-editor
-- [ ] U9 keyboard-and-cursors · U10 dpi-and-monitors
+- [x] U1 capture-surface · U2 selection-suppression · U3 alpha-overlay
+- [x] U4 own-selection-model · U5 drag-move-resize · U6 drag-row-and-create
+- [x] U7 rebuild-in-place (one gesture = one undo) · U8 floating-editor
+- [x] U9 keyboard-and-cursors (scoped hotkeys) · U10 dpi-and-monitors
+- [x] + overlay-context-menu (semantic right-click), fix-capture-hardening,
+      fix-reconcile-robustness, disco-undo-entry (GROUPING_WORKS),
+      disco-keyboard-focus (HOTKEY)
+- [ ] Follow-ups (small): milestone recolor op; edge/milestone drag harness
+      coverage; manual DPI matrix run (plan §4.2.1); TrackPopupMenu flicker check
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
