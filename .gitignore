@@ -24,3 +24,8 @@ spec/visual/*.png
 
 # overlay harness capture artifact (written to CWD by ppoverlay.exe)
 overlay.png
+
+# local Claude Code settings (per-machine MCP enablement)
+.claude/settings.local.json
+# PowerSpawn inter-agent context (auto-generated audit trail)
+IAC.md
