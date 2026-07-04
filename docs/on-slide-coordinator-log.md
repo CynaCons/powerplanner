@@ -346,3 +346,13 @@ concurrently with each other or with ppoverlay/ppreflow.
   scaled edge band in GanttHitTest, all chrome constants DPI-scaled per tick,
   PMv2 awareness in harness exes, DPI HELPER OK marker, manual matrix appended
   to plan §4.2 U10.
+- dpi-and-monitors → validated clean rebuild; OPS+DPI HELPER OK, all 8 stages,
+  full suite → bbb2330. Pure HtScalePx (round-half-away) + HtSnapshot.edgeBandPx;
+  ~25 chrome metrics DPI-scaled (badge/toolbar/grip/handles/tooltip/fonts/strokes/
+  drag threshold); DPI probed per ShowOverlayForChartRect, change → invalidate
+  snapshot + repaint; PMv2 awareness (dynamic resolve) in all 3 harness exes;
+  manual 100-200% matrix appended to plan §4.2.1 (non-gating).
+- cycle 11 — dispatched overlay-context-menu (sonnet): pure zone→menu→op model in
+  GanttHitTest (MENU MAP OK gate), TrackPopupMenu on NOACTIVATE via
+  SetForegroundWindow+WM_NULL idiom, commands through the standard undo+ops+
+  UpdateGantt commit path.
