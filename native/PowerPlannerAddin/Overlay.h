@@ -41,6 +41,28 @@ enum OverlayHotkeyIdForTest {
 	OVERLAY_HOTKEY_SHIFT_RIGHT_FOR_TEST = 5,
 };
 
+// ---- input-neutral harness test seams --------------------------------------
+// Production behavior is UNCHANGED (both are no-ops until a harness calls the
+// setter below): every place Overlay.cpp reads the PHYSICAL cursor position
+// (GetCursorPos for hover/WM_SETCURSOR) or the physical Alt keystate
+// (WM_NCHITTEST's escape-hatch check) consults this override first. This lets
+// the overlay-test.cpp harness fully define a gesture via POSTED WM_MOUSE*
+// messages instead of also moving the real OS cursor / synthesizing real key
+// events (which used to steal the user's mouse/keyboard while gates ran).
+//
+// `enabled=false` restores normal GetCursorPos/GetKeyState(VK_MENU) behavior.
+// `altDown` only matters while `enabled` is true.
+void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altDown = false);
+
+// Foreground/host-active override consulted by IsHostActiveForOverlayChrome,
+// the hotkey registration's foreground-scoping check, and the Esc-clear fgPid
+// check. mode: -1 = off (use the real GetForegroundWindow-based logic), 0 =
+// force "host inactive" (as if some other app were foreground), 1 = force
+// "host active" (as if PowerPoint/the overlay were foreground) — lets the
+// harness exercise host-scoping (the SCOPE stage) without ever calling
+// SetForegroundWindow on a real window.
+void Overlay_SetHostActiveOverrideForTest(int mode);
+
 // ---- floating card editor (double-click TaskBody/Milestone) test hooks ----
 // The card is a real top-level window (WS_EX_TOOLWINDOW), registered under
 // this class name (mirrors Overlay.cpp's private kCardClass, kept in sync by

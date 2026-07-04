@@ -98,6 +98,37 @@ Gdiplus::REAL g_tooltipFontPx = kBaseTooltipFontPx;
 Gdiplus::REAL g_badgeFontPx = kBaseBadgeFontPx;
 Gdiplus::REAL g_buttonFontPx = kBaseButtonFontPx;
 
+// ---- input-neutral harness test seams --------------------------------------
+// Off (g_cursorOverrideEnabled == false) in production: every GetCursorPos
+// call and the WM_NCHITTEST Alt-passthrough check behave exactly as before.
+// The overlay-test.cpp harness enables this once at startup and updates
+// g_cursorOverrideScreenPt/g_cursorOverrideAltDown in the same place it used
+// to call the real SetCursorPos/keybd_event, so posted WM_MOUSE*/WM_HOTKEY
+// messages fully define a gesture without touching the user's real mouse or
+// keyboard. See Overlay_SetCursorPosOverrideForTest in Overlay.h.
+bool  g_cursorOverrideEnabled = false;
+POINT g_cursorOverrideScreenPt = {};
+bool  g_cursorOverrideAltDown = false;
+
+// Off (-1) in production: IsHostActiveForOverlayChrome, the hotkey
+// registration's foreground-scoping check, and the Esc-clear fgPid check all
+// fall back to the real GetForegroundWindow-based logic. 0/1 let the harness
+// declare "host inactive"/"host active" without a real SetForegroundWindow
+// call. See Overlay_SetHostActiveOverrideForTest in Overlay.h.
+int g_hostActiveOverrideMode = -1;
+
+// Single choke point for "where is the physical cursor": everything in this
+// file that used to call ::GetCursorPos directly now calls this instead, so
+// the harness's cursor override (once enabled) is consulted EVERYWHERE, not
+// just at whichever call site a future edit happens to touch.
+bool OverlayGetCursorPos(POINT* pt) {
+	if (g_cursorOverrideEnabled) {
+		*pt = g_cursorOverrideScreenPt;
+		return true;
+	}
+	return ::GetCursorPos(pt) != 0;
+}
+
 PowerPoint::_ApplicationPtr g_app;
 HWND     g_hwnd = NULL;
 HINSTANCE g_inst = NULL;
@@ -814,7 +845,7 @@ bool UpdateHoverFromCursor() {
 	ClearHoverState();
 
 	POINT pt = {};
-	if (!::GetCursorPos(&pt) || !::PtInRect(&g_chartScreenRect, pt)) {
+	if (!OverlayGetCursorPos(&pt) || !::PtInRect(&g_chartScreenRect, pt)) {
 		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect);
 	}
 
@@ -1504,7 +1535,7 @@ HCURSOR HCursorForHtCursor(HtCursor c) {
 // and off any chrome widget).
 bool HandleSetCursor(HWND hwnd) {
 	POINT screenPt = {};
-	if (!::GetCursorPos(&screenPt)) return false;
+	if (!OverlayGetCursorPos(&screenPt)) return false;
 	POINT pt = screenPt;
 	::ScreenToClient(hwnd, &pt);
 
@@ -2021,8 +2052,14 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	try {
 	if (msg == WM_NCHITTEST) {
 		// Alt = escape hatch: let PowerPoint see the mouse so the user can
-		// natively select/move the whole group under the overlay.
-		if (::GetKeyState(VK_MENU) < 0) return HTTRANSPARENT;
+		// natively select/move the whole group under the overlay. In harness
+		// runs (g_cursorOverrideEnabled), physical Alt keystate is irrelevant
+		// by design (see Overlay_SetCursorPosOverrideForTest) — consult the
+		// override's altDown flag instead of the real GetKeyState so a stray
+		// physical Alt held by the user running the harness in the background
+		// can never change gesture routing.
+		bool altDown = g_cursorOverrideEnabled ? g_cursorOverrideAltDown : (::GetKeyState(VK_MENU) < 0);
+		if (altDown) return HTTRANSPARENT;
 		POINT screenPt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		// The overlay captures ALL mouse input over the chart area; PowerPoint
 		// never sees chart clicks. Outside the chart, only the chrome widgets
@@ -3096,11 +3133,18 @@ void UpdateHotkeyRegistration() {
 	bool selectionIsTaskOrMilestone = (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE") && !g_ownSelId.empty();
 
 	bool foregroundIsOurs = false;
-	HWND fg = ::GetForegroundWindow();
-	if (fg) {
-		DWORD fgPid = 0;
-		::GetWindowThreadProcessId(fg, &fgPid);
-		foregroundIsOurs = (fgPid == ::GetCurrentProcessId());
+	if (g_hostActiveOverrideMode >= 0) {
+		// Harness override: same bypass as IsHostActiveForOverlayChrome, so
+		// KEYS can rely on hotkeys being registered without a real foreground
+		// window ever being ours.
+		foregroundIsOurs = (g_hostActiveOverrideMode != 0);
+	} else {
+		HWND fg = ::GetForegroundWindow();
+		if (fg) {
+			DWORD fgPid = 0;
+			::GetWindowThreadProcessId(fg, &fgPid);
+			foregroundIsOurs = (fgPid == ::GetCurrentProcessId());
+		}
 	}
 
 	bool notMidGesture = !g_gestureActive && !g_mutating && !IsEditSessionActive();
@@ -3457,6 +3501,12 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 //
 // Also requires ppRoot to be non-iconic (not minimized) and visible.
 bool IsHostActiveForOverlayChrome(HWND ppRoot) {
+	// Harness override: bypass the real GetForegroundWindow-based logic
+	// entirely so the SCOPE stage (and any other stage relying on host-active
+	// scoping) can flip this deterministically without a real
+	// SetForegroundWindow call. See Overlay_SetHostActiveOverrideForTest.
+	if (g_hostActiveOverrideMode >= 0) return g_hostActiveOverrideMode != 0;
+
 	if (!ppRoot) return false;
 	if (::IsIconic(ppRoot)) return false;
 	if (!::IsWindowVisible(ppRoot)) return false;
@@ -3523,10 +3573,16 @@ void Tick() {
 			// task brief) — it stays on this existing GetAsyncKeyState poll,
 			// so latency is bounded by the 150ms tick period like the gesture-
 			// cancel case above.
-			HWND fg = ::GetForegroundWindow();
-			DWORD fgPid = 0;
-			if (fg) ::GetWindowThreadProcessId(fg, &fgPid);
-			if (fg && fgPid == ::GetCurrentProcessId()) {
+			bool fgIsOurs;
+			if (g_hostActiveOverrideMode >= 0) {
+				fgIsOurs = (g_hostActiveOverrideMode != 0);
+			} else {
+				HWND fg = ::GetForegroundWindow();
+				DWORD fgPid = 0;
+				if (fg) ::GetWindowThreadProcessId(fg, &fgPid);
+				fgIsOurs = (fg && fgPid == ::GetCurrentProcessId());
+			}
+			if (fgIsOurs) {
 				ClearOwnSelection();
 			}
 		}
@@ -3743,3 +3799,13 @@ void OverlayStop() {
 HWND OverlayHwnd() { return g_hwnd; }
 
 const char* Overlay_GetSelectedIdForTest() { return g_ownSelId.c_str(); }
+
+void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altDown) {
+	g_cursorOverrideEnabled = enabled;
+	g_cursorOverrideScreenPt = screenPt;
+	g_cursorOverrideAltDown = altDown;
+}
+
+void Overlay_SetHostActiveOverrideForTest(int mode) {
+	g_hostActiveOverrideMode = mode;
+}

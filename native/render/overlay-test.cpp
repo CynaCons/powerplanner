@@ -9,6 +9,16 @@
 // remaining stages) — but always quits PowerPoint and releases every COM
 // pointer BEFORE CoUninitialize so POWERPNT never leaks.
 //
+// INPUT-NEUTRAL: this harness makes ZERO real/synthetic input calls
+// (SetCursorPos, SetForegroundWindow, keybd_event, SendInput — poisoned to
+// compile errors below). Gestures are defined entirely by POSTED WM_MOUSE*/
+// WM_HOTKEY messages to the overlay hwnd, combined with Overlay.h's
+// Overlay_SetCursorPosOverrideForTest / Overlay_SetHostActiveOverrideForTest
+// test seams so Overlay.cpp's physical-cursor/foreground reads see whatever
+// the harness declares instead of the real OS mouse/keyboard/focus state.
+// The user keeps working while gates run. See the "INPUT NEUTRAL OK" marker
+// printed just before the final exit code.
+//
 //   Stage 1: ALPHA    — the overlay hwnd must be driven by UpdateLayeredWindow
 //                       (per-pixel premultiplied alpha), NOT LWA_COLORKEY.
 //                       GetLayeredWindowAttributes FAILING is the PASS
@@ -55,6 +65,19 @@
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
 
+// ---- INPUT-NEUTRAL POISON BLOCK --------------------------------------------
+// This harness must NEVER touch real input again (it used to move the user's
+// real mouse cursor and synthesize real keyboard/foreground-focus events
+// while gates ran). Gestures are defined ENTIRELY by posted WM_MOUSE*/
+// WM_HOTKEY messages plus Overlay.h's Overlay_SetCursorPosOverrideForTest /
+// Overlay_SetHostActiveOverrideForTest test seams. Poison the four forbidden
+// APIs to compile errors below this point (all legitimate includes are above)
+// so reintroducing a real-input call fails the BUILD, not just a code review.
+#define SetCursorPos(...) PP_FORBIDDEN_REAL_INPUT_API_SetCursorPos
+#define SetForegroundWindow(...) PP_FORBIDDEN_REAL_INPUT_API_SetForegroundWindow
+#define keybd_event(...) PP_FORBIDDEN_REAL_INPUT_API_keybd_event
+#define SendInput(...) PP_FORBIDDEN_REAL_INPUT_API_SendInput
+
 using namespace Gdiplus;
 
 static int GetEncoderClsid(const WCHAR* format, CLSID* clsid) {
@@ -86,6 +109,27 @@ static void PumpFor(DWORD ms) {
 	}
 }
 
+// INPUT NEUTRAL OK gate: belt-and-braces runtime check that the cursor
+// override was actually exercised where it matters most (DRAG, the stage
+// most sensitive to physical-cursor interleaving in the old implementation).
+// Set true only inside the DRAG stage once Overlay_SetCursorPosOverrideForTest
+// has been called with enabled=true for that stage's gesture; if DRAG never
+// runs (an earlier stage already failed) or somehow skips the override call,
+// this stays false and the final marker is suppressed even if rc==0.
+static bool g_cursorOverrideUsedDuringDrag = false;
+
+// Small helper: tell Overlay.cpp (via the test override) where the physical
+// cursor is, in SCREEN coordinates — a drop-in replacement for the old
+// ::SetCursorPos(screenPt.x, screenPt.y) call sites. Callers still post their
+// own WM_MOUSEMOVE/WM_LBUTTONDOWN/etc with CLIENT coordinates immediately
+// after, exactly as before; this just keeps Overlay.cpp's hover/WM_SETCURSOR
+// logic (the only remaining physical-cursor readers, both routed through
+// OverlayGetCursorPos) in lockstep with each posted message instead of
+// reading a real, possibly-stale OS cursor position.
+static void SetOverlayCursorOverride(POINT screenPt, bool altDown = false) {
+	Overlay_SetCursorPosOverrideForTest(true, screenPt, altDown);
+}
+
 // Detached watchdog: if anything hangs (modal PowerPoint dialog, COM stall),
 // kill the harness after 120s instead of leaking POWERPNT forever.
 static DWORD WINAPI WatchdogProc(LPVOID) {
@@ -95,99 +139,42 @@ static DWORD WINAPI WatchdogProc(LPVOID) {
 	return 0;
 }
 
-// The add-in's overlay now scopes its chrome to whether PowerPoint is the
+// The add-in's overlay scopes its chrome to whether PowerPoint is the
 // FOREGROUND app (see Overlay.cpp's IsHostActiveForOverlayChrome) — a
-// necessary fix for the "chrome stays on top of other apps" bug, but it
-// means this harness (a separate process whose own console/window can itself
-// become foreground, e.g. after SendInput or a COM call returns) must
-// actively re-steal the foreground before every stage that depends on the
-// overlay chrome being visible, or that stage would spuriously fail with an
-// now-hidden overlay that has nothing to do with a real regression.
+// necessary fix for the "chrome stays on top of other apps" bug. This harness
+// used to re-steal the REAL OS foreground before every stage that depends on
+// the overlay chrome being visible (via SetForegroundWindow, with an Alt-tap
+// fallback for Windows' foreground-lock heuristic) — which stole focus from
+// whatever the user was doing while gates ran, and the Alt-tap itself caused
+// confirmed nondeterministic KEYS failures (a lingering Alt-down keystate
+// flips WM_NCHITTEST's Alt-passthrough hatch and turns later key events into
+// Alt+<key> chords).
 //
-// SetForegroundWindow can be silently refused by Windows' foreground-lock
-// heuristics when the calling process didn't just receive input; the
-// classic workaround is to tap Alt (keybd_event VK_MENU down/up) around the
-// call, which satisfies the "last input event" requirement Windows checks.
-//
-// BUT the Alt-tap is itself hazardous here (coordinator-confirmed
-// nondeterministic KEYS failures, two distinct symptoms across runs): a
-// lingering Alt-down async keystate (a) flips the overlay's WM_NCHITTEST
-// into its HTTRANSPARENT Alt-passthrough hatch so subsequent clicks bypass
-// the overlay entirely, and (b) turns later key events into Alt+<key>
-// chords that a modifierless hotkey never matches. So:
-//   1. Try a PLAIN SetForegroundWindow first — no key events at all. It
-//      succeeds whenever this process already owns the foreground or has
-//      steal permission, which is the common case mid-run.
-//   2. Only fall back to the Alt-tap when the plain call is refused.
-//   3. After ANY Alt-tap, actively guarantee Alt is released before
-//      returning: re-send VK_MENU keyups (plain + extended scancode) and
-//      poll GetAsyncKeyState(VK_MENU) until it reads clear, time-bounded.
-//   4. On success, pump ~2 overlay tick periods (300ms, time-bounded) so
-//      the overlay's 150ms Tick has observed the new foreground state
-//      before the caller starts posting gestures at it.
-static bool EnsureForeground(HWND targetHwnd, DWORD timeoutMs = 3000) {
-	if (!targetHwnd) return false;
-	HWND targetRoot = ::GetAncestor(targetHwnd, GA_ROOT);
-	if (!targetRoot) targetRoot = targetHwnd;
-
-	auto isForeground = [targetRoot]() {
-		HWND fg = ::GetForegroundWindow();
-		return fg && ::GetAncestor(fg, GA_ROOT) == targetRoot;
-	};
-
-	bool usedAltTap = false;
-	bool ok = false;
-	DWORD deadline = ::GetTickCount() + timeoutMs;
-	for (;;) {
-		if (isForeground()) { ok = true; break; }
-
-		// Plain attempt first: zero side effects on keyboard state.
-		::SetForegroundWindow(targetRoot);
-		PumpFor(50);
-		if (isForeground()) { ok = true; break; }
-		if ((long)(deadline - ::GetTickCount()) <= 0) break;
-
-		// Refused: fall back to the Alt-tap variant.
-		usedAltTap = true;
-		::keybd_event(VK_MENU, 0, 0, 0);
-		::keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
-		::SetForegroundWindow(targetRoot);
-		PumpFor(50);
-		if (isForeground()) { ok = true; break; }
-		if ((long)(deadline - ::GetTickCount()) <= 0) break;
-
-		::Sleep(50);
-	}
-
-	if (usedAltTap) {
-		// Guarantee Alt is UP before anything else happens: send keyups for
-		// both the plain and extended scancode variants (left/right Alt),
-		// then poll the async state until it reads clear — bounded, so a
-		// wedged input queue can't stall the harness.
-		const BYTE kAltScan = (BYTE)::MapVirtualKeyW(VK_MENU, MAPVK_VK_TO_VSC);
-		::keybd_event(VK_MENU, kAltScan, KEYEVENTF_KEYUP, 0);
-		::keybd_event(VK_MENU, kAltScan, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
-		DWORD altDeadline = ::GetTickCount() + 500;
-		while (::GetAsyncKeyState(VK_MENU) & 0x8000) {
-			::keybd_event(VK_MENU, kAltScan, KEYEVENTF_KEYUP, 0);
-			if ((long)(altDeadline - ::GetTickCount()) <= 0) break;
-			::Sleep(15);
-		}
-	}
-
-	if (ok) {
-		// Settle: let the overlay's 150ms Tick poller observe the new
-		// foreground state (two tick periods, time-bounded) before the
-		// caller interacts with the overlay.
-		PumpFor(300);
-	}
-	return ok;
+// Replaced entirely by Overlay_SetHostActiveOverrideForTest(1): this declares
+// "the host is active" directly to the overlay's own scoping logic, with zero
+// real input and zero dependency on which window the OS actually considers
+// foreground. EnsureForeground/RequireForeground below keep their names (and
+// every call site is unchanged) but now just set the override + settle-pump;
+// "did it take effect" is verified by probing the overlay's own visible state
+// rather than GetForegroundWindow.
+static bool EnsureForeground(HWND /*targetHwnd*/, DWORD /*timeoutMs*/ = 3000) {
+	Overlay_SetHostActiveOverrideForTest(1);
+	// Settle: let the overlay's 150ms Tick poller observe the override (two
+	// tick periods, time-bounded) before the caller interacts with the
+	// overlay.
+	PumpFor(300);
+	HWND ov = OverlayHwnd();
+	// No overlay yet (very first call, before OverlayStart): nothing to probe
+	// — the override is set, which is all this call can promise at that point.
+	return !ov || ::IsWindowVisible(ov);
 }
 
 // Wrapper used before every visibility-dependent stage: on failure, prints
 // the environment-failure marker (distinct from a stage FAIL) and sets rc
-// nonzero so a harness/OS environment problem (foreground-lock, no active
-// desktop, etc.) is never misread as an overlay-scoping regression.
+// nonzero so an environment problem is never misread as an overlay-scoping
+// regression. "Failure" here means the override didn't produce a visible
+// overlay within the settle pump — never a real foreground-steal refusal,
+// since no real foreground call is made anymore.
 static bool RequireForeground(HWND targetHwnd, int* rc) {
 	if (EnsureForeground(targetHwnd)) return true;
 	wprintf(L"FOREGROUND STEAL FAILED\n");
@@ -209,6 +196,35 @@ static void SetHarnessDpiAwareness() {
 		if (pSetCtx && pSetCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) return;
 	}
 	::SetProcessDPIAware();
+}
+
+// The gate must be invisible to the user, not just input-neutral: PowerPoint
+// (and, through it, the overlay — which follows the chart's screen rect via
+// PointsToScreenPixels, so it lands wherever PowerPoint's window is) is moved
+// entirely outside the virtual desktop before any stage runs, so nothing
+// flashes on top of whatever the user is doing while the gate runs.
+// SetWindowPos with SWP_NOACTIVATE/SWP_NOZORDER — this is a pure geometry
+// move, not a focus change, so it doesn't fight the host-active override.
+static bool MoveWindowOffscreen(HWND hwnd) {
+	if (!hwnd) return false;
+	RECT r;
+	if (!::GetWindowRect(hwnd, &r)) return false;
+	int vRight = ::GetSystemMetrics(SM_XVIRTUALSCREEN) + ::GetSystemMetrics(SM_CXVIRTUALSCREEN);
+	int w = r.right - r.left, h = r.bottom - r.top;
+	int newX = vRight + 200;
+	int newY = r.top;
+	::SetWindowPos(hwnd, NULL, newX, newY, w, h, SWP_NOACTIVATE | SWP_NOZORDER);
+
+	RECT after;
+	int vLeft = ::GetSystemMetrics(SM_XVIRTUALSCREEN);
+	bool ok = ::GetWindowRect(hwnd, &after) && after.left >= vRight;
+	(void)vLeft;
+	if (ok) {
+		wprintf(L"OFFSCREEN AT %ld,%ld\n", after.left, after.top);
+	} else {
+		wprintf(L"OFFSCREEN FAILED\n");
+	}
+	return ok;
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -258,20 +274,46 @@ int wmain(int argc, wchar_t** argv) {
 				}
 			}
 
-			// Maximize + activate so the slide is actually rendered on screen
-			// behind the (transparent) overlay before we capture.
+			// Maximize + activate so the slide is actually rendered (behind the
+			// transparent overlay) and PointsToScreenPixels resolves real
+			// coordinates — but the whole point of this harness being
+			// input-neutral is undermined if it then flashes visibly on top
+			// of whatever the user is doing, so immediately push the window
+			// fully outside the virtual desktop. The overlay tracks the
+			// chart's screen rect every Tick() (PointsToScreenPixelsX/Y off
+			// this same window), so it follows PowerPoint offscreen too —
+			// nothing else needs to move.
 			try { app->GetActiveWindow()->PutWindowState(PowerPoint::ppWindowMaximized); } catch (...) {}
 			try { app->Activate(); } catch (...) {}
 			HWND ppHwnd = (HWND)(intptr_t)app->GetHWND();
 			::ShowWindow(ppHwnd, SW_SHOWMAXIMIZED);
 			RequireForeground(ppHwnd, &rc);
 			PumpFor(600);
+			if (rc == 0 && !MoveWindowOffscreen(ppHwnd)) rc = 1;
+			PumpFor(300);
 
 			if (rc == 0) {
 				OverlayStart(app);
 				overlayStarted = true;
 				wprintf(L"harness: overlay started\n");
 				PumpFor(2200);  // let the polling timer fire + paint
+
+				// Verify the overlay itself (not just PowerPoint's root) ended
+				// up offscreen — it's a SEPARATE top-level window positioned
+				// from PointsToScreenPixels each Tick(), so this is the actual
+				// guarantee the user cares about, not an inference from
+				// PowerPoint's window alone.
+				HWND ov = OverlayHwnd();
+				RECT ovRect;
+				int vRight = ::GetSystemMetrics(SM_XVIRTUALSCREEN) + ::GetSystemMetrics(SM_CXVIRTUALSCREEN);
+				if (ov && ::GetWindowRect(ov, &ovRect)) {
+					if (ovRect.left >= vRight) {
+						wprintf(L"OFFSCREEN AT %ld,%ld\n", ovRect.left, ovRect.top);
+					} else {
+						wprintf(L"OFFSCREEN FAILED\n");
+						rc = 1;
+					}
+				}
 			}
 
 			// ---- stage 1: ALPHA -------------------------------------------
@@ -332,13 +374,11 @@ int wmain(int argc, wchar_t** argv) {
 			// Shape.Select() on a group MEMBER (obtained via GroupItems) does
 			// NOT reliably make that member the native selection — PowerPoint
 			// can resolve it back to the top-level group depending on
-			// view/timing. Try the direct GroupItems->Select() route first
-			// (cheapest, most deterministic when it works); fall back to the
-			// Alt+click passthrough hatch (Overlay.cpp's WM_NCHITTEST treats
-			// Alt as HTTRANSPARENT so clicks reach PowerPoint natively — one
-			// Alt+click selects the group, a second Alt+click at the same
-			// point sub-selects the child under the cursor, matching real
-			// click-into-group behavior) if the direct route doesn't stick.
+			// view/timing. Use the direct GroupItems->Select() route (pure
+			// COM, no synthetic input at all); if it doesn't stick, the stage
+			// degrades gracefully (see "SUPPRESS PASS (child-select
+			// unsimulatable)" below) rather than falling back to a real
+			// Alt+click (which this harness no longer performs).
 			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
@@ -393,60 +433,18 @@ int wmain(int argc, wchar_t** argv) {
 						}
 					}
 
-					// ---- 3a-ii: Alt+click passthrough fallback ------------
-					if (landedKind.empty() && chartRoot && taskChild) {
-						wprintf(L"SUPPRESS diag: direct select did not stick; trying Alt+click passthrough\n");
-						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
-						float left = taskChild->GetLeft(), top = taskChild->GetTop();
-						float w = taskChild->GetWidth(), h = taskChild->GetHeight();
-						int sx = win->PointsToScreenPixelsX(left + w / 2.0f);
-						int sy = win->PointsToScreenPixelsY(top + h / 2.0f);
-
-						HWND ppHwndInner = (HWND)(intptr_t)app->GetHWND();
-						EnsureForeground(ppHwndInner);
-						PumpFor(150);
-
-						auto altClickAt = [&](int x, int y) {
-							INPUT altDown = {}; altDown.type = INPUT_KEYBOARD; altDown.ki.wVk = VK_MENU;
-							::SendInput(1, &altDown, sizeof(INPUT));
-							::SetCursorPos(x, y);
-							PumpFor(30);
-							INPUT down = {}; down.type = INPUT_MOUSE; down.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-							INPUT up = {};   up.type = INPUT_MOUSE;   up.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-							::SendInput(1, &down, sizeof(INPUT));
-							PumpFor(30);
-							::SendInput(1, &up, sizeof(INPUT));
-							PumpFor(30);
-							INPUT altUp = {}; altUp.type = INPUT_KEYBOARD; altUp.ki.wVk = VK_MENU; altUp.ki.dwFlags = KEYEVENTF_KEYUP;
-							::SendInput(1, &altUp, sizeof(INPUT));
-						};
-
-						// The group is already selected (via COM, deterministic);
-						// a single Alt+click directly on the child, while the
-						// group is the current selection, is PowerPoint's
-						// native "select sub-object within selected group"
-						// gesture (same as a real user's second click).
-						chartRoot->Select(Office::msoTrue);
-						PumpFor(300);
-						altClickAt(sx, sy);
-						PumpFor(300);
-
-						PowerPoint::SelectionPtr diagSel2 = app->GetActiveWindow()->GetSelection();
-						if (diagSel2 && diagSel2->GetType() == PowerPoint::ppSelectionShapes) {
-							PowerPoint::ShapeRangePtr diagSr2 = diagSel2->GetShapeRange();
-							if (diagSr2 && diagSr2->GetCount() >= 1) {
-								PowerPoint::ShapePtr diagSh2 = diagSr2->Item(_variant_t(1L));
-								_bstr_t dk2 = diagSh2->GetTags()->Item(_bstr_t(L"PP_KIND"));
-								std::wstring kindStr2 = dk2.length() ? (const wchar_t*)dk2 : L"";
-								wprintf(L"SUPPRESS diag: after Alt+click x2, PP_KIND=%s\n", kindStr2.empty() ? L"(none)" : kindStr2.c_str());
-								if (!kindStr2.empty() && kindStr2 != L"CHART_ROOT") landedKind = kindStr2;
-							}
-						}
-					}
-
+					// NOTE: this stage previously fell back to a real Alt+click
+					// (SendInput + SetCursorPos) when the direct GroupItems->
+					// Select() route above didn't stick, to exercise
+					// PowerPoint's native "select sub-object within selected
+					// group" gesture. Removed per the input-neutral harness
+					// requirement (zero real input APIs) — the direct COM
+					// select is deterministic in practice, and the stage
+					// already degrades gracefully (see "SUPPRESS PASS
+					// (child-select unsimulatable)" below) if it ever isn't.
 					if (landedKind.empty()) {
 						childSelectable = false;
-						wprintf(L"SUPPRESS: could not produce a native chart-child selection via any route (direct select or Alt+click passthrough)\n");
+						wprintf(L"SUPPRESS: could not produce a native chart-child selection via direct GroupItems->Select\n");
 					}
 
 					bool childSuppressed = true;
@@ -649,20 +647,17 @@ int wmain(int argc, wchar_t** argv) {
 						POINT clientPt = screenPt;
 						::ScreenToClient(ov, &clientPt);
 
-						// Park the REAL OS cursor at the gesture point before posting
-						// synthetic messages. WM_LBUTTONDOWN/MOUSEMOVE/UP here are
-						// POSTED (not real hardware input), but the SUPPRESS stage
-						// earlier used SendInput (real hardware events) and left the
-						// physical cursor parked wherever that was — a later
-						// SetCapture() in this window can make Windows resync with a
-						// REAL WM_MOUSEMOVE at that STALE physical position, which
-						// then interleaves with our posted synthetic moves and can
-						// spuriously retarget an in-progress row-reassign drag
-						// (observed: DRAGROW intermittently not detecting the row
-						// change because a stray real mousemove at the old SUPPRESS
-						// click point raced with our posted moves). Moving the real
-						// cursor here makes any such stray event harmless (same point).
-						::SetCursorPos(screenPt.x, screenPt.y);
+						// Set the overlay's cursor-position OVERRIDE to the gesture
+						// point before posting synthetic messages. Historically this
+						// also moved the REAL OS cursor (SetCursorPos): while this
+						// window holds capture, Windows can deliver a REAL
+						// WM_MOUSEMOVE reporting the actual physical cursor position,
+						// which would otherwise interleave with (and could even race)
+						// our posted synthetic moves. Now that Overlay.cpp's hover/
+						// WM_SETCURSOR logic reads ONLY this override (never the real
+						// GetCursorPos) whenever it's enabled, a stray real mousemove
+						// can no longer retarget anything — no real cursor move needed.
+						SetOverlayCursorOverride(screenPt);
 
 						// Select it first (same click-select route as OWNSEL) so we
 						// can also assert the selection survives the drag.
@@ -712,24 +707,21 @@ int wmain(int argc, wchar_t** argv) {
 							PumpFor(60);
 							// Several intermediate moves (not a single jump) so
 							// g_dragActive latches on the first > 4px move, matching
-							// a real drag gesture. SetCursorPos tracks each posted move:
-							// while this window holds capture, Windows can deliver a
-							// REAL WM_MOUSEMOVE reporting the actual (else-stale)
-							// physical cursor position, which would otherwise interleave
-							// with — and can even arrive AFTER — our posted synthetic
-							// moves (confirmed empirically via the DRAGROW stage's
-							// row-target flake). Keeping the real cursor in sync makes
-							// any such stray event harmless.
+							// a real drag gesture. The cursor override is updated at
+							// each step in lockstep with the posted WM_MOUSEMOVE (same
+							// reasoning as the down-point override above), and this is
+							// the stage the INPUT NEUTRAL OK gate checks was exercised.
+							g_cursorOverrideUsedDuringDrag = true;
 							const int kSteps = 5;
 							for (int s = 1; s <= kSteps; ++s) {
 								int mx = clientPt.x + (int)(shiftPx * s / kSteps);
-								::SetCursorPos(screenPt.x + (mx - clientPt.x), screenPt.y);
+								SetOverlayCursorOverride({ screenPt.x + (mx - clientPt.x), screenPt.y });
 								LPARAM moveLp = MAKELPARAM((short)mx, (short)clientPt.y);
 								::PostMessageW(ov, WM_MOUSEMOVE, 0, moveLp);
 								PumpFor(60);
 							}
 							int finalX = clientPt.x + (int)shiftPx;
-							::SetCursorPos(screenPt.x + (int)shiftPx, screenPt.y);
+							SetOverlayCursorOverride({ screenPt.x + (int)shiftPx, screenPt.y });
 							LPARAM upLp = MAKELPARAM((short)finalX, (short)clientPt.y);
 							::PostMessageW(ov, WM_LBUTTONUP, 0, upLp);
 							PumpFor(800);
@@ -869,11 +861,12 @@ int wmain(int argc, wchar_t** argv) {
 						int bandHeightPx = nextRowTopScreen - rowTopScreen;
 						std::wstring targetRowId = rowRects[origIdx + 1].rowId;
 
-						// See the DRAG stage's SetCursorPos comment: park the real
-						// cursor at the gesture point first so a stray real
-						// WM_MOUSEMOVE (from Windows resyncing on SetCapture) can't
-						// race our posted moves with a stale position.
-						::SetCursorPos(screenPt.x, screenPt.y);
+						// See the DRAG stage's cursor-override comment: set the
+						// override to the gesture's down-point first, in lockstep
+						// with the posted LBUTTONDOWN, so Overlay.cpp's hover/
+						// WM_SETCURSOR logic (the only remaining physical-cursor
+						// readers) never sees a stale position.
+						SetOverlayCursorOverride(screenPt);
 
 						LPARAM downLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
 						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, downLp);
@@ -881,32 +874,22 @@ int wmain(int argc, wchar_t** argv) {
 						const int kSteps = 5;
 						for (int s = 1; s <= kSteps; ++s) {
 							int my = clientPt.y + (int)((long)bandHeightPx * s / kSteps);
-							// ROOT CAUSE (confirmed empirically): while this window
-							// holds mouse capture, Windows periodically delivers a
-							// REAL WM_MOUSEMOVE reporting wherever the PHYSICAL cursor
-							// actually is. We only ever POST synthetic messages here
-							// (which move the overlay's notion of pointer position but
-							// NOT the real OS cursor), so if the real cursor is left
-							// parked at the gesture's start point, that stray real
-							// event keeps reporting the ORIGINAL y — and, being a live
-							// event (not a one-time backlog), it can interleave
-							// with and even follow our LAST posted move, latching the
-							// WRONG row right before commit. Moving the real cursor to
-							// match at every step makes any such stray event harmless
-							// (same position we intend).
-							::SetCursorPos(screenPt.x, screenPt.y + (my - clientPt.y));
+							// Update the override in lockstep with each posted move
+							// (mirrors the DRAG stage) — the drag-row-reassign target
+							// is decided entirely from posted WM_MOUSEMOVE lParams, so
+							// this override update just keeps hover/cursor-shape logic
+							// consistent with the same point.
+							SetOverlayCursorOverride({ screenPt.x, screenPt.y + (my - clientPt.y) });
 							LPARAM moveLp = MAKELPARAM((short)clientPt.x, (short)my);
 							::PostMessageW(ov, WM_MOUSEMOVE, 0, moveLp);
 							PumpFor(60);
 						}
 						int finalY = clientPt.y + bandHeightPx;
 						LPARAM finalMoveLp = MAKELPARAM((short)clientPt.x, (short)finalY);
-						// Re-assert the FINAL target position (both real cursor and
-						// posted message) a few more times before committing, so any
-						// live stray real-cursor mousemove reports the SAME (correct)
-						// position rather than a stale one.
+						// Re-assert the FINAL target position (override + posted
+						// message) a few more times before committing.
 						for (int extra = 0; extra < 3; ++extra) {
-							::SetCursorPos(screenPt.x, screenPt.y + bandHeightPx);
+							SetOverlayCursorOverride({ screenPt.x, screenPt.y + bandHeightPx });
 							::PostMessageW(ov, WM_MOUSEMOVE, 0, finalMoveLp);
 							PumpFor(60);
 						}
@@ -1056,20 +1039,20 @@ int wmain(int argc, wchar_t** argv) {
 							const int kCreateDays = 10;
 							long shiftPx = (long)::lround(kCreateDays * pxPerDay);
 
-							// See the DRAG stage's SetCursorPos comment.
-							::SetCursorPos(screenPt.x, screenPt.y);
+							// See the DRAG stage's cursor-override comment.
+							SetOverlayCursorOverride(screenPt);
 
 							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((short)clientPt.x, (short)clientPt.y));
 							PumpFor(60);
 							const int kSteps = 5;
 							for (int s = 1; s <= kSteps; ++s) {
 								int mx = clientPt.x + (int)(shiftPx * s / kSteps);
-								::SetCursorPos(screenPt.x + (mx - clientPt.x), screenPt.y);
+								SetOverlayCursorOverride({ screenPt.x + (mx - clientPt.x), screenPt.y });
 								::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)mx, (short)clientPt.y));
 								PumpFor(60);
 							}
 							int finalX = clientPt.x + (int)shiftPx;
-							::SetCursorPos(screenPt.x + (int)shiftPx, screenPt.y);
+							SetOverlayCursorOverride({ screenPt.x + (int)shiftPx, screenPt.y });
 							::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)clientPt.y));
 							PumpFor(800);
 
@@ -1170,8 +1153,8 @@ int wmain(int argc, wchar_t** argv) {
 							POINT clientPt = screenPt;
 							::ScreenToClient(ov, &clientPt);
 
-							// See the DRAG stage's SetCursorPos comment.
-							::SetCursorPos(screenPt.x, screenPt.y);
+							// See the DRAG stage's cursor-override comment.
+							SetOverlayCursorOverride(screenPt);
 
 							LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
 							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
@@ -1352,15 +1335,23 @@ int wmain(int argc, wchar_t** argv) {
 						};
 						POINT clientPt = screenPt;
 						::ScreenToClient(ov, &clientPt);
-						::SetCursorPos(screenPt.x, screenPt.y);
+						SetOverlayCursorOverride(screenPt);
 
 						// Re-select explicitly (INPLACE pattern): a plain click
 						// gesture posted at the LIVE rect center, same route as
-						// OWNSEL/INPLACE.
+						// OWNSEL/INPLACE. Observed flaky at 400ms (occasionally
+						// resolves to the PREVIOUS stage's still-selected task,
+						// e.g. INPLACE's "t2", if the overlay's cached hit
+						// snapshot/row bands hadn't fully caught up with
+						// INPLACE's RebuildChart by the time this click lands)
+						// — pump longer, and settle BEFORE reading rects too, so
+						// the snapshot backing this click's hit test is
+						// current.
+						PumpFor(300);
 						LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
 						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
 						::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
-						PumpFor(400);
+						PumpFor(700);
 
 						const char* gotIdUtf8 = Overlay_GetSelectedIdForTest();
 						std::string taskIdUtf8 = WNarrowFn(kTargetTaskId.c_str());
@@ -1383,8 +1374,17 @@ int wmain(int argc, wchar_t** argv) {
 								// Simulate Right-arrow: post WM_HOTKEY with the
 								// SAME id Overlay.cpp's RegisterHotKey(HOTKEY_
 								// RIGHT,...) call would receive from Windows.
+								// PumpFor(800) matches every other stage's
+								// post-commit pump (DRAG/DRAGROW/CREATE/INPLACE
+								// all wait 800ms after the gesture that triggers
+								// RebuildChart) — this stage's hotkey handlers
+								// call the SAME RebuildChart, so give it the
+								// same margin rather than the previously-used
+								// 500ms (observed flaky under load: the commit
+								// hadn't always landed by the time PP_DOC was
+								// re-read).
 								::PostMessageW(ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_RIGHT_FOR_TEST, 0);
-								PumpFor(500);
+								PumpFor(800);
 
 								std::string docJsonAfterRight = ReadGanttFromSlide(app);
 								PpDocument docAfterRight = DocumentFromJson(docJsonAfterRight);
@@ -1412,9 +1412,12 @@ int wmain(int argc, wchar_t** argv) {
 								bool rightOk = datesShifted && selectionRetained;
 								bool deleteOk = false;
 								if (rightOk) {
-									// Simulate Delete: same posted-WM_HOTKEY route.
+									// Simulate Delete: same posted-WM_HOTKEY
+									// route. See the Right-arrow pump comment
+									// above re: 800ms matching the other
+									// RebuildChart-triggering stages.
 									::PostMessageW(ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
-									PumpFor(500);
+									PumpFor(800);
 
 									std::string docJsonAfterDelete = ReadGanttFromSlide(app);
 									PpDocument docAfterDelete = DocumentFromJson(docJsonAfterDelete);
@@ -1518,7 +1521,7 @@ int wmain(int argc, wchar_t** argv) {
 							};
 							POINT clientPt = screenPt;
 							::ScreenToClient(ov, &clientPt);
-							::SetCursorPos(screenPt.x, screenPt.y);
+							SetOverlayCursorOverride(screenPt);
 
 							LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
 							// A real double-click is DOWN,UP,DOWN,UP with the
@@ -1608,81 +1611,70 @@ int wmain(int argc, wchar_t** argv) {
 			// The overlay chrome must be scoped to the host: think-cell-style
 			// add-ins only paint their floating chrome while their host app is
 			// the foreground window (Overlay.cpp's IsHostActiveForOverlayChrome,
-			// wired into Tick()). Verify by creating a plain top-level window,
-			// stealing the foreground for it (same bounded-retry pattern as
-			// everywhere else in this harness), and asserting the overlay hides;
-			// then re-foreground PowerPoint and assert it reappears.
+			// wired into Tick()). Previously verified by creating a real
+			// top-level window and stealing the OS foreground for it (a real
+			// SetForegroundWindow call) — replaced with
+			// Overlay_SetHostActiveOverrideForTest, which drives the SAME
+			// scoping logic deterministically with no real window/foreground
+			// theft at all: force mode 0 ("host inactive"), pump <=1s, assert
+			// the overlay (and card editor, if present) hide; force mode 1
+			// ("host active"), pump, assert the overlay reappears.
 			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
-				HWND testWnd = NULL;
 				try {
 					HWND ov = OverlayHwnd();
 					if (!ov) {
 						wprintf(L"SCOPE: overlay hwnd missing\n");
 					} else {
-						// A minimal, plain, visible top-level window — anything
-						// the OS will hand the foreground to. WS_EX_APPWINDOW so
-						// it behaves like a normal app window (not a tool/owned
-						// window PowerPoint might still be considered "active"
-						// through).
-						const wchar_t* kScopeTestClass = L"PPScopeTestWindow";
-						WNDCLASSEXW wc = { sizeof(wc) };
-						wc.lpfnWndProc = ::DefWindowProcW;
-						wc.hInstance = ::GetModuleHandleW(NULL);
-						wc.hCursor = ::LoadCursor(NULL, IDC_ARROW);
-						wc.lpszClassName = kScopeTestClass;
-						::RegisterClassExW(&wc);
+						Overlay_SetHostActiveOverrideForTest(0);
+						PumpFor(1000);
 
-						testWnd = ::CreateWindowExW(WS_EX_APPWINDOW, kScopeTestClass,
-							L"PP Scope Test", WS_OVERLAPPEDWINDOW,
-							100, 100, 300, 200, NULL, NULL, wc.hInstance, NULL);
+						bool overlayHidden = !::IsWindowVisible(ov);
+						HWND card = ::FindWindowW(PP_CARD_EDITOR_CLASS, NULL);
+						bool cardHiddenOrGone = (!card || !::IsWindowVisible(card));
 
-						if (!testWnd) {
-							wprintf(L"SCOPE: could not create test window\n");
-						} else {
-							::ShowWindow(testWnd, SW_SHOW);
-							::UpdateWindow(testWnd);
-
-							bool stole = EnsureForeground(testWnd);
-							PumpFor(1000);
-
-							if (!stole) {
-								wprintf(L"FOREGROUND STEAL FAILED\n");
-							} else {
-								bool overlayHidden = !::IsWindowVisible(ov);
-								HWND card = ::FindWindowW(PP_CARD_EDITOR_CLASS, NULL);
-								bool cardHiddenOrGone = (!card || !::IsWindowVisible(card));
-
-								if (!overlayHidden) {
-									wprintf(L"SCOPE: overlay still visible while an unrelated app is foreground\n");
-								}
-								if (!cardHiddenOrGone) {
-									wprintf(L"SCOPE: card editor still visible while an unrelated app is foreground\n");
-								}
-
-								// Re-foreground PowerPoint and confirm the overlay
-								// comes back within a bounded pump.
-								bool refocused = EnsureForeground(ppHwnd);
-								PumpFor(1000);
-								bool overlayVisibleAgain = refocused && ::IsWindowVisible(ov);
-
-								if (!refocused) {
-									wprintf(L"FOREGROUND STEAL FAILED\n");
-								} else if (!overlayVisibleAgain) {
-									wprintf(L"SCOPE: overlay did not reappear after re-foregrounding PowerPoint\n");
-								}
-
-								pass = overlayHidden && cardHiddenOrGone && refocused && overlayVisibleAgain;
-							}
+						if (!overlayHidden) {
+							wprintf(L"SCOPE: overlay still visible while host-active override forces inactive\n");
 						}
+						if (!cardHiddenOrGone) {
+							wprintf(L"SCOPE: card editor still visible while host-active override forces inactive\n");
+						}
+
+						// Force host-active again and confirm the overlay comes
+						// back within a bounded pump.
+						Overlay_SetHostActiveOverrideForTest(1);
+						PumpFor(1000);
+						bool overlayVisibleAgain = ::IsWindowVisible(ov);
+
+						if (!overlayVisibleAgain) {
+							wprintf(L"SCOPE: overlay did not reappear after forcing host-active again\n");
+						}
+
+						pass = overlayHidden && cardHiddenOrGone && overlayVisibleAgain;
 					}
 				} catch (const _com_error& e) {
 					wprintf(L"SCOPE: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
-				if (testWnd) ::DestroyWindow(testWnd);
 				wprintf(pass ? L"SCOPE PASS\n" : L"SCOPE FAIL\n");
 				if (!pass) rc = 1;
+			}
+
+			// ---- INPUT NEUTRAL OK gate ------------------------------------------
+			// Printed immediately before the final exit-code computation, gated
+			// on a runtime flag proving the cursor override path was actually
+			// exercised (not just declared) during the stage most sensitive to
+			// physical-cursor interleaving (DRAG). If every stage above passed
+			// (rc==0) but the override was somehow bypassed, this is withheld —
+			// a green run without this marker is a harness regression, not a
+			// pass.
+			if (rc == 0) {
+				if (g_cursorOverrideUsedDuringDrag) {
+					wprintf(L"INPUT NEUTRAL OK\n");
+				} else {
+					wprintf(L"INPUT NEUTRAL CHECK FAILED: cursor override never exercised during DRAG\n");
+					rc = 1;
+				}
 			}
 		} catch (const _com_error& e) {
 			wprintf(L"COM error 0x%08lX: %s\n", (unsigned long)e.Error(),
