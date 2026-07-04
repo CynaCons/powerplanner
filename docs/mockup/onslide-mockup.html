@@ -1,0 +1,577 @@
+<meta charset="utf-8">
+<title>PowerPlanner — On-Slide Editor Mockup</title>
+<style>
+  :root{
+    --ink:#1B1D26; --ink-2:#5D6273; --ink-3:#9A9FB0;
+    --primary:#4355E0; --primary-soft:#E8EBFC; --primary-dim:#6B7DE8;
+    --rail:#F6F7FB; --band:#F1F3F9; --outline:#E2E5EF; --outline-2:#D3D7E6;
+    --red:#C6362B; --plum:#7A4FA3; --teal:#0E8D8A; --slate:#5B6C8F;
+    --page:#23252B; --page-2:#2B2E36; --page-3:#343842;
+    --on-page:#E9EAF0; --on-page-2:#A9ADBC;
+  }
+  *{box-sizing:border-box; margin:0}
+  html,body{background:var(--page); color:var(--on-page);
+    font-family:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;}
+  .wrap{max-width:1180px; margin:0 auto; padding:28px 24px 64px; display:flex; flex-direction:column; gap:22px}
+
+  .hdr{display:flex; align-items:baseline; gap:14px; flex-wrap:wrap}
+  .hdr .brand{font-size:12px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--primary-dim)}
+  .hdr h1{font-size:17px; font-weight:600; color:var(--on-page)}
+  .hdr .hint{font-size:12.5px; color:var(--on-page-2); margin-left:auto; max-width:560px}
+  .hdr .hint b{color:var(--on-page); font-weight:600}
+
+  /* ---------- the slide ---------- */
+  .stage{position:relative}
+  .slide{position:relative; background:#fff; border-radius:6px; aspect-ratio:16/9;
+    box-shadow:0 18px 44px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.35);
+    color:var(--ink); overflow:hidden; user-select:none}
+
+  .titlezone{position:absolute; left:4.2%; right:4.2%; top:3.4%; height:10.5%;
+    border:1.5px dashed transparent; border-radius:4px; display:flex; align-items:center; padding:0 10px}
+  .titlezone:hover{border-color:var(--outline-2)}
+  .titlezone .t{font-family:"Segoe UI Light","Segoe UI"; font-weight:300; font-size:clamp(18px,2.6vw,30px); color:var(--ink)}
+
+  .chart{position:absolute; left:1.9%; right:1.9%; top:15%; bottom:13.5%;
+    display:grid; grid-template-columns:200px 1fr; grid-template-rows:40px 1fr;
+    border:1px solid var(--outline); border-radius:8px; overflow:hidden; background:#fff}
+
+  /* rail */
+  .rail-hd{background:var(--band); border-right:1px solid var(--outline); border-bottom:1px solid var(--outline);
+    display:flex; align-items:center; padding:0 12px; font-size:10px; font-weight:600; letter-spacing:.12em; color:var(--ink-3)}
+  .rail{background:var(--rail); border-right:1px solid var(--outline); display:flex; flex-direction:column}
+  .rrow{flex:1; display:flex; align-items:center; gap:6px; padding:0 10px 0 12px; border-bottom:1px solid var(--outline);
+    position:relative; cursor:pointer; min-height:0}
+  .rrow:last-child{border-bottom:none}
+  .rrow.child{padding-left:30px}
+  .rrow .chev{width:14px; height:14px; color:var(--ink-3); flex:none}
+  .rrow .name{font-size:12.5px; font-weight:600; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .rrow .adder{position:absolute; right:8px; width:16px; height:16px; border-radius:4px; display:none;
+    align-items:center; justify-content:center; color:var(--primary); background:var(--primary-soft); font-size:12px; font-weight:600}
+  .rrow:hover .adder{display:flex}
+  .rrow.sel{background:var(--primary-soft); box-shadow:inset 2.5px 0 0 var(--primary)}
+  .rrow.sel .name{color:var(--primary)}
+  .rrow .dot{width:8px; height:8px; border-radius:3px; flex:none}
+  .rrow .tname{font-size:11.5px; font-weight:400; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .rrow.taskrow{padding-left:32px}
+  .rrow.taskrow.sel .tname{color:var(--primary); font-weight:600}
+
+  /* hierarchical date header: two stacked bands */
+  .axis{background:var(--band); border-bottom:1px solid var(--outline); display:flex; flex-direction:column; overflow:hidden}
+  .dband{flex:1; position:relative; border-bottom:1px solid var(--outline)}
+  .dband:last-child{border-bottom:none}
+  .dband .cell{position:absolute; top:0; bottom:0; border-right:1px solid var(--outline-2);
+    display:flex; align-items:center; justify-content:flex-start; padding-left:6px;
+    font-size:9.5px; font-weight:600; letter-spacing:.1em; color:var(--ink-2); overflow:hidden; white-space:nowrap}
+  .dband .cell.num{justify-content:center; padding-left:0; letter-spacing:0; font-variant-numeric:tabular-nums}
+  .dband.top .cell{color:var(--ink-3)}
+
+  /* plot */
+  .plot{position:relative; background:#fff; overflow:hidden}
+  .gridlayer,.rowlines{position:absolute; inset:0; pointer-events:none}
+  .tick{position:absolute; top:0; bottom:0; width:1px; background:var(--outline)}
+  .tick.major{background:var(--outline-2)}
+  .rowline{position:absolute; left:0; right:0; height:1px; background:var(--outline)}
+  .band-alt{position:absolute; left:0; right:0; background:#FAFBFE}
+  .plot.linking .bar{cursor:crosshair}
+
+  .bar{position:absolute; height:20px; border-radius:5px; cursor:grab; display:flex; align-items:center; touch-action:none}
+  .bar .fill{position:absolute; inset:0; border-radius:5px; opacity:.4}
+  .bar .done{position:absolute; left:0; top:0; bottom:0; border-radius:5px}
+  .bar .lbl{position:relative; font-size:10.5px; font-weight:600; color:#fff; padding:0 8px; white-space:nowrap;
+    text-shadow:0 1px 1px rgba(0,0,0,.18); pointer-events:none}
+  .bar .pct{position:relative; margin-left:auto; padding-right:7px; font-size:9.5px; font-weight:600; color:#fff;
+    font-variant-numeric:tabular-nums; opacity:.9; pointer-events:none}
+  .bar.railmode .lbl{display:none}
+  .bar .hL,.bar .hR{position:absolute; top:0; bottom:0; width:8px; cursor:ew-resize}
+  .bar .hL{left:0} .bar .hR{right:0}
+
+  .ms{position:absolute; width:16px; height:16px; transform:rotate(45deg); border-radius:3px; cursor:grab; touch-action:none}
+  .ms-lbl{position:absolute; font-size:10px; font-weight:600; color:var(--ink-2); white-space:nowrap; pointer-events:none}
+
+  .marker{position:absolute; top:0; bottom:0; width:2px; cursor:ew-resize; touch-action:none}
+  .marker .pill{position:absolute; top:6px; left:50%; transform:translateX(-50%); font-size:9px; font-weight:700;
+    letter-spacing:.08em; padding:2.5px 7px; border-radius:99px; color:#fff; white-space:nowrap}
+  .marker .stem{position:absolute; top:0; bottom:0; left:0; width:2px}
+  .marker.today .stem{background:var(--primary)}
+  .marker.today .pill{background:var(--primary)}
+  .marker.deadline .stem{background:var(--red); opacity:.85}
+  .marker.deadline .pill{background:var(--red); top:auto; bottom:8px}
+  .marker:hover .stem{width:3px; margin-left:-1px}
+
+  .note{position:absolute; font-size:10.5px; color:var(--ink-2); background:#fff; border:1px solid var(--outline-2);
+    border-radius:5px; padding:4px 8px; cursor:grab; box-shadow:0 1px 3px rgba(27,29,38,.08); max-width:150px; line-height:1.35; touch-action:none}
+  .note::before{content:""; position:absolute; width:8px; height:1.5px; background:var(--outline-2); left:-9px; top:50%}
+
+  .deps{position:absolute; inset:0; pointer-events:none}
+  .deps path{fill:none; stroke:var(--ink-3); stroke-width:1.5}
+  .deps .head{fill:var(--ink-3); stroke:none}
+
+  .chrome{position:absolute; border:1.5px solid var(--primary); border-radius:7px; pointer-events:none; display:none;
+    box-shadow:0 0 0 3px rgba(67,85,224,.14); z-index:20}
+  .chrome i{position:absolute; width:7px; height:7px; background:#fff; border:1.5px solid var(--primary); border-radius:2px}
+  .chrome i:nth-child(1){left:-4px; top:50%; margin-top:-4px}
+  .chrome i:nth-child(2){right:-4px; top:50%; margin-top:-4px}
+
+  .linkhint{position:absolute; left:50%; transform:translateX(-50%); bottom:66px; background:var(--ink); color:#fff;
+    font-size:11px; font-weight:600; padding:6px 12px; border-radius:8px; z-index:31; display:none; box-shadow:0 4px 14px rgba(0,0,0,.3)}
+
+  /* ---------- app bar ---------- */
+  .appbar{position:absolute; left:50%; transform:translateX(-50%); bottom:8px; background:#fff;
+    border:1px solid var(--outline); border-radius:11px; box-shadow:0 10px 28px rgba(15,17,26,.22), 0 2px 6px rgba(15,17,26,.12);
+    display:flex; align-items:stretch; flex-wrap:wrap; justify-content:center; padding:5px; gap:5px; z-index:30; max-width:94%}
+  .abgroup{display:flex; align-items:center; gap:2px; padding:0 3px}
+  .abgroup + .abgroup{border-left:1px solid var(--outline)}
+  .ablabel{font-size:9px; font-weight:700; letter-spacing:.1em; color:var(--ink-3); text-transform:uppercase;
+    padding:0 8px 0 5px; align-self:center; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .abbtn{display:flex; align-items:center; gap:5px; border:none; background:none; font-family:inherit;
+    font-size:11.5px; font-weight:600; color:var(--ink); padding:6px 9px; border-radius:7px; cursor:pointer; white-space:nowrap}
+  .abbtn svg{width:14px; height:14px; color:var(--ink-2); flex:none}
+  .abbtn:hover{background:var(--primary-soft); color:var(--primary)}
+  .abbtn:hover svg{color:var(--primary)}
+  .abbtn:focus-visible{outline:2px solid var(--primary); outline-offset:1px}
+  .abbtn.danger:hover{background:#FBEAE8; color:var(--red)}
+  .abbtn.danger:hover svg{color:var(--red)}
+  .seg{display:flex; background:var(--band); border:1px solid var(--outline); border-radius:7px; padding:2px}
+  .seg button{border:none; background:none; font-family:inherit; font-size:10.5px; font-weight:700; color:var(--ink-2);
+    padding:4px 8px; border-radius:5px; cursor:pointer}
+  .seg button.on{background:#fff; color:var(--primary); box-shadow:0 1px 2px rgba(27,29,38,.14)}
+  .swatches{display:flex; gap:4px; padding:0 4px; align-items:center}
+  .swatches i{width:13px; height:13px; border-radius:4px; cursor:pointer; border:1px solid rgba(27,29,38,.12)}
+  .swatches i:hover{transform:scale(1.18)}
+
+  .chip{position:absolute; width:18px; height:18px; border-radius:50%; background:var(--primary); color:#fff;
+    font-size:10.5px; font-weight:700; display:flex; align-items:center; justify-content:center; z-index:40;
+    box-shadow:0 2px 6px rgba(27,29,38,.3); cursor:default}
+
+  /* ---------- decisions ---------- */
+  .decisions h2{font-size:13px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--on-page-2); margin-bottom:14px}
+  .dgrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:10px}
+  .dcard{background:var(--page-2); border:1px solid #3A3E4A; border-radius:10px; padding:12px 14px; display:flex; gap:11px}
+  .dcard.hot{border-color:var(--primary-dim); background:var(--page-3)}
+  .dnum{flex:none; width:20px; height:20px; border-radius:50%; background:var(--primary); color:#fff; font-size:11px;
+    font-weight:700; display:flex; align-items:center; justify-content:center; margin-top:1px}
+  .dcard h3{font-size:12.5px; font-weight:600; color:var(--on-page); margin-bottom:3px}
+  .dcard h3 .tag{font-size:9px; font-weight:700; letter-spacing:.08em; color:#7BC490; margin-left:6px; text-transform:uppercase}
+  .dcard p{font-size:11.5px; line-height:1.5; color:var(--on-page-2)}
+  @media (prefers-reduced-motion:no-preference){
+    .abbtn,.seg button,.swatches i{transition:background .12s,color .12s,transform .12s}
+  }
+</style>
+
+<div class="wrap">
+  <div class="hdr">
+    <span class="brand">PowerPlanner</span>
+    <h1>On-slide editor — target experience</h1>
+    <span class="hint"><b>It's a working mockup:</b> drag bars (body = move, edges = resize), drag markers &amp; notes, select rows and reorder them (↑ ↓ in the app bar), create dependencies (select a task → Link → click a target), switch scales. Esc clears.</span>
+  </div>
+
+  <div class="stage">
+    <div class="slide" id="slide">
+      <div class="titlezone" data-chip="1"><span class="t">Q3 Launch Plan</span></div>
+
+      <div class="chart">
+        <div class="rail-hd">ROWS</div>
+        <div class="axis" id="axis"></div>
+        <div class="rail" id="rail"></div>
+        <div class="plot" id="plot">
+          <div class="rowlines" id="rowlines"></div>
+          <div class="gridlayer" id="grid"></div>
+          <svg class="deps" id="deps" preserveAspectRatio="none"></svg>
+          <div id="items"></div>
+          <div class="chrome" id="chrome"><i></i><i></i></div>
+        </div>
+      </div>
+
+      <div class="linkhint" id="linkhint">Link: click a target task &nbsp;·&nbsp; Esc cancels</div>
+      <div class="appbar" id="appbar"></div>
+
+      <div class="chip" style="left:6.5%;  top:4.6%"  data-d="1">1</div>
+      <div class="chip" style="left:2.8%;  top:66%"   data-d="2">2</div>
+      <div class="chip" style="left:60%;   top:16.5%" data-d="3">3</div>
+      <div class="chip" style="left:26%;   top:37%"   data-d="4">4</div>
+      <div class="chip" style="left:36.5%; top:26%"   data-d="5">5</div>
+      <div class="chip" style="left:88%;   top:80%"   data-d="6">6</div>
+      <div class="chip" style="left:47%;   top:58%"   data-d="7">7</div>
+      <div class="chip" style="left:37%;   bottom:1.2%" data-d="8">8</div>
+    </div>
+  </div>
+
+  <div class="decisions">
+    <h2>Eight decisions — approve or correct each</h2>
+    <div class="dgrid" id="dgrid">
+      <div class="dcard" data-d="1"><span class="dnum">1</span><div>
+        <h3>Reserved title zone <span class="tag">shipped</span></h3>
+        <p>Top ~13% stays free for a native PowerPoint title. The chart fills everything below and keeps that frame through every edit.</p></div></div>
+      <div class="dcard" data-d="2"><span class="dnum">2</span><div>
+        <h3>Left rail is a real label column — and rows are objects</h3>
+        <p>Title rows (Phase 1, Build) and task rows (Implementation, QA + polish) are the same thing. A task row's text lives in the rail so its bar stays text-free. Select any row: the app bar offers Add above/below, ↑ ↓ to reorder (try it — the chart follows), indent/outdent, delete. Selecting a task row selects the task AND offers its row commands.</p></div></div>
+      <div class="dcard" data-d="3"><span class="dnum">3</span><div>
+        <h3>Hierarchical date header</h3>
+        <p>Two stacked date rows that follow the scale: Y = years · Q = years over quarters · M = years over months · W = months over week-start day numbers · D = months over day numbers (auto-thinned when tight). Separator ticks always follow the bottom row.</p></div></div>
+      <div class="dcard" data-d="4"><span class="dnum">4</span><div>
+        <h3>Material bars — move, resize, recolor, progress</h3>
+        <p>Drag a bar's body to move it (vertically too — it changes row); drag its edges to resize; pick a swatch in the app bar to recolor. Label on the bar (Research/Design) or in the rail (Build's tasks); the global "Labels" button flips the whole chart to rail mode for a text-free graph.</p></div></div>
+      <div class="dcard" data-d="5"><span class="dnum">5</span><div>
+        <h3>Draggable markers <span class="tag">shipped</span></h3>
+        <p>Today (indigo) and deadline (red) lines drag horizontally with day snapping; labels editable; any number of custom markers.</p></div></div>
+      <div class="dcard" data-d="6"><span class="dnum">6</span><div>
+        <h3>Anchored notes</h3>
+        <p>Text elements tether to a task or milestone (tick mark shows the link) and follow it when it moves; free-floating notes pin anywhere. Drag this one.</p></div></div>
+      <div class="dcard" data-d="7"><span class="dnum">7</span><div>
+        <h3>Dependencies as quiet elbows</h3>
+        <p>Thin connectors, arrowhead at the target. Create one live: select a task → Link → click the target bar. They re-route when you move either end.</p></div></div>
+      <div class="dcard" data-d="8"><span class="dnum">8</span><div>
+        <h3>Bottom app bar is the command surface</h3>
+        <p>PowerNote-style: contents swap with the selection (task / milestone / row / marker / note / nothing). Global controls (scale, labels, grid, insert) stay present. Right-click mirrors the same commands.</p></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ============ state ============
+  const DAYS = 92, d0 = Date.UTC(2026,5,1);          // Jun 1 – Aug 31, 2026
+  const dom = d => new Date(d0 + d*864e5).getUTCDate();
+  const S = {
+    scale: "week", railAll: false, sel: null, link: null,
+    rows: [
+      {id:"Phase 1",        level:0},
+      {id:"Research",       level:1},
+      {id:"Design",         level:1},
+      {id:"Build",          level:0},
+      {id:"Implementation", level:1, taskRow:true},
+      {id:"QA + polish",    level:1, taskRow:true},
+      {id:"Launch",         level:0},
+    ],
+    tasks: [
+      {id:"Discovery",      row:"Research", a:0,  b:11, c:"#4355E0", pct:100, sub:-11},
+      {id:"Interviews",     row:"Research", a:7,  b:18, c:"#4355E0", pct:60,  sub: 11},
+      {id:"Wireframes",     row:"Design",   a:14, b:25, c:"#0E8D8A", pct:40,  sub:-11},
+      {id:"Visual design",  row:"Design",   a:21, b:39, c:"#0E8D8A", pct:10,  sub: 11},
+      {id:"Implementation", row:"Implementation", a:35, b:60, c:"#7A4FA3", pct:0, rail:true, sub:0},
+      {id:"QA + polish",    row:"QA + polish",    a:56, b:67, c:"#5B6C8F", pct:0, rail:true, sub:0},
+    ],
+    ms: [
+      {id:"Design freeze", row:"Design", d:39},
+      {id:"Ship",          row:"Launch", d:70},
+    ],
+    markers: [
+      {id:"TODAY",        kind:"today",    d:33},
+      {id:"BOARD REVIEW", kind:"deadline", d:59},
+    ],
+    notes: [ {id:"Go/No-Go with exec team", anchor:"Ship", dx:14, dy:-30} ],
+    deps: [ ["Wireframes","Implementation"] ],
+  };
+  let newRowN = 0;
+
+  const $ = id => document.getElementById(id);
+  const plot = $("plot"), rail = $("rail"), axis = $("axis"), items = $("items"),
+        chrome = $("chrome"), appbar = $("appbar"), linkhint = $("linkhint");
+  const pcD = d => d/DAYS*100;
+  const rowIdx = id => S.rows.findIndex(r => r.id === id);
+  const rowTopPc = i => (i + 0.5) / S.rows.length * 100;
+  const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+  // ============ axis (hierarchical date header) ============
+  function axisBands() {
+    const years    = [{l:"2026", f:0, t:DAYS}];
+    const quarters = [{l:"Q2 2026", f:0, t:30}, {l:"Q3 2026", f:30, t:DAYS}];
+    const months   = [{l:"JUN", f:0, t:30}, {l:"JUL", f:30, t:61}, {l:"AUG", f:61, t:DAYS}];
+    const weeks = []; for (let d = 0; d < DAYS; d += 7) weeks.push({l:String(dom(d)), f:d, t:Math.min(d+7,DAYS), num:1});
+    const pxDay = plot.clientWidth / DAYS;
+    const step = pxDay >= 13 ? 1 : pxDay >= 7 ? 2 : 7;
+    const days = []; for (let d = 0; d < DAYS; d++) days.push({l: d % step ? "" : String(dom(d)), f:d, t:d+1, num:1});
+    switch (S.scale) {
+      case "year":    return [years, null];
+      case "quarter": return [years, quarters];
+      case "month":   return [years, months];
+      case "week":    return [months, weeks];
+      default:        return [months, days];
+    }
+  }
+  function renderAxis() {
+    const [top, bottom] = axisBands();
+    const band = (cells, cls) => `<div class="dband ${cls}">` + cells.map(c =>
+      `<div class="cell${c.num ? " num" : ""}" style="left:${pcD(c.f)}%; width:${pcD(c.t - c.f)}%">${c.l}</div>`).join("") + `</div>`;
+    axis.innerHTML = bottom ? band(top, "top") + band(bottom, "") : band(top, "");
+    // ticks follow the bottom band; top-band boundaries are stronger
+    let g = "";
+    (bottom || top).forEach(c => { if (c.f) g += `<div class="tick" style="left:${pcD(c.f)}%"></div>`; });
+    top.forEach(c => { if (c.f) g += `<div class="tick major" style="left:${pcD(c.f)}%"></div>`; });
+    $("grid").innerHTML = g;
+  }
+
+  // ============ rail + plot ============
+  function renderRail() {
+    rail.innerHTML = S.rows.map((r, i) => {
+      const hasKids = r.level === 0 && S.rows[i+1] && S.rows[i+1].level === 1;
+      if (r.taskRow) {
+        const t = S.tasks.find(t => t.row === r.id);
+        return `<div class="rrow child taskrow" data-kind="task" data-name="${t ? t.id : r.id}">
+          <i class="dot" style="background:${t ? t.c : "#999"}"></i><span class="tname">${r.id}</span><span class="adder">+</span></div>`;
+      }
+      return `<div class="rrow${r.level ? " child" : ""}" data-kind="row" data-name="${r.id}">
+        ${hasKids ? '<svg class="chev" viewBox="0 0 16 16"><path d="M5 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none" transform="rotate(90 8 8)"/></svg>' : ""}
+        <span class="name">${r.id}</span><span class="adder">+</span></div>`;
+    }).join("");
+  }
+
+  function renderPlot() {
+    let rl = "";
+    S.rows.forEach((_, i) => {
+      if (i) rl += `<div class="rowline" style="top:${i/S.rows.length*100}%"></div>`;
+      if (i % 2) rl += `<div class="band-alt" style="top:${i/S.rows.length*100}%; height:${100/S.rows.length}%"></div>`;
+    });
+    $("rowlines").innerHTML = rl;
+
+    let h = "";
+    S.tasks.forEach(t => {
+      const i = rowIdx(t.row); if (i < 0) return;
+      const w = pcD(t.b - t.a), railMode = t.rail || S.railAll;
+      h += `<div class="bar${railMode ? " railmode" : ""}" data-kind="task" data-name="${t.id}"
+        style="left:${pcD(t.a)}%; width:${w}%; top:calc(${rowTopPc(i)}% - 10px + ${t.sub||0}px)">
+        <div class="fill" style="background:${t.c}"></div>
+        <div class="done" style="background:${t.c}; width:${t.pct}%"></div>
+        <span class="lbl">${t.id}</span>${t.pct && w > 15 ? `<span class="pct">${t.pct}%</span>` : ""}
+        <div class="hL"></div><div class="hR"></div></div>`;
+    });
+    S.ms.forEach(m => {
+      const i = rowIdx(m.row); if (i < 0) return;
+      h += `<div class="ms" data-kind="milestone" data-name="${m.id}"
+              style="left:calc(${pcD(m.d)}% - 8px); top:calc(${rowTopPc(i)}% - 8px); background:#1B1D26"></div>
+            <div class="ms-lbl" style="left:calc(${pcD(m.d)}% + 13px); top:calc(${rowTopPc(i)}% - 7px)">${m.id}</div>`;
+    });
+    S.markers.forEach(m => {
+      h += `<div class="marker ${m.kind}" data-kind="marker" data-name="${m.id}" style="left:${pcD(m.d)}%">
+        <div class="stem"></div><div class="pill">${m.id}</div></div>`;
+    });
+    S.notes.forEach(n => {
+      const a = S.ms.find(m => m.id === n.anchor);
+      const x = a ? `calc(${pcD(a.d)}% + ${n.dx}px)` : n.dx + "px";
+      const y = a ? `calc(${rowTopPc(rowIdx(a.row))}% + ${n.dy}px)` : n.dy + "px";
+      h += `<div class="note" data-kind="note" data-name="${n.id}" style="left:${x}; top:${y}">${n.id}</div>`;
+    });
+    items.innerHTML = h;
+    renderDeps();
+  }
+
+  function renderDeps() {
+    const dep = $("deps");
+    dep.setAttribute("viewBox", "0 0 100 100");
+    dep.innerHTML = S.deps.map(([f, t]) => {
+      const A = S.tasks.find(x => x.id === f), B = S.tasks.find(x => x.id === t);
+      if (!A || !B) return "";
+      const y1 = rowTopPc(rowIdx(A.row)) - 2.2, y2 = rowTopPc(rowIdx(B.row));
+      const x1 = pcD(A.b), x2 = pcD(B.a);
+      return `<path vector-effect="non-scaling-stroke" d="M ${x1} ${y1} h ${(x2-x1)/2} V ${y2} H ${x2-1}"/>
+        <path class="head" d="M ${x2-1.6} ${y2-1.6} L ${x2} ${y2} L ${x2-1.6} ${y2+1.6} Z"/>`;
+    }).join("");
+  }
+
+  // ============ app bar ============
+  const I = {
+    edit:'<svg viewBox="0 0 16 16"><path d="M11.3 2.3l2.4 2.4L5.4 13H3v-2.4l8.3-8.3z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    trash:'<svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5v-1h3v1M5 4.5l.6 8h4.8l.6-8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    left:'<svg viewBox="0 0 16 16"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+    right:'<svg viewBox="0 0 16 16"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+    up:'<svg viewBox="0 0 16 16"><path d="M3 10l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+    down:'<svg viewBox="0 0 16 16"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+    link:'<svg viewBox="0 0 16 16"><path d="M6.5 9.5l3-3M5 11l-1.2 1.2a2.4 2.4 0 01-3.4-3.4L2.9 6.3M11 5l1.2-1.2a2.4 2.4 0 013.4 3.4L13.1 9.7" fill="none" stroke="currentColor" stroke-width="1.4" transform="translate(-1 0)"/></svg>',
+    note:'<svg viewBox="0 0 16 16"><path d="M3 3h10v7H8l-3 3v-3H3z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    plus:'<svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6"/></svg>',
+    tag:'<svg viewBox="0 0 16 16"><path d="M2 8V3h5l7 7-5 5-7-7z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    indent:'<svg viewBox="0 0 16 16"><path d="M3 3h10M7 8h6M3 13h10M3 6.5L5.5 8 3 9.5z" stroke="currentColor" stroke-width="1.4" fill="currentColor"/></svg>',
+    outdent:'<svg viewBox="0 0 16 16"><path d="M3 3h10M7 8h6M3 13h10M5.5 6.5L3 8l2.5 1.5z" stroke="currentColor" stroke-width="1.4" fill="currentColor"/></svg>',
+    grid:'<svg viewBox="0 0 16 16"><path d="M3 3v10M7 3v10M11 3v10M14 3v10" stroke="currentColor" stroke-width="1.2"/></svg>',
+  };
+  const btn = (cmd, ic, t, danger) => `<button class="abbtn${danger ? " danger" : ""}" data-cmd="${cmd}">${I[ic]||""}${t}</button>`;
+  const rowGroup = rid => {
+    const i = rowIdx(rid);
+    return `<div class="abgroup"><span class="ablabel">Row</span>
+      ${btn("row.above","plus","Above")}${btn("row.below","plus","Below")}
+      ${i > 0 ? btn("row.up","up","") : ""}${i < S.rows.length-1 ? btn("row.down","down","") : ""}
+      ${btn("row.indent","indent","")}${btn("row.outdent","outdent","")}${btn("row.delete","trash","",1)}</div>`;
+  };
+  function renderAppbar() {
+    const sw = `<span class="swatches">${["#4355E0","#0E8D8A","#7A4FA3","#5B6C8F","#B3552F","#8B8E24"].map(c=>`<i data-cmd="task.color" data-c="${c}" style="background:${c}"></i>`).join("")}</span>`;
+    const globals =
+      `<div class="abgroup"><span class="ablabel">Scale</span><span class="seg">${
+        [["day","D"],["week","W"],["month","M"],["quarter","Q"],["year","Y"]].map(([v,l]) =>
+          `<button data-cmd="scale" data-s="${v}" class="${S.scale===v?"on":""}">${l}</button>`).join("")}</span></div>
+      <div class="abgroup">${btn("labels","tag","Labels")}${btn("grid","grid","Grid")}</div>`;
+    const sel = S.sel;
+    let left;
+    if (!sel) left = `<div class="abgroup"><span class="ablabel">Insert</span>${btn("ins.row","plus","Row")}${btn("ins.task","plus","Task")}${btn("ins.ms","plus","Milestone")}${btn("ins.marker","plus","Marker")}${btn("ins.note","note","Note")}</div>`;
+    else if (sel.kind === "task") {
+      const t = S.tasks.find(x => x.id === sel.id);
+      const pl = (t.rail || S.railAll) ? "rail" : "bar";
+      left = `<div class="abgroup"><span class="ablabel">${sel.id}</span>${btn("noop","edit","Edit")}${sw}${btn("task.minus","left","−1d")}${btn("task.plus","right","+1d")}${btn("task.label","tag","Label: "+pl)}${btn("task.link","link","Link")}${btn("noop","note","Note")}${btn("task.delete","trash","Delete",1)}</div>`
+           + (S.rows[rowIdx(t.row)] && S.rows[rowIdx(t.row)].taskRow ? rowGroup(t.row) : "");
+    }
+    else if (sel.kind === "row") left = `<div class="abgroup"><span class="ablabel">${sel.id}</span>${btn("noop","edit","Rename")}</div>` + rowGroup(sel.id);
+    else if (sel.kind === "milestone") left = `<div class="abgroup"><span class="ablabel">${sel.id}</span>${btn("noop","edit","Edit")}${btn("ms.minus","left","−1d")}${btn("ms.plus","right","+1d")}${btn("noop","note","Note")}${btn("ms.delete","trash","Delete",1)}</div>`;
+    else if (sel.kind === "marker") left = `<div class="abgroup"><span class="ablabel">${sel.id}</span>${btn("noop","edit","Rename")}${btn("mk.minus","left","−1d")}${btn("mk.plus","right","+1d")}${btn("mk.delete","trash","Delete",1)}</div>`;
+    else left = `<div class="abgroup"><span class="ablabel">Note</span>${btn("noop","edit","Edit")}${btn("noop","link","Re-anchor")}${btn("note.delete","trash","Delete",1)}</div>`;
+    appbar.innerHTML = left + globals;
+  }
+
+  // ============ selection ============
+  function applyChrome() {
+    chrome.style.display = "none";
+    document.querySelectorAll(".rrow.sel").forEach(r => r.classList.remove("sel"));
+    if (!S.sel) return;
+    if (S.sel.kind === "row") {
+      const rr = rail.querySelector(`.rrow[data-name="${S.sel.id}"]`);
+      if (rr) rr.classList.add("sel");
+      return;
+    }
+    if (S.sel.kind === "task") {
+      const t = S.tasks.find(x => x.id === S.sel.id);
+      if (t) { const rr = rail.querySelector(`.rrow[data-name="${t.id}"]`); if (rr) rr.classList.add("sel"); }
+    }
+    const elx = items.querySelector(`[data-kind="${S.sel.kind}"][data-name="${S.sel.id}"]`);
+    if (!elx) return;
+    const pr = plot.getBoundingClientRect(), r = elx.getBoundingClientRect();
+    Object.assign(chrome.style, { display:"block",
+      left:(r.left-pr.left-4)+"px", top:(r.top-pr.top-4)+"px",
+      width:(r.width+8)+"px", height:(r.height+8)+"px" });
+  }
+  function renderAll() { renderAxis(); renderRail(); renderPlot(); renderAppbar(); applyChrome(); }
+  function setSel(kind, id) { S.sel = kind ? {kind, id} : null; renderAppbar(); applyChrome(); }
+
+  // ============ commands ============
+  function insertRow(at, level) { S.rows.splice(at, 0, {id:`New row ${++newRowN}`, level:level||0}); }
+  const CMD = {
+    "scale": (e) => { S.scale = e.target.dataset.s; renderAxis(); renderAppbar(); },
+    "labels": () => { S.railAll = !S.railAll; renderPlot(); renderAppbar(); applyChrome(); },
+    "grid": () => {},
+    "noop": () => {},
+    "ins.row": () => { insertRow(S.rows.length, 0); renderAll(); },
+    "ins.task": () => {}, "ins.ms": () => {}, "ins.marker": () => {}, "ins.note": () => {},
+    "task.color": (e) => { const t = S.tasks.find(x => x.id === S.sel.id); t.c = e.target.dataset.c; renderPlot(); renderRail(); applyChrome(); },
+    "task.minus": () => { const t = S.tasks.find(x => x.id === S.sel.id); if (t.a > 0) { t.a--; t.b--; renderPlot(); applyChrome(); } },
+    "task.plus":  () => { const t = S.tasks.find(x => x.id === S.sel.id); if (t.b < DAYS) { t.a++; t.b++; renderPlot(); applyChrome(); } },
+    "task.label": () => { const t = S.tasks.find(x => x.id === S.sel.id); t.rail = !t.rail; renderPlot(); renderAppbar(); applyChrome(); },
+    "task.link":  () => { S.link = S.sel.id; plot.classList.add("linking"); linkhint.style.display = "block"; },
+    "task.delete":() => { S.tasks = S.tasks.filter(x => x.id !== S.sel.id); S.deps = S.deps.filter(d => d[0] !== S.sel.id && d[1] !== S.sel.id); setSel(null); renderAll(); },
+    "ms.minus":   () => { const m = S.ms.find(x => x.id === S.sel.id); if (m.d > 0) m.d--; renderPlot(); applyChrome(); },
+    "ms.plus":    () => { const m = S.ms.find(x => x.id === S.sel.id); if (m.d < DAYS) m.d++; renderPlot(); applyChrome(); },
+    "ms.delete":  () => { S.ms = S.ms.filter(x => x.id !== S.sel.id); S.notes = S.notes.filter(n => n.anchor !== S.sel.id); setSel(null); renderAll(); },
+    "mk.minus":   () => { const m = S.markers.find(x => x.id === S.sel.id); if (m.d > 0) m.d--; renderPlot(); applyChrome(); },
+    "mk.plus":    () => { const m = S.markers.find(x => x.id === S.sel.id); if (m.d < DAYS) m.d++; renderPlot(); applyChrome(); },
+    "mk.delete":  () => { S.markers = S.markers.filter(x => x.id !== S.sel.id); setSel(null); renderAll(); },
+    "note.delete":() => { S.notes = S.notes.filter(x => x.id !== S.sel.id); setSel(null); renderAll(); },
+  };
+  const selRowId = () => S.sel.kind === "row" ? S.sel.id : S.tasks.find(x => x.id === S.sel.id).row;
+  ["above","below","up","down","indent","outdent","delete"].forEach(op => {
+    CMD["row." + op] = () => {
+      const rid = selRowId(), i = rowIdx(rid);
+      if (op === "above") insertRow(i, S.rows[i].level);
+      if (op === "below") insertRow(i+1, S.rows[i].level);
+      if (op === "up" && i > 0) [S.rows[i-1], S.rows[i]] = [S.rows[i], S.rows[i-1]];
+      if (op === "down" && i < S.rows.length-1) [S.rows[i+1], S.rows[i]] = [S.rows[i], S.rows[i+1]];
+      if (op === "indent") S.rows[i].level = 1;
+      if (op === "outdent") S.rows[i].level = 0;
+      if (op === "delete") {
+        S.rows.splice(i, 1);
+        S.tasks = S.tasks.filter(t => t.row !== rid);
+        S.ms = S.ms.filter(m => m.row !== rid);
+        S.deps = S.deps.filter(d => S.tasks.some(t => t.id === d[0]) && S.tasks.some(t => t.id === d[1]));
+        if (S.sel && (S.sel.id === rid || (S.sel.kind === "task" && !S.tasks.some(t => t.id === S.sel.id)))) S.sel = null;
+      }
+      renderAll();
+    };
+  });
+  appbar.addEventListener("click", e => {
+    const b = e.target.closest("[data-cmd]"); if (!b) return;
+    e.stopPropagation();
+    (CMD[b.dataset.cmd] || (() => {}))(  {target: b} );
+  });
+
+  // ============ pointer interactions: click / drag / resize / link ============
+  let drag = null;
+  plot.addEventListener("pointerdown", e => {
+    const t = e.target.closest("[data-kind]");
+    if (!t) return;
+    const kind = t.dataset.kind, name = t.dataset.name;
+    if (S.link) { if (kind === "task") handleClick(kind, name); e.preventDefault(); return; }
+    const pxDay = plot.clientWidth / DAYS;
+    const rowH = plot.clientHeight / S.rows.length;
+    drag = { kind, name, x0:e.clientX, y0:e.clientY, moved:false, pxDay, rowH,
+             edge: e.target.classList.contains("hL") ? "L" : e.target.classList.contains("hR") ? "R" : null };
+    if (kind === "task")      { const o = S.tasks.find(x=>x.id===name);   drag.o = {...o}; }
+    if (kind === "milestone") { const o = S.ms.find(x=>x.id===name);      drag.o = {...o}; }
+    if (kind === "marker")    { const o = S.markers.find(x=>x.id===name); drag.o = {...o}; }
+    if (kind === "note")      { const o = S.notes.find(x=>x.id===name);   drag.o = {...o}; }
+    try { plot.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault();
+  });
+  plot.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4 && !drag.moved) return;
+    drag.moved = true;
+    const dD = Math.round(dx / drag.pxDay), dR = Math.round(dy / drag.rowH);
+    if (drag.kind === "task") {
+      const t = S.tasks.find(x => x.id === drag.name), o = drag.o;
+      if (drag.edge === "L")      t.a = clamp(o.a + dD, 0, t.b - 1);
+      else if (drag.edge === "R") t.b = clamp(o.b + dD, t.a + 1, DAYS);
+      else {
+        const len = o.b - o.a, a = clamp(o.a + dD, 0, DAYS - len); t.a = a; t.b = a + len;
+        const ni = clamp(rowIdx(o.row) + dR, 0, S.rows.length - 1); t.row = S.rows[ni].id;
+      }
+    }
+    if (drag.kind === "milestone") { const m = S.ms.find(x => x.id === drag.name);
+      m.d = clamp(drag.o.d + dD, 0, DAYS);
+      m.row = S.rows[clamp(rowIdx(drag.o.row) + dR, 0, S.rows.length - 1)].id; }
+    if (drag.kind === "marker") { S.markers.find(x => x.id === drag.name).d = clamp(drag.o.d + dD, 0, DAYS); }
+    if (drag.kind === "note")   { const n = S.notes.find(x => x.id === drag.name); n.dx = drag.o.dx + dx; n.dy = drag.o.dy + dy; }
+    renderPlot(); applyChrome();
+  });
+  plot.addEventListener("pointerup", e => {
+    if (!drag) return;
+    const wasClick = !drag.moved, { kind, name } = drag;
+    drag = null;
+    if (wasClick) handleClick(kind, name);
+    else { setSel(kind, name); }
+  });
+  function handleClick(kind, name) {
+    if (S.link) {
+      if (kind === "task" && name !== S.link) {
+        if (!S.deps.some(d => d[0] === S.link && d[1] === name)) S.deps.push([S.link, name]);
+      }
+      cancelLink(); renderPlot(); applyChrome(); return;
+    }
+    setSel(kind, name);
+  }
+  function cancelLink() { S.link = null; plot.classList.remove("linking"); linkhint.style.display = "none"; }
+
+  // clicks on rail rows + empty areas
+  $("slide").addEventListener("click", e => {
+    if (e.target.closest(".appbar") || e.target.closest(".chip") || e.target.closest("[data-kind]")) {
+      const rr = e.target.closest(".rrow[data-kind]");
+      if (rr) setSel(rr.dataset.kind, rr.dataset.name);
+      return;
+    }
+    if (S.link) { cancelLink(); return; }
+    setSel(null);
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") { cancelLink(); setSel(null); }
+    if (e.key === "Delete" && S.sel) {
+      const m = {task:"task.delete", milestone:"ms.delete", marker:"mk.delete", note:"note.delete", row:"row.delete"}[S.sel.kind];
+      if (m) CMD[m]();
+    }
+  });
+
+  // chips <-> cards
+  document.querySelectorAll(".chip").forEach(c => {
+    const card = document.querySelector(`.dcard[data-d="${c.dataset.d}"]`);
+    c.addEventListener("mouseenter", () => card.classList.add("hot"));
+    c.addEventListener("mouseleave", () => card.classList.remove("hot"));
+  });
+
+  renderAll();
+  window.addEventListener("resize", () => { renderAxis(); applyChrome(); });
+})();
+</script>

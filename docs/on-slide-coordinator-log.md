@@ -653,3 +653,40 @@ verified). Folded forward:
   manual-pass consistency item; BuildMenuForZone has no exhaustiveness guard
   (Marker/Text intentionally empty until context-menu-v3); 0.25pt vs 0.5pt
   tolerance constants live in different files.
+
+---
+
+## V4 — Mockup-driven re-plan (2026-07-04)
+
+User verdict on V3 mid-sprint: "the result is very weak - a specification
+problem and planning problem." Root causes acknowledged: layer-ordered units
+shipped invisible plumbing first; no design spec, so "gate passes" never meant
+"looks right". Loop stopped, label-placement reverted mid-flight.
+
+Recovery: built an interactive HTML mockup WITH the user (three feedback
+rounds: rail as a real label column with task rows for text-free graphs;
+selectable/reorderable/deletable rows with app-bar row commands; hierarchical
+two-band date header with real day numbers across five scales; live drag/
+resize/link interactions). User approved: "the look and feel is close to what
+I want... the menu is very good... very good mockup."
+
+V4 artifacts (all committed):
+- docs/mockup/onslide-mockup.html — the approved mockup, now the executable spec
+- docs/design-tokens.md — normative tokens (single source; GanttTheme.h must match)
+- docs/onslide-experience-spec.md — R0-R8 requirements with behavior tables
+- docs/onslide-v4-plan.md — 14 units in 6 vertical slices, ground rules
+  (every V2/V3 lesson encoded), GATE-PURE/GATE-FULL definitions, regression
+  floor list, triple acceptance (harness marker + shape-property assertions +
+  slide-export PNG), user review checkpoint at every slice boundary.
+
+V3 backlog disposition: shipped units stay (regression floor); unstarted units
+absorbed into slices (S1 covers material-theme + label-placement +
+grid-scale-options; S2 covers appbar-shell; S3 row-uniform-ux; S4 closes the
+marker-delete gap; S5 dependency-ux; S6 context-menu-v3 with the vacuous-gate
+fix MENU MAP V4 OK). The session SQLite backlog is now historical - the plan
+doc checkboxes are the V4 state of record.
+
+EXECUTION HANDOVER: the user will drive V4 with a Sonnet agent reading the
+plan doc directly. Coordinator note to that agent: docs/onslide-v4-plan.md
+section 1 ground rules are load-bearing; the regression floor in section 2
+must be green before AND after every unit.

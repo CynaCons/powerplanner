@@ -506,26 +506,40 @@ discovery spikes + 3 review-driven fix units), each committed with `[todo: <id>]
 - [ ] Follow-ups (small): milestone recolor op; edge/milestone drag harness
       coverage; manual DPI matrix run (plan §4.2.1); TrackPopupMenu flicker check
 
-### N8 — Row-Centric Editing + Bottom App Bar (V3) — IN PROGRESS (started 2026-07-04)
-User-feedback iteration on V2. Decisions: app bar = primary contextual surface with
-right-click as shortcut (one shared command map) · uniform rows with optional
-hierarchy · generic movable markers · fit-to-slide under a reserved title zone.
-Plan: [docs/on-slide-ux-plan.md §6](docs/on-slide-ux-plan.md); coordination via
-the same gated sub-agent loop as N7 (log: docs/on-slide-coordinator-log.md).
-- [x] V3-1 fit-to-slide — done f2d9796 + fix-fit-persistence b7ca884 (frame
-      survives edits; uniform scale so text never stretches)
-- [x] V3-2 marker-model-ops (e795ef7) · V3-3 marker-drag (d4eae41) — movable Today/deadline/custom lines shipped
-- [x] V3-4 text-model (e4ddbaa) · V3-5 text-interaction (c1e74ff) — free + anchored text elements shipped
-- [ ] V3-6 label-placement (on-bar vs left-rail task labels)
-- [ ] V3-7 row-uniform-ux (add/indent/outdent — everything is a row)
-- [ ] V3-8 grid-scale-options (five real scales Y/Q/M/W/D + separator density/style)
-- [ ] V3-9 appbar-shell · V3-10 appbar-actions (bottom contextual app bar)
-- [ ] V3-11 dependency-ux (link mode from app bar)
-- [ ] V3-12 context-menu-v3 (menus rebuilt from shared command map)
-- [x] V3-13 fix-overlay-scoping (BUG: chrome floats over other apps — hide unless
-      PowerPoint foreground) — done, e81c182
-- [ ] V3-14 material-theme (Material 3 palette shared by shapes + chrome)
-- [x] V3-15 harness-input-isolation (input-neutral + fully offscreen gates) — done, 2ce3c9d
+### N8 — Row-Centric Editing + Bottom App Bar (V3) — CLOSED, SUPERSEDED BY N9 (2026-07-04)
+User-feedback iteration on V2, stopped mid-sprint after user review: the
+layer-ordered plan shipped plumbing before anything visible ("the result is
+very weak — a specification and planning problem"). Shipped and kept (all
+green, part of the regression floor): fit-to-slide (f2d9796 + b7ca884 frame
+persistence), marker model + drag (e795ef7, d4eae41), text elements
+(e4ddbaa, c1e74ff), overlay foreground scoping bugfix (e81c182),
+input-neutral + offscreen test harness (2ce3c9d). Unstarted V3 units
+(label-placement, row-uniform-ux, grid-scale-options, appbar-*,
+dependency-ux, context-menu-v3, material-theme) are absorbed into the N9
+slices — do not resume them from the old backlog.
+
+### N9 — Mockup-Driven On-Slide Editor (V4) — READY FOR EXECUTION (specified 2026-07-04)
+The approved interactive mockup IS the spec. Normative docs (read in order):
+[docs/onslide-experience-spec.md](docs/onslide-experience-spec.md) (R0–R8) ·
+[docs/design-tokens.md](docs/design-tokens.md) (every color/dimension/type) ·
+[docs/mockup/onslide-mockup.html](docs/mockup/onslide-mockup.html) (executable
+reference) · [docs/onslide-v4-plan.md](docs/onslide-v4-plan.md) (14 units in 6
+vertical slices, ground rules, gates, acceptance criteria). Triple acceptance
+per unit: behavioral harness marker + shape-property assertions + slide-export
+PNG vs mockup; user visual review at every slice boundary.
+- [ ] S1 The Look — theme tokens, visual gate, rail label column, hierarchical
+      two-band date header (s1-theme-tokens · s1-visual-gate · s1-rail-labels
+      · s1-hier-axis)
+- [ ] S2 App bar shell — pure model + docked window + global commands
+      (s2-appbar-model · s2-appbar-window)
+- [ ] S3 Rows are objects — ops + selection/reorder/indent UX (s3-row-ops ·
+      s3-row-selection)
+- [ ] S4 Task & marker context complete — swatches/labels live, marker
+      management incl. the missing delete path (s4-task-context ·
+      s4-marker-mgmt)
+- [ ] S5 Dependencies + notes — link mode, unlink, note entry points
+      (s5-dep-ops · s5-link-mode)
+- [ ] S6 Menus from the shared registry + final sweep (s6-menus · s6-final)
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
