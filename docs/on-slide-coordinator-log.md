@@ -623,3 +623,16 @@ cell origin), both offset by dx/dy points. Emission tagged PP_KIND=TEXT with
 stable PP_ID. DeleteById cascades direct/via-anchor/via-row. PpText.color
 stored but not rendered (same precedent as task/marker color - material-theme
 will wire all of them). Dispatched: text-interaction.
+
+### text-interaction — DONE (c1e74ff)
+
+Full gate from clean rebuild, exit 0: TEXTELEM PASS + all 12 prior stages +
+INPUT NEUTRAL OK + FIT/FITPERSIST/REFLOW. Text zone (real rect, priority below
+task/milestone, above label/marker/rowband); SizeAll cursor; anchored drag =
+dx/dy offset, free drag = re-home to (row,date) with residual zeroed; no-op
+commits suppressed; card editor TEXT mode (label + Delete button) committing
+SetTextLabel; Delete hotkey scoped in; Overlay_GetSelectedKindForTest added.
+Agent-fixed harness flake: stale toolbar from prior stage swallowed the text
+click - stages that click near chrome must deselect (background click) first.
+Right-click on Text intentionally empty until context-menu-v3. Dispatched:
+label-placement (pure) + self-review checkpoint #2 in parallel (read-only).

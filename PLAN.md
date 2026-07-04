@@ -515,7 +515,7 @@ the same gated sub-agent loop as N7 (log: docs/on-slide-coordinator-log.md).
 - [x] V3-1 fit-to-slide — done f2d9796 + fix-fit-persistence b7ca884 (frame
       survives edits; uniform scale so text never stretches)
 - [x] V3-2 marker-model-ops (e795ef7) · V3-3 marker-drag (d4eae41) — movable Today/deadline/custom lines shipped
-- [ ] V3-4 text-model · V3-5 text-interaction (free + anchored text elements)
+- [x] V3-4 text-model (e4ddbaa) · V3-5 text-interaction (c1e74ff) — free + anchored text elements shipped
 - [ ] V3-6 label-placement (on-bar vs left-rail task labels)
 - [ ] V3-7 row-uniform-ux (add/indent/outdent — everything is a row)
 - [ ] V3-8 grid-scale-options (five real scales Y/Q/M/W/D + separator density/style)
