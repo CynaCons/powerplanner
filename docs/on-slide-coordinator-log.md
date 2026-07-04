@@ -538,3 +538,20 @@ else recovered dates distort. Insert path: DoInsertGantt -> InsertGantt ->
 FitChartRootToSlide (non-fatal on failure). 18pt side/bottom margins, top 15%
 reserved; harness FIT assertion is a hard rc=1 gate. Dispatched next:
 harness-input-isolation.
+
+### harness-input-isolation — DONE (2ce3c9d)
+
+Gate: full suite from clean rebuild, exit 0, INPUT NEUTRAL OK + OFFSCREEN AT
+both windows + all 11 stages + FIT OK + REFLOW PASS. Coordinator grep confirms
+zero live real-input calls in overlay-test.cpp (poison-macro block prevents
+reintroduction). Seams: OverlayGetCursorPos choke point (2 GetCursorPos sites +
+NCHITTEST Alt check with altDown flag), host-active override (chrome scoping,
+hotkey registration, Esc-clear). Harness now runs with PowerPoint moved beyond
+the virtual screen (user-visible test theater eliminated - user report folded
+mid-unit). SUPPRESS degraded path now the only route (SendInput Alt+click
+fallback removed with real input). CAPTURE PNG intentionally blank offscreen -
+stage asserts visibility+capture success only. Agent-noted flake fixes: KEYS
+pumps 500->800ms + pre-settle (timing only). MANUAL-CHECK NOTE: SCOPE now
+exercises the scoping logic via override, not a real OS focus transition; real
+transition was validated at e81c182 - re-verify by eye if scoping code changes.
+Dispatched: marker-model-ops (pure gate, no PowerPoint).

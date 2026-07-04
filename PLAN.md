@@ -524,8 +524,7 @@ the same gated sub-agent loop as N7 (log: docs/on-slide-coordinator-log.md).
 - [x] V3-13 fix-overlay-scoping (BUG: chrome floats over other apps — hide unless
       PowerPoint foreground) — done, e81c182
 - [ ] V3-14 material-theme (Material 3 palette shared by shapes + chrome)
-- [ ] V3-15 harness-input-isolation (gates stop taking over mouse/keyboard/focus —
-      cursor + foreground test seams; runs before any unit that adds harness stages)
+- [x] V3-15 harness-input-isolation (input-neutral + fully offscreen gates) — done, 2ce3c9d
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
