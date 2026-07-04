@@ -564,3 +564,28 @@ lines. FINDING folded into material-theme: task/milestone/bracket/marker color
 fields are stored + round-tripped but NEVER consumed by BuildGanttScene - the
 V2 card-editor color swatches are visually inert. material-theme now must wire
 per-element color overrides into scene construction with an ops-test assertion.
+
+### Self-review checkpoint #1 (V3, after 4 units) — folded
+
+8 findings on shipped diffs e81c182/f2d9796/2ce3c9d/e795ef7 + next briefs:
+- HIGH: fitted geometry REVERTS to natural size on first edit (RebuildChart ->
+  UpdateGantt writes natural coords; FitChartRootToSlide only called at insert).
+  Would have surfaced as N independent "chart jumps on edit" bugs. New unit
+  fix-fit-persistence: UpdateGantt becomes frame-preserving (capture frame,
+  FitChartRootToFrame factored from FitChartRootToSlide, PP_PROJ rewrite);
+  semantic = rebuild in place preserves the chart frame, whatever it is.
+  marker-drag now depends on it.
+- MED: non-uniform fit stretch distorts text glyphs in real PowerPoint
+  (invisible to the FIT gate) -> same unit switches to UNIFORM scale,
+  letterbox, top-aligned.
+- MED: marker-drag brief corrected: synthesize marker hit rects as
+  +-edgeBandPx around the PP_PROJ-derived x (line shapes are near-zero width);
+  add Marker to HtItemKind; snapshot allow-list at Overlay.cpp:758 currently
+  DROPS marker shapes. Stage must use the input-neutral pattern (stale
+  SetCursorPos boilerplate noted on all stage-adding units).
+- LOW: host-active override has no production leak (setters only called from
+  ppoverlay.exe); harness never resets override before exit (inert today).
+- LOW: slideshow mode vs overlay scoping unverified -> added to USER NOTES
+  manual pass: check chrome does not paint over a running slideshow.
+- marker-model-ops + scoping pid logic: verified clean.
+Dispatched: fix-fit-persistence (before marker-drag).
