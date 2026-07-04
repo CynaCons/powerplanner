@@ -21,3 +21,6 @@ native/build
 
 # Rasterized/recorded artifacts (regenerable from SVG / the app)
 spec/visual/*.png
+
+# overlay harness capture artifact (written to CWD by ppoverlay.exe)
+overlay.png

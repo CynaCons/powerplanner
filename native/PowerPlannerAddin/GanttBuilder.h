@@ -37,20 +37,39 @@ std::string ReadGanttFromSlide(IDispatch* pApp);
 // dependent connectors/summary and PP_DOC stay in sync. Sets *outChanged.
 HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged);
 
-// V3-1 fit-to-slide: locate the CHART_ROOT group on the active slide (built by
-// a prior InsertGantt at its natural, unscaled size) and resize/reposition it
-// to fill the slide's content area — the full slide width minus ~18pt side
-// margins, and the slide height below a reserved top title zone (~15% of
-// slide height). Width always scales to fill the content width; height scales
-// by that same factor unless the chart would then be shorter than the content
-// area, in which case it scales up further to fill height too (non-uniform
-// stretch is allowed — see task comment). GanttLayout/InsertGantt themselves
-// are untouched (conformance fixtures stay byte-stable): this only moves/
-// resizes the already-built group, then rewrites its PP_PROJ tag so the day
-// <-> point projection matches the new (scaled) geometry, and finally calls
-// ReflowFromSlide as a defensive re-sync (expected to be a no-op / changed
-// false, since PP_PROJ was already corrected for the new scale). Returns
-// S_FALSE if no CHART_ROOT is present, S_OK on success, or a failure HRESULT.
+// Exact-fit primitive: locate the CHART_ROOT group on the active slide (built
+// by a prior InsertGantt/UpdateGantt at some current size) and resize/
+// reposition it to occupy PRECISELY the given target frame (left, top, width,
+// height, in points) — an axis-independent resize (sx = width/currentWidth,
+// sy = height/currentHeight, possibly != each other), the same semantics as a
+// user dragging the group's resize handles to that exact rect. This makes the
+// operation byte-exact/idempotent: calling it twice with the same rect
+// reproduces the same rect (mod float rounding), which is what lets
+// UpdateGantt use it to restore a chart's captured pre-edit frame exactly
+// after a rebuild (see UpdateGantt's PreserveChartRootFrame). This function
+// has NO aspect-ratio/no-distortion opinion of its own — that policy (uniform
+// scale, letterboxing) lives in FitChartRootToSlide, which computes an
+// already-uniform-scaled sub-rect and passes THAT here. GanttLayout/
+// InsertGantt themselves are untouched (conformance fixtures stay
+// byte-stable): this only moves/resizes the already-built group, then
+// rewrites its PP_PROJ tag so the day<->point projection matches the new
+// geometry, and finally calls ReflowFromSlide as a defensive re-sync
+// (expected to be a no-op / changed false, since PP_PROJ was already
+// corrected for the new scale). Returns S_FALSE if no CHART_ROOT is present,
+// S_OK on success, or a failure HRESULT.
+HRESULT FitChartRootToFrame(IDispatch* pApp, float left, float top, float width, float height);
+
+// V3-1 fit-to-slide: computes the slide's content area (full width minus
+// ~18pt side margins, height below a reserved top title zone of ~15% of
+// slide height), then a UNIFORM scale s (single factor, never sx != sy, so
+// text glyphs are never stretched/distorted — review finding #2) that fills
+// the content width unless that would overflow the content height, in which
+// case s fills height instead. The resulting sub-rect — already
+// uniform-scaled, centered horizontally, top-aligned vertically within the
+// content area (so a chart that doesn't fill the full content height
+// letterboxes at the bottom rather than stretching) — is passed to
+// FitChartRootToFrame. Returns S_FALSE if no CHART_ROOT is present, S_OK on
+// success, or a failure HRESULT.
 HRESULT FitChartRootToSlide(IDispatch* pApp);
 
 // Parsed form of the CHART_ROOT's PP_PROJ tag payload

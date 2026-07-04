@@ -5,7 +5,9 @@
 #include "../PowerPlannerAddin/GanttBuilder.h"
 #include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttLayout.h"
+#include "../PowerPlannerAddin/GanttOps.h"
 #include <cstdio>
+#include <cmath>
 #include <string>
 
 static std::string Narrow(const wchar_t* w) {
@@ -106,6 +108,80 @@ int wmain(int argc, wchar_t** argv) {
 				::CoUninitialize();
 				return 1;
 			}
+		}
+
+		// FITPERSIST: a chart fitted at insert must keep its fitted frame
+		// across a mutation that goes through the real UpdateGantt path (as
+		// opposed to the raw group->PutLeft() poke the t5-move REFLOW check
+		// below uses to simulate a drag). Read PP_DOC back, nudge t1 by +1
+		// day via GanttOps, call UpdateGantt, then re-read the CHART_ROOT
+		// frame and assert it is byte-stable (within 0.5pt) vs. the
+		// pre-mutation fitted frame. This is the frame-preserving-rebuild
+		// review fix (see GanttBuilder.h FitChartRootToFrame/UpdateGantt doc
+		// comments): UpdateGantt captures the group's current frame before
+		// reconciling and re-applies it (via FitChartRootToFrame) if the
+		// reconcile/rebuild left the frame at natural (unscaled) size.
+		{
+			const float preLeft = group->GetLeft();
+			const float preTop = group->GetTop();
+			const float preWidth = group->GetWidth();
+			const float preHeight = group->GetHeight();
+
+			std::string docJsonBefore = ReadGanttFromSlide(app);
+			PpDocument docForNudge = DocumentFromJson(docJsonBefore);
+			bool nudged = NudgeTask(docForNudge, "t1", 1);
+			wprintf(L"FITPERSIST: NudgeTask(t1,+1) nudged=%d\n", nudged);
+
+			HRESULT updHr = UpdateGantt(app, docForNudge);
+			wprintf(L"FITPERSIST: UpdateGantt hr=0x%08lX\n", (unsigned long)updHr);
+
+			// The group Shape reference may now point at a stale/regrouped
+			// COM object if UpdateGantt took the structural ungroup/regroup
+			// path; re-find CHART_ROOT fresh rather than reusing `group`.
+			PowerPoint::_SlidePtr slideAfter = app->GetActiveWindow()->GetView()->GetSlide();
+			PowerPoint::ShapesPtr shapesAfter = slideAfter->GetShapes();
+			long nAfter = shapesAfter->GetCount();
+			PowerPoint::ShapePtr groupAfter;
+			for (long i = 1; i <= nAfter; ++i) {
+				PowerPoint::ShapePtr sh = shapesAfter->Item(_variant_t(i));
+				_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (k.length() && Narrow((const wchar_t*)k) == "CHART_ROOT") { groupAfter = sh; break; }
+			}
+
+			bool framePersisted = false;
+			if (groupAfter && nudged && SUCCEEDED(updHr)) {
+				const float postLeft = groupAfter->GetLeft();
+				const float postTop = groupAfter->GetTop();
+				const float postWidth = groupAfter->GetWidth();
+				const float postHeight = groupAfter->GetHeight();
+				const float kTol = 0.5f;
+				framePersisted = (std::fabs(postLeft - preLeft) <= kTol)
+					&& (std::fabs(postTop - preTop) <= kTol)
+					&& (std::fabs(postWidth - preWidth) <= kTol)
+					&& (std::fabs(postHeight - preHeight) <= kTol);
+				wprintf(L"FITPERSIST check: pre=(%.2f,%.2f,%.2f,%.2f) post=(%.2f,%.2f,%.2f,%.2f)\n",
+					preLeft, preTop, preWidth, preHeight, postLeft, postTop, postWidth, postHeight);
+			} else {
+				wprintf(L"FITPERSIST check: groupAfter=%d nudged=%d updHr=0x%08lX\n",
+					groupAfter ? 1 : 0, nudged, (unsigned long)updHr);
+			}
+
+			if (framePersisted) {
+				wprintf(L"FITPERSIST OK\n");
+			} else {
+				wprintf(L"FITPERSIST FAIL\n");
+				pres->PutSaved(Office::msoTrue);
+				pres->Close();
+				app->Quit();
+				::CoUninitialize();
+				return 1;
+			}
+
+			// Continue the rest of the harness using the post-nudge group
+			// (its frame is now confirmed stable / equal to the pre-nudge
+			// fitted frame), so the t5-move REFLOW checks below still operate
+			// on the live CHART_ROOT.
+			group = groupAfter;
 		}
 
 		std::string proj = Narrow((const wchar_t*)group->GetTags()->Item(_bstr_t(L"PP_PROJ")));

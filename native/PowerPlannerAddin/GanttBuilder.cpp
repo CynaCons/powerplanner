@@ -719,6 +719,40 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 	}
 }
 
+// Frame-preserving rebuild (review finding #1, see GanttBuilder.h): re-find
+// the CHART_ROOT (its Shape identity may have changed if ReconcileChartRoot
+// took the structural ungroup/regroup path) and, if its frame drifted from
+// `captured` (BuildProjectedScene/ReconcileChartRoot always (re)write NATURAL,
+// unscaled coordinates), re-apply the captured frame via FitChartRootToFrame
+// so a fitted/user-resized chart's footprint survives the rebuild instead of
+// visibly snapping back to natural size. A tolerance of 0.25pt avoids
+// re-applying (and re-triggering a defensive ReflowFromSlide) for float noise
+// when the frame in fact didn't change.
+static void PreserveChartRootFrame(IDispatch* pApp, PowerPoint::_SlidePtr slide,
+	float capLeft, float capTop, float capWidth, float capHeight) {
+	try {
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+		long n = shapes->GetCount();
+		PowerPoint::ShapePtr group;
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") { group = sh; break; }
+		}
+		if (!group) return;
+
+		const float kTol = 0.25f;
+		bool driftedFrame = (std::fabs(group->GetLeft() - capLeft) > kTol)
+			|| (std::fabs(group->GetTop() - capTop) > kTol)
+			|| (std::fabs(group->GetWidth() - capWidth) > kTol)
+			|| (std::fabs(group->GetHeight() - capHeight) > kTol);
+		if (!driftedFrame) return;
+
+		FitChartRootToFrame(pApp, capLeft, capTop, capWidth, capHeight);
+	} catch (const _com_error&) {
+	} catch (...) {}
+}
+
 HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& selectId) {
 	if (!pApp) return E_POINTER;
 	try {
@@ -740,8 +774,19 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 			return InsertGantt(pApp, doc, &cnt, selectId);
 		}
 
+		// Capture the CHART_ROOT's frame BEFORE reconciling — this is whatever
+		// frame the chart currently has (fitted, user-resized, or natural), and
+		// is what must survive the rebuild below (review finding #1).
+		const float capLeft = group->GetLeft();
+		const float capTop = group->GetTop();
+		const float capWidth = group->GetWidth();
+		const float capHeight = group->GetHeight();
+
 		HRESULT hr = ReconcileChartRoot(app, slide, group, doc, selectId);
-		if (SUCCEEDED(hr)) return hr;
+		if (SUCCEEDED(hr)) {
+			PreserveChartRootFrame(pApp, slide, capLeft, capTop, capWidth, capHeight);
+			return hr;
+		}
 
 		wchar_t buf[96];
 		::swprintf_s(buf, 96, L"UpdateGantt: ReconcileChartRoot failed hr=0x%08lX, falling back to InsertGantt", (unsigned long)hr);
@@ -915,6 +960,90 @@ static const float kFitSideMargin = 18.0f;
 // Fraction of slide height reserved at the top for a native title placeholder.
 static const float kFitTitleZoneFrac = 0.15f;
 
+// Exact-fit primitive: resize/reposition the CHART_ROOT group so it occupies
+// PRECISELY the given (left, top, width, height) rect, then rewrite PP_PROJ so
+// the day<->point projection matches the new geometry. This is a plain
+// axis-independent resize (sx = width/currentWidth, sy = height/currentHeight
+// — the same semantics as a user dragging the group's resize handles to that
+// exact rect), so it is byte-exact/idempotent: calling it twice with the same
+// rect reproduces the same rect (mod float rounding), which is what makes it
+// safe to use for "restore the chart to its previously-captured frame" (see
+// UpdateGantt's PreserveChartRootFrame, GanttBuilder.h doc comment). Uniform-
+// scale/no-distortion/letterbox policy is NOT this function's job — it lives
+// in FitChartRootToSlide, which computes an already-uniform-scaled target
+// rect and passes THAT (not the raw slide content area) here.
+HRESULT FitChartRootToFrame(IDispatch* pApp, float left, float top, float width, float height) {
+	if (!pApp) return E_POINTER;
+	try {
+		PowerPoint::_ApplicationPtr app(pApp);
+		PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+
+		PowerPoint::ShapePtr group;
+		long n = shapes->GetCount();
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (k.length() && Narrow((const wchar_t*)k) == "CHART_ROOT") { group = sh; break; }
+		}
+		if (!group) return S_FALSE;
+
+		std::string projJson = Narrow((const wchar_t*)group->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+		PpProj proj;
+		bool haveProj = ParseProj(projJson, &proj);
+
+		const float curLeft = group->GetLeft();
+		const float curTop = group->GetTop();
+		const float curW = group->GetWidth();
+		const float curH = group->GetHeight();
+		if (curW <= 0.0f || curH <= 0.0f) return E_FAIL;
+
+		const float newLeft = left;
+		const float newTop = top;
+		const float newW = std::max(1.0f, width);
+		const float newH = std::max(1.0f, height);
+		const float sx = newW / curW;
+		const float sy = newH / curH;
+
+		group->PutWidth(newW);
+		group->PutHeight(newH);
+		group->PutLeft(newLeft);
+		group->PutTop(newTop);
+
+		// Rewrite PP_PROJ so the day<->point projection matches the new
+		// geometry (children were proportionally rescaled by PowerPoint's
+		// group-resize semantics: for a child originally at (L0,W0) relative
+		// to the pre-resize group frame, its new absolute Left/Width are
+		// newLeft + (L0-curLeft)*sx and W0*sx — only the X axis matters for
+		// PP_PROJ, since the day<->point projection is horizontal-only).
+		// Without this, ReflowFromSlide would back-project the now-scaled
+		// bar geometry through the STALE pre-resize ptPerDay/originX and
+		// derive distorted dates purely from this resize.
+		if (haveProj) {
+			const float ptPerDayNew = proj.ptPerDay * sx;
+			const float originXNew = newLeft + (proj.originX - curLeft) * sx;
+			char projBuf[192];
+			::sprintf_s(projBuf, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
+				proj.minDay, proj.pad, ptPerDayNew, originXNew);
+			group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(projBuf).c_str()));
+		}
+
+		// Defensive re-sync: with PP_PROJ corrected above, this is expected to
+		// read back the same dates (changed=false) and simply return. If it
+		// ever does find drift (e.g. rounding at extreme scales), it re-emits
+		// from the corrected doc — but note a re-emit rebuilds at NATURAL
+		// (unscaled, full-slide-width) size, so this path intentionally does
+		// not re-fit; callers that need the fit to survive a drifting reflow
+		// should re-invoke FitChartRootToFrame/FitChartRootToSlide afterward.
+		bool changed = false;
+		ReflowFromSlide(pApp, &changed);
+		return S_OK;
+	}
+	catch (const _com_error&) { return E_FAIL; }
+	catch (const std::exception&) { return E_FAIL; }
+	catch (...) { return E_FAIL; }
+}
+
 HRESULT FitChartRootToSlide(IDispatch* pApp) {
 	if (!pApp) return E_POINTER;
 	try {
@@ -934,12 +1063,6 @@ HRESULT FitChartRootToSlide(IDispatch* pApp) {
 		}
 		if (!group) return S_FALSE;
 
-		std::string projJson = Narrow((const wchar_t*)group->GetTags()->Item(_bstr_t(L"PP_PROJ")));
-		PpProj proj;
-		bool haveProj = ParseProj(projJson, &proj);
-
-		const float naturalLeft = group->GetLeft();
-		const float naturalTop = group->GetTop();
 		const float naturalW = group->GetWidth();
 		const float naturalH = group->GetHeight();
 		if (naturalW <= 0.0f || naturalH <= 0.0f) return E_FAIL;
@@ -951,51 +1074,25 @@ HRESULT FitChartRootToSlide(IDispatch* pApp) {
 		const float contentW = std::max(1.0f, slideW - kFitSideMargin * 2.0f);
 		const float contentH = std::max(1.0f, slideH - contentTop - kFitSideMargin);
 
-		// Width always scales to fill the content width. Height scales by the
-		// same factor unless that leaves it shorter than the content area, in
-		// which case scale height up further to fill (non-uniform stretch is
-		// acceptable — see GanttBuilder.h doc comment on FitChartRootToSlide).
-		const float sx = contentW / naturalW;
-		const float hAtSx = naturalH * sx;
-		const float sy = (hAtSx < contentH) ? (contentH / naturalH) : sx;
+		// UNIFORM scale only — a single factor s applied to both axes, never
+		// sx != sy, so text glyphs are never stretched/distorted (review
+		// finding #2). s fills the content width unless that would overflow
+		// the content height, in which case s fills height instead
+		// (letterboxing the chart within the content area rather than
+		// distorting it). The resulting already-uniform-scaled sub-rect
+		// (centered horizontally, top-aligned vertically) is what actually
+		// gets passed to FitChartRootToFrame — that function itself has no
+		// aspect-ratio opinion, it just resizes to exactly the rect it's given.
+		const float sWidthFit = contentW / naturalW;
+		const float hAtWidthFit = naturalH * sWidthFit;
+		const float s = (hAtWidthFit <= contentH) ? sWidthFit : (contentH / naturalH);
 
-		const float newW = naturalW * sx;
-		const float newH = naturalH * sy;
-		const float newLeft = contentLeft + (contentW - newW) / 2.0f;
-		const float newTop = contentTop + (contentH - newH) / 2.0f;
+		const float targetW = naturalW * s;
+		const float targetH = naturalH * s;
+		const float targetLeft = contentLeft + (contentW - targetW) / 2.0f; // center horizontally
+		const float targetTop = contentTop; // top-align vertically (letterbox at bottom)
 
-		group->PutWidth(newW);
-		group->PutHeight(newH);
-		group->PutLeft(newLeft);
-		group->PutTop(newTop);
-
-		// Rewrite PP_PROJ so the day<->point projection matches the new,
-		// scaled/repositioned geometry (children were proportionally
-		// rescaled by PowerPoint's group-resize semantics: for a child
-		// originally at (L0,W0) relative to the natural group frame, its new
-		// absolute Left/Width are newLeft + (L0-naturalLeft)*sx and W0*sx).
-		// Without this, ReflowFromSlide would back-project the now-scaled
-		// bar geometry through the STALE pre-scale ptPerDay/originX and
-		// derive distorted dates purely from the fit resize.
-		if (haveProj) {
-			const float ptPerDayNew = proj.ptPerDay * sx;
-			const float originXNew = newLeft + (proj.originX - naturalLeft) * sx;
-			char projBuf[192];
-			::sprintf_s(projBuf, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
-				proj.minDay, proj.pad, ptPerDayNew, originXNew);
-			group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(projBuf).c_str()));
-		}
-
-		// Defensive re-sync: with PP_PROJ corrected above, this is expected to
-		// read back the same dates (changed=false) and simply return. If it
-		// ever does find drift (e.g. rounding at extreme scales), it re-emits
-		// from the corrected doc — but note a re-emit rebuilds at NATURAL
-		// (unscaled, full-slide-width) size, so this path intentionally does
-		// not re-fit; callers that need the fit to survive a drifting reflow
-		// should re-invoke FitChartRootToSlide afterward.
-		bool changed = false;
-		ReflowFromSlide(pApp, &changed);
-		return S_OK;
+		return FitChartRootToFrame(pApp, targetLeft, targetTop, targetW, targetH);
 	}
 	catch (const _com_error& e) { return e.Error() ? e.Error() : E_FAIL; }
 	catch (const std::exception&) { return E_FAIL; }
