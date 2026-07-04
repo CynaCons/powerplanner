@@ -589,3 +589,14 @@ per-element color overrides into scene construction with an ops-test assertion.
   manual pass: check chrome does not paint over a running slideshow.
 - marker-model-ops + scoping pid logic: verified clean.
 Dispatched: fix-fit-persistence (before marker-drag).
+
+### fix-fit-persistence — DONE (b7ca884)
+
+Full gate from clean rebuild, exit 0: FIT OK + FITPERSIST OK (frame exact to
+0.01pt across NudgeTask+UpdateGantt) + REFLOW PASS + 11 stages + INPUT NEUTRAL
+OK. Design refinement by the agent (validated): FitChartRootToFrame is an
+EXACT-RECT resize primitive (sx/sy independent, idempotent) because the natural
+bounding box aspect is NOT invariant across doc edits (observed 357.95 vs
+331.44pt height drift after a 1-day nudge) - aspect-fit recomputation could
+never restore the captured frame exactly. The uniform-scale/letterbox DECISION
+lives only in FitChartRootToSlide (insert-time). overlay.png gitignored.
