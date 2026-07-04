@@ -95,6 +95,106 @@ static DWORD WINAPI WatchdogProc(LPVOID) {
 	return 0;
 }
 
+// The add-in's overlay now scopes its chrome to whether PowerPoint is the
+// FOREGROUND app (see Overlay.cpp's IsHostActiveForOverlayChrome) — a
+// necessary fix for the "chrome stays on top of other apps" bug, but it
+// means this harness (a separate process whose own console/window can itself
+// become foreground, e.g. after SendInput or a COM call returns) must
+// actively re-steal the foreground before every stage that depends on the
+// overlay chrome being visible, or that stage would spuriously fail with an
+// now-hidden overlay that has nothing to do with a real regression.
+//
+// SetForegroundWindow can be silently refused by Windows' foreground-lock
+// heuristics when the calling process didn't just receive input; the
+// classic workaround is to tap Alt (keybd_event VK_MENU down/up) around the
+// call, which satisfies the "last input event" requirement Windows checks.
+//
+// BUT the Alt-tap is itself hazardous here (coordinator-confirmed
+// nondeterministic KEYS failures, two distinct symptoms across runs): a
+// lingering Alt-down async keystate (a) flips the overlay's WM_NCHITTEST
+// into its HTTRANSPARENT Alt-passthrough hatch so subsequent clicks bypass
+// the overlay entirely, and (b) turns later key events into Alt+<key>
+// chords that a modifierless hotkey never matches. So:
+//   1. Try a PLAIN SetForegroundWindow first — no key events at all. It
+//      succeeds whenever this process already owns the foreground or has
+//      steal permission, which is the common case mid-run.
+//   2. Only fall back to the Alt-tap when the plain call is refused.
+//   3. After ANY Alt-tap, actively guarantee Alt is released before
+//      returning: re-send VK_MENU keyups (plain + extended scancode) and
+//      poll GetAsyncKeyState(VK_MENU) until it reads clear, time-bounded.
+//   4. On success, pump ~2 overlay tick periods (300ms, time-bounded) so
+//      the overlay's 150ms Tick has observed the new foreground state
+//      before the caller starts posting gestures at it.
+static bool EnsureForeground(HWND targetHwnd, DWORD timeoutMs = 3000) {
+	if (!targetHwnd) return false;
+	HWND targetRoot = ::GetAncestor(targetHwnd, GA_ROOT);
+	if (!targetRoot) targetRoot = targetHwnd;
+
+	auto isForeground = [targetRoot]() {
+		HWND fg = ::GetForegroundWindow();
+		return fg && ::GetAncestor(fg, GA_ROOT) == targetRoot;
+	};
+
+	bool usedAltTap = false;
+	bool ok = false;
+	DWORD deadline = ::GetTickCount() + timeoutMs;
+	for (;;) {
+		if (isForeground()) { ok = true; break; }
+
+		// Plain attempt first: zero side effects on keyboard state.
+		::SetForegroundWindow(targetRoot);
+		PumpFor(50);
+		if (isForeground()) { ok = true; break; }
+		if ((long)(deadline - ::GetTickCount()) <= 0) break;
+
+		// Refused: fall back to the Alt-tap variant.
+		usedAltTap = true;
+		::keybd_event(VK_MENU, 0, 0, 0);
+		::keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+		::SetForegroundWindow(targetRoot);
+		PumpFor(50);
+		if (isForeground()) { ok = true; break; }
+		if ((long)(deadline - ::GetTickCount()) <= 0) break;
+
+		::Sleep(50);
+	}
+
+	if (usedAltTap) {
+		// Guarantee Alt is UP before anything else happens: send keyups for
+		// both the plain and extended scancode variants (left/right Alt),
+		// then poll the async state until it reads clear — bounded, so a
+		// wedged input queue can't stall the harness.
+		const BYTE kAltScan = (BYTE)::MapVirtualKeyW(VK_MENU, MAPVK_VK_TO_VSC);
+		::keybd_event(VK_MENU, kAltScan, KEYEVENTF_KEYUP, 0);
+		::keybd_event(VK_MENU, kAltScan, KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY, 0);
+		DWORD altDeadline = ::GetTickCount() + 500;
+		while (::GetAsyncKeyState(VK_MENU) & 0x8000) {
+			::keybd_event(VK_MENU, kAltScan, KEYEVENTF_KEYUP, 0);
+			if ((long)(altDeadline - ::GetTickCount()) <= 0) break;
+			::Sleep(15);
+		}
+	}
+
+	if (ok) {
+		// Settle: let the overlay's 150ms Tick poller observe the new
+		// foreground state (two tick periods, time-bounded) before the
+		// caller interacts with the overlay.
+		PumpFor(300);
+	}
+	return ok;
+}
+
+// Wrapper used before every visibility-dependent stage: on failure, prints
+// the environment-failure marker (distinct from a stage FAIL) and sets rc
+// nonzero so a harness/OS environment problem (foreground-lock, no active
+// desktop, etc.) is never misread as an overlay-scoping regression.
+static bool RequireForeground(HWND targetHwnd, int* rc) {
+	if (EnsureForeground(targetHwnd)) return true;
+	wprintf(L"FOREGROUND STEAL FAILED\n");
+	*rc = 1;
+	return false;
+}
+
 // Match PowerPoint's DPI awareness (per-monitor-DPI-aware, V2 where available)
 // so PointsToScreenPixels and our window coordinates agree exactly like they
 // do for the real add-in, which inherits this from POWERPNT.EXE. Resolved
@@ -164,13 +264,15 @@ int wmain(int argc, wchar_t** argv) {
 			try { app->Activate(); } catch (...) {}
 			HWND ppHwnd = (HWND)(intptr_t)app->GetHWND();
 			::ShowWindow(ppHwnd, SW_SHOWMAXIMIZED);
-			::SetForegroundWindow(ppHwnd);
+			RequireForeground(ppHwnd, &rc);
 			PumpFor(600);
 
-			OverlayStart(app);
-			overlayStarted = true;
-			wprintf(L"harness: overlay started\n");
-			PumpFor(2200);  // let the polling timer fire + paint
+			if (rc == 0) {
+				OverlayStart(app);
+				overlayStarted = true;
+				wprintf(L"harness: overlay started\n");
+				PumpFor(2200);  // let the polling timer fire + paint
+			}
 
 			// ---- stage 1: ALPHA -------------------------------------------
 			// The overlay must be UpdateLayeredWindow-driven per-pixel alpha.
@@ -197,6 +299,7 @@ int wmain(int argc, wchar_t** argv) {
 			}
 
 			// ---- stage 2: CAPTURE -----------------------------------------
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				HWND ov = OverlayHwnd();
@@ -236,6 +339,7 @@ int wmain(int argc, wchar_t** argv) {
 			// Alt+click selects the group, a second Alt+click at the same
 			// point sub-selects the child under the cursor, matching real
 			// click-into-group behavior) if the direct route doesn't stick.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				bool childSelectable = true;
@@ -298,8 +402,8 @@ int wmain(int argc, wchar_t** argv) {
 						int sx = win->PointsToScreenPixelsX(left + w / 2.0f);
 						int sy = win->PointsToScreenPixelsY(top + h / 2.0f);
 
-						HWND ppHwnd = (HWND)(intptr_t)app->GetHWND();
-						::SetForegroundWindow(ppHwnd);
+						HWND ppHwndInner = (HWND)(intptr_t)app->GetHWND();
+						EnsureForeground(ppHwndInner);
 						PumpFor(150);
 
 						auto altClickAt = [&](int x, int y) {
@@ -402,6 +506,7 @@ int wmain(int argc, wchar_t** argv) {
 			// (WM_LBUTTONDOWN + WM_LBUTTONUP at the same point) posted directly
 			// to the overlay hwnd — no COM Shape::Select() involved — and that
 			// selection must NOT touch PowerPoint's native Selection at all.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				try {
@@ -498,6 +603,7 @@ int wmain(int argc, wchar_t** argv) {
 			// afterward: dates must have shifted by exactly N days, and the
 			// overlay's own-selection model must still report the same task id
 			// (A2: no deselect-after-drag flicker).
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				try {
@@ -680,6 +786,7 @@ int wmain(int argc, wchar_t** argv) {
 				if (nb > 0) ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, &s[0], nb, NULL, NULL);
 				return s;
 			};
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				try {
@@ -836,6 +943,7 @@ int wmain(int argc, wchar_t** argv) {
 			// tasks), posted-drag ~10 days to the right from a point inside that
 			// row's band, then re-read PP_DOC: task count +1, new task's row
 			// matches, and its span is ~10 days (+-1 day tolerance).
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				try {
@@ -1011,6 +1119,7 @@ int wmain(int argc, wchar_t** argv) {
 			// reconciled in place rather than falling back to delete+InsertGantt),
 			// while the dragged bar's Left and PP_DOC dates must have actually
 			// moved (the gesture really committed).
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				try {
@@ -1199,6 +1308,7 @@ int wmain(int argc, wchar_t** argv) {
 			// dates are still exactly MakeSampleDocument's ("2026-06-22" /
 			// "2026-07-10") going into this stage, making the +1 day
 			// assertion unambiguous.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				try {
@@ -1353,6 +1463,7 @@ int wmain(int argc, wchar_t** argv) {
 			// BOTH dates — the card only edits Start here, so it must submit
 			// the unchanged-but-still-required End field verbatim), and the
 			// overlay's own-selection model retained the task as selected.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
 				try {
@@ -1490,6 +1601,87 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"EDITOR: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"EDITOR PASS\n" : L"EDITOR FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 11: SCOPE -----------------------------------------------
+			// The overlay chrome must be scoped to the host: think-cell-style
+			// add-ins only paint their floating chrome while their host app is
+			// the foreground window (Overlay.cpp's IsHostActiveForOverlayChrome,
+			// wired into Tick()). Verify by creating a plain top-level window,
+			// stealing the foreground for it (same bounded-retry pattern as
+			// everywhere else in this harness), and asserting the overlay hides;
+			// then re-foreground PowerPoint and assert it reappears.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				HWND testWnd = NULL;
+				try {
+					HWND ov = OverlayHwnd();
+					if (!ov) {
+						wprintf(L"SCOPE: overlay hwnd missing\n");
+					} else {
+						// A minimal, plain, visible top-level window — anything
+						// the OS will hand the foreground to. WS_EX_APPWINDOW so
+						// it behaves like a normal app window (not a tool/owned
+						// window PowerPoint might still be considered "active"
+						// through).
+						const wchar_t* kScopeTestClass = L"PPScopeTestWindow";
+						WNDCLASSEXW wc = { sizeof(wc) };
+						wc.lpfnWndProc = ::DefWindowProcW;
+						wc.hInstance = ::GetModuleHandleW(NULL);
+						wc.hCursor = ::LoadCursor(NULL, IDC_ARROW);
+						wc.lpszClassName = kScopeTestClass;
+						::RegisterClassExW(&wc);
+
+						testWnd = ::CreateWindowExW(WS_EX_APPWINDOW, kScopeTestClass,
+							L"PP Scope Test", WS_OVERLAPPEDWINDOW,
+							100, 100, 300, 200, NULL, NULL, wc.hInstance, NULL);
+
+						if (!testWnd) {
+							wprintf(L"SCOPE: could not create test window\n");
+						} else {
+							::ShowWindow(testWnd, SW_SHOW);
+							::UpdateWindow(testWnd);
+
+							bool stole = EnsureForeground(testWnd);
+							PumpFor(1000);
+
+							if (!stole) {
+								wprintf(L"FOREGROUND STEAL FAILED\n");
+							} else {
+								bool overlayHidden = !::IsWindowVisible(ov);
+								HWND card = ::FindWindowW(PP_CARD_EDITOR_CLASS, NULL);
+								bool cardHiddenOrGone = (!card || !::IsWindowVisible(card));
+
+								if (!overlayHidden) {
+									wprintf(L"SCOPE: overlay still visible while an unrelated app is foreground\n");
+								}
+								if (!cardHiddenOrGone) {
+									wprintf(L"SCOPE: card editor still visible while an unrelated app is foreground\n");
+								}
+
+								// Re-foreground PowerPoint and confirm the overlay
+								// comes back within a bounded pump.
+								bool refocused = EnsureForeground(ppHwnd);
+								PumpFor(1000);
+								bool overlayVisibleAgain = refocused && ::IsWindowVisible(ov);
+
+								if (!refocused) {
+									wprintf(L"FOREGROUND STEAL FAILED\n");
+								} else if (!overlayVisibleAgain) {
+									wprintf(L"SCOPE: overlay did not reappear after re-foregrounding PowerPoint\n");
+								}
+
+								pass = overlayHidden && cardHiddenOrGone && refocused && overlayVisibleAgain;
+							}
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"SCOPE: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				if (testWnd) ::DestroyWindow(testWnd);
+				wprintf(pass ? L"SCOPE PASS\n" : L"SCOPE FAIL\n");
 				if (!pass) rc = 1;
 			}
 		} catch (const _com_error& e) {

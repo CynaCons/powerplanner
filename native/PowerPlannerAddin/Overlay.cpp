@@ -3433,6 +3433,51 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 	}
 }
 
+// Scope the overlay chrome to the host: think-cell-style add-ins only ever
+// paint their floating chrome while their host app is the active
+// (foreground) window. Without this check the overlay's WS_EX_TOPMOST style
+// keeps the selection frame + Add/Del/-/+ toolbar visible ON TOP OF OTHER
+// APPS once PowerPoint is minimized or loses focus, which is the bug this
+// guards against.
+//
+// "PowerPoint is active" is true when the foreground window's root is
+// PowerPoint's own root window, OR the foreground window is one of OUR
+// top-level windows (the overlay itself, the inline editor, or the card
+// editor — all legitimate "PowerPoint is active" states, e.g. right after a
+// click before focus returns to the main frame), OR the foreground window
+// belongs to the POWERPNT.EXE process (covers PowerPoint-owned dialogs and
+// flyouts that are themselves separate top-level windows).
+//
+// PID TRAP: compare against the pid that OWNS ppRoot (via
+// GetWindowThreadProcessId(ppRoot, &pid)), NOT GetCurrentProcessId(). In
+// production the overlay DLL runs in-process inside POWERPNT.EXE so the two
+// pids are identical, but this same Overlay.cpp is also linked into
+// ppoverlay.exe for the harness, where PowerPoint is a SEPARATE process —
+// GetCurrentProcessId() would always be wrong there.
+//
+// Also requires ppRoot to be non-iconic (not minimized) and visible.
+bool IsHostActiveForOverlayChrome(HWND ppRoot) {
+	if (!ppRoot) return false;
+	if (::IsIconic(ppRoot)) return false;
+	if (!::IsWindowVisible(ppRoot)) return false;
+
+	HWND fg = ::GetForegroundWindow();
+	if (!fg) return false;
+	HWND fgRoot = ::GetAncestor(fg, GA_ROOT);
+
+	if (fgRoot == ppRoot) return true;
+	if (fg == g_hwnd || fg == g_editorHwnd || fg == g_cardHwnd) return true;
+	if (fgRoot == g_hwnd || fgRoot == g_editorHwnd || fgRoot == g_cardHwnd) return true;
+
+	DWORD ppPid = 0;
+	::GetWindowThreadProcessId(ppRoot, &ppPid);
+	DWORD fgPid = 0;
+	::GetWindowThreadProcessId(fg, &fgPid);
+	if (ppPid != 0 && fgPid == ppPid) return true;
+
+	return false;
+}
+
 // Poll the slide; keep the overlay over the chart while selection chrome follows
 // the selected PowerPlanner child shape.
 void Tick() {
@@ -3489,6 +3534,28 @@ void Tick() {
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
 		if (!win) { HideOverlay(); return; }
 		g_pptHwnd = (HWND)(INT_PTR)g_app->GetHWND();
+
+		// Host-scoping: the overlay chrome (selection frame + toolbar) may be
+		// visible ONLY while PowerPoint is the active app (see
+		// IsHostActiveForOverlayChrome's comment above). If PowerPoint is not
+		// active (minimized, or some unrelated app is foreground), hide the
+		// overlay and both auxiliary editor windows and bail out early, same
+		// as the no-chart path below. Latency is bounded by one 150ms tick,
+		// which is acceptable per the task spec.
+		HWND ppRoot = ::GetAncestor(g_pptHwnd, GA_ROOT);
+		if (!IsHostActiveForOverlayChrome(ppRoot)) {
+			HideOverlay();
+			// The inline editor and card editor each already commit/cancel
+			// themselves on their own focus-loss messages (WM_KILLFOCUS for
+			// the inline editor, WM_ACTIVATE/WA_INACTIVE for the card), so by
+			// the time this runs they are usually already closed and
+			// possibly NULL. Only hide-if-still-visible here — never force a
+			// second commit/cancel (that would double-fire the editors' own
+			// teardown logic).
+			if (g_editorHwnd && ::IsWindow(g_editorHwnd)) ::ShowWindow(g_editorHwnd, SW_HIDE);
+			if (g_cardHwnd && ::IsWindow(g_cardHwnd)) ::ShowWindow(g_cardHwnd, SW_HIDE);
+			return;
+		}
 
 		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
 		PowerPoint::ShapePtr chart = FindChartRoot(slide);
