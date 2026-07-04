@@ -37,6 +37,22 @@ std::string ReadGanttFromSlide(IDispatch* pApp);
 // dependent connectors/summary and PP_DOC stay in sync. Sets *outChanged.
 HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged);
 
+// V3-1 fit-to-slide: locate the CHART_ROOT group on the active slide (built by
+// a prior InsertGantt at its natural, unscaled size) and resize/reposition it
+// to fill the slide's content area — the full slide width minus ~18pt side
+// margins, and the slide height below a reserved top title zone (~15% of
+// slide height). Width always scales to fill the content width; height scales
+// by that same factor unless the chart would then be shorter than the content
+// area, in which case it scales up further to fill height too (non-uniform
+// stretch is allowed — see task comment). GanttLayout/InsertGantt themselves
+// are untouched (conformance fixtures stay byte-stable): this only moves/
+// resizes the already-built group, then rewrites its PP_PROJ tag so the day
+// <-> point projection matches the new (scaled) geometry, and finally calls
+// ReflowFromSlide as a defensive re-sync (expected to be a no-op / changed
+// false, since PP_PROJ was already corrected for the new scale). Returns
+// S_FALSE if no CHART_ROOT is present, S_OK on success, or a failure HRESULT.
+HRESULT FitChartRootToSlide(IDispatch* pApp);
+
 // Parsed form of the CHART_ROOT's PP_PROJ tag payload
 // ({"minDay":N,"pad":N,"ptPerDay":N,"originX":N}) — the day<->point projection
 // used both by ReflowFromSlide and by the overlay's drag-gesture math. Returns

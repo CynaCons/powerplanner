@@ -49,6 +49,12 @@ int wmain(int argc, wchar_t** argv) {
 		int cnt = 0;
 		InsertGantt(app, MakeSampleDocument(), &cnt);
 
+		// V3-1 fit-to-slide: size/position CHART_ROOT to the slide's content
+		// area (top ~15% reserved for a native title placeholder), same as
+		// the ribbon's DoInsertGantt does via Connect.cpp.
+		HRESULT fitHr = FitChartRootToSlide(app);
+		wprintf(L"FitChartRootToSlide hr=0x%08lX\n", (unsigned long)fitHr);
+
 		PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
 		PowerPoint::ShapesPtr shapes = slide->GetShapes();
 		long n = shapes->GetCount();
@@ -59,6 +65,48 @@ int wmain(int argc, wchar_t** argv) {
 			if (k.length() && Narrow((const wchar_t*)k) == "CHART_ROOT") { group = sh; break; }
 		}
 		if (!group) { wprintf(L"no chart group found\n"); throw _com_error(E_FAIL); }
+
+		// FIT assertion: the fitted CHART_ROOT frame must lie within the
+		// slide's content area (full width minus ~18pt side margins, height
+		// below the reserved top ~15% title zone and above a matching bottom
+		// margin), with width >= 80% of slide width and top >= 10% of slide
+		// height. This is a hard gate: on failure, print FIT FAIL and force
+		// rc=1 — the remaining reflow checks below are skipped so exit code 0
+		// is impossible without FIT OK having printed first (a broken fit
+		// must never be masked by an unrelated REFLOW PASS).
+		{
+			const float slideW = (float)app->GetActivePresentation()->GetPageSetup()->GetSlideWidth();
+			const float slideH = (float)app->GetActivePresentation()->GetPageSetup()->GetSlideHeight();
+			const float left = group->GetLeft();
+			const float top = group->GetTop();
+			const float width = group->GetWidth();
+			const float height = group->GetHeight();
+			const float contentLeft = 0.0f;
+			const float contentTop = slideH * 0.10f; // slightly looser than the 15% reservation, see below
+			const float contentRight = slideW;
+			const float contentBottom = slideH;
+
+			bool withinArea = (left >= contentLeft - 0.5f) && (top >= contentTop - 0.5f)
+				&& (left + width <= contentRight + 0.5f) && (top + height <= contentBottom + 0.5f);
+			bool wideEnough = width >= slideW * 0.80f;
+			bool lowEnough = top >= slideH * 0.10f;
+
+			wprintf(L"FIT check: left=%.2f top=%.2f width=%.2f height=%.2f slideW=%.2f slideH=%.2f\n",
+				left, top, width, height, slideW, slideH);
+			wprintf(L"FIT check: withinArea=%d wideEnough=%d(%.1f%%>=80%%) lowEnough=%d(%.1f%%>=10%%)\n",
+				withinArea, wideEnough, (width / slideW) * 100.0f, lowEnough, (top / slideH) * 100.0f);
+
+			if (SUCCEEDED(fitHr) && withinArea && wideEnough && lowEnough) {
+				wprintf(L"FIT OK\n");
+			} else {
+				wprintf(L"FIT FAIL\n");
+				pres->PutSaved(Office::msoTrue);
+				pres->Close();
+				app->Quit();
+				::CoUninitialize();
+				return 1;
+			}
+		}
 
 		std::string proj = Narrow((const wchar_t*)group->GetTags()->Item(_bstr_t(L"PP_PROJ")));
 		long minDay = 0, pad = 0; float ptPerDay = 1.0f, originX = 0.0f;

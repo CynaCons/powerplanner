@@ -903,3 +903,97 @@ HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 	catch (const std::exception&) { return E_FAIL; }
 	catch (...) { return E_FAIL; }
 }
+
+// V3-1 fit-to-slide (see GanttBuilder.h doc comment). Side margin reserved on
+// the left/right of the content area, and also used as the bottom margin so
+// the fitted chart doesn't touch the slide edge.
+static const float kFitSideMargin = 18.0f;
+// Fraction of slide height reserved at the top for a native title placeholder.
+static const float kFitTitleZoneFrac = 0.15f;
+
+HRESULT FitChartRootToSlide(IDispatch* pApp) {
+	if (!pApp) return E_POINTER;
+	try {
+		PowerPoint::_ApplicationPtr app(pApp);
+		PowerPoint::_PresentationPtr pres = app->GetActivePresentation();
+		const float slideW = (float)pres->GetPageSetup()->GetSlideWidth();
+		const float slideH = (float)pres->GetPageSetup()->GetSlideHeight();
+		PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+
+		PowerPoint::ShapePtr group;
+		long n = shapes->GetCount();
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (k.length() && Narrow((const wchar_t*)k) == "CHART_ROOT") { group = sh; break; }
+		}
+		if (!group) return S_FALSE;
+
+		std::string projJson = Narrow((const wchar_t*)group->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+		PpProj proj;
+		bool haveProj = ParseProj(projJson, &proj);
+
+		const float naturalLeft = group->GetLeft();
+		const float naturalTop = group->GetTop();
+		const float naturalW = group->GetWidth();
+		const float naturalH = group->GetHeight();
+		if (naturalW <= 0.0f || naturalH <= 0.0f) return E_FAIL;
+
+		// Content area: full width minus side margins, full height below the
+		// reserved top title zone (and above a matching bottom margin).
+		const float contentLeft = kFitSideMargin;
+		const float contentTop = slideH * kFitTitleZoneFrac;
+		const float contentW = std::max(1.0f, slideW - kFitSideMargin * 2.0f);
+		const float contentH = std::max(1.0f, slideH - contentTop - kFitSideMargin);
+
+		// Width always scales to fill the content width. Height scales by the
+		// same factor unless that leaves it shorter than the content area, in
+		// which case scale height up further to fill (non-uniform stretch is
+		// acceptable — see GanttBuilder.h doc comment on FitChartRootToSlide).
+		const float sx = contentW / naturalW;
+		const float hAtSx = naturalH * sx;
+		const float sy = (hAtSx < contentH) ? (contentH / naturalH) : sx;
+
+		const float newW = naturalW * sx;
+		const float newH = naturalH * sy;
+		const float newLeft = contentLeft + (contentW - newW) / 2.0f;
+		const float newTop = contentTop + (contentH - newH) / 2.0f;
+
+		group->PutWidth(newW);
+		group->PutHeight(newH);
+		group->PutLeft(newLeft);
+		group->PutTop(newTop);
+
+		// Rewrite PP_PROJ so the day<->point projection matches the new,
+		// scaled/repositioned geometry (children were proportionally
+		// rescaled by PowerPoint's group-resize semantics: for a child
+		// originally at (L0,W0) relative to the natural group frame, its new
+		// absolute Left/Width are newLeft + (L0-naturalLeft)*sx and W0*sx).
+		// Without this, ReflowFromSlide would back-project the now-scaled
+		// bar geometry through the STALE pre-scale ptPerDay/originX and
+		// derive distorted dates purely from the fit resize.
+		if (haveProj) {
+			const float ptPerDayNew = proj.ptPerDay * sx;
+			const float originXNew = newLeft + (proj.originX - naturalLeft) * sx;
+			char projBuf[192];
+			::sprintf_s(projBuf, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
+				proj.minDay, proj.pad, ptPerDayNew, originXNew);
+			group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(projBuf).c_str()));
+		}
+
+		// Defensive re-sync: with PP_PROJ corrected above, this is expected to
+		// read back the same dates (changed=false) and simply return. If it
+		// ever does find drift (e.g. rounding at extreme scales), it re-emits
+		// from the corrected doc — but note a re-emit rebuilds at NATURAL
+		// (unscaled, full-slide-width) size, so this path intentionally does
+		// not re-fit; callers that need the fit to survive a drifting reflow
+		// should re-invoke FitChartRootToSlide afterward.
+		bool changed = false;
+		ReflowFromSlide(pApp, &changed);
+		return S_OK;
+	}
+	catch (const _com_error& e) { return e.Error() ? e.Error() : E_FAIL; }
+	catch (const std::exception&) { return E_FAIL; }
+	catch (...) { return E_FAIL; }
+}

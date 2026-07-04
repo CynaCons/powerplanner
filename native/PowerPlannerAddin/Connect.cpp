@@ -327,6 +327,18 @@ void CConnect::DoInsertGantt()
 	int shapeCount = 0;
 	HRESULT hr = InsertGantt(m_pApp, MakeSampleDocument(), &shapeCount);
 	if (SUCCEEDED(hr)) {
+		// V3-1 fit-to-slide: size/position the freshly-built CHART_ROOT to
+		// fill the slide's content area (reserving the top ~15% for a native
+		// title placeholder). Best-effort: a failure here still leaves a
+		// valid (just naturally-sized) chart on the slide, so it does not
+		// affect the success HRESULT/message below.
+		HRESULT fitHr = FitChartRootToSlide(m_pApp);
+		if (FAILED(fitHr)) {
+			wchar_t fitMsg[96];
+			::swprintf_s(fitMsg, 96, L"FitChartRootToSlide failed hr=0x%08lX (chart left at natural size)", (unsigned long)fitHr);
+			PpLog(fitMsg);
+		}
+
 		wchar_t msg[160];
 		::swprintf_s(msg, 160, L"Inserted a Gantt chart: %d native shapes on the current slide.", shapeCount);
 		PpLog(msg);
