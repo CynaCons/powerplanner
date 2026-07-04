@@ -27,6 +27,24 @@ HWND OverlayHwnd();
 // stage assertion. Never touches COM.
 const char* Overlay_GetSelectedIdForTest();
 
+// Debug/test hook: the internally-selected element's KIND, as a stable int
+// (the id-only hook above cannot disambiguate — e.g. a TASK and a TEXT could
+// share the same id shape across independent tests). Mirrors g_ownSelKind's
+// string values ("TASK"/"MILESTONE"/"ROW"/"MARKER"/"TEXT"/empty) without
+// exposing the string itself, since this is consumed by the harness's
+// TEXTELEM stage to assert the internal selection model resolved to "text"
+// (not "task"/"milestone"/etc.) after a click on a PpText annotation. Never
+// touches COM.
+enum OverlaySelectedKindForTest {
+	OVERLAY_SELKIND_NONE_FOR_TEST = 0,
+	OVERLAY_SELKIND_TASK_FOR_TEST = 1,
+	OVERLAY_SELKIND_MILESTONE_FOR_TEST = 2,
+	OVERLAY_SELKIND_ROW_FOR_TEST = 3,
+	OVERLAY_SELKIND_MARKER_FOR_TEST = 4,
+	OVERLAY_SELKIND_TEXT_FOR_TEST = 5,
+};
+int Overlay_GetSelectedKindForTest();
+
 // WM_HOTKEY ids (wParam values) the overlay registers via RegisterHotKey and
 // dispatches on in its WM_HOTKEY handler (see Overlay.cpp's kHotkeySpecs /
 // OverlayHotkeyId). Exposed here so the harness's KEYS stage can post
@@ -63,14 +81,15 @@ void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altD
 // SetForegroundWindow on a real window.
 void Overlay_SetHostActiveOverrideForTest(int mode);
 
-// ---- floating card editor (double-click TaskBody/Milestone) test hooks ----
+// ---- floating card editor (double-click TaskBody/Milestone/Text) test hooks
 // The card is a real top-level window (WS_EX_TOOLWINDOW), registered under
 // this class name (mirrors Overlay.cpp's private kCardClass, kept in sync by
 // hand since the class name itself has no other reason to be shared) so the
 // harness's EDITOR stage can find it via FindWindowW without any other
 // exported hook. Child control ids mirror Overlay.cpp's CardControlId enum
 // so the harness can resolve the start-date field via GetDlgItem instead of
-// walking children by class+z-order.
+// walking children by class+z-order. OVERLAY_CARD_ID_DELETE_FOR_TEST is only
+// shown in TEXT mode (label field + delete button, no dates/percent/swatches).
 #define PP_CARD_EDITOR_CLASS L"PowerPlannerCardEditor"
 enum OverlayCardControlIdForTest {
 	OVERLAY_CARD_ID_LABEL_FOR_TEST = 101,
@@ -78,4 +97,5 @@ enum OverlayCardControlIdForTest {
 	OVERLAY_CARD_ID_END_FOR_TEST = 103,
 	OVERLAY_CARD_ID_PERCENT_FOR_TEST = 104,
 	OVERLAY_CARD_ID_OK_FOR_TEST = 105,
+	OVERLAY_CARD_ID_DELETE_FOR_TEST = 106,
 };

@@ -66,6 +66,23 @@ static bool RunHitTestChecks() {
 	// Milestone.
 	ok = zoneCheck(620, 300, HtZone::Milestone, "ms-1", "hit: milestone rect is Milestone") && ok;
 
+	// Text annotation: a real rendered rect (unlike Marker's synthesized band).
+	// Placed in row-2's open timeline area (EmptyCell territory absent the
+	// text) to prove Text wins over RowBand/EmptyCell; a second point just
+	// outside its rect falls through to EmptyCell as expected.
+	snap.items.push_back({ HtItemKind::Text, "txt-1", { 660, 290, 720, 310 } });
+	ok = zoneCheck(690, 300, HtZone::Text, "txt-1", "hit: text rect (over open row-2 timeline) is Text") && ok;
+	ok = zoneCheck(660, 290, HtZone::Text, "txt-1", "hit: text rect top-left corner is Text") && ok;
+	ok = zoneCheck(719, 309, HtZone::Text, "txt-1", "hit: text rect bottom-right (half-open) inclusive corner is Text") && ok;
+	ok = zoneCheck(720, 300, HtZone::EmptyCell, "row-2", "hit: 1px right of text rect (half-open) falls through to EmptyCell") && ok;
+	ok = zoneCheck(725, 300, HtZone::EmptyCell, "row-2", "hit: clear of text rect is EmptyCell") && ok;
+
+	// Priority: a text rect overlapping a TASK bar stays subordinate to the
+	// task (Text is below TaskBody/TaskEdge/Milestone per GanttHitTest's pass
+	// ordering) — the task must win at the overlap point.
+	snap.items.push_back({ HtItemKind::Text, "txt-2", { 350, 190, 450, 210 } });
+	ok = zoneCheck(400, 200, HtZone::TaskBody, "task-1", "hit: text overlapping a task bar stays subordinate to TaskBody") && ok;
+
 	// Marker: a vertical date line synthesized as a +-4px band (edgeBandPx,
 	// default kHtEdgePx) spanning the chart's full vertical extent (top to
 	// bottom), independent of row bands. Placed at x=800 (clear of the
@@ -346,10 +363,11 @@ static bool RunMenuModelChecks() {
 static bool RunCursorMapChecks() {
 	bool ok = true;
 
-	// Exhaustive over every HtZone enumerator: TaskBody/Milestone -> SizeAll,
-	// TaskEdgeL/R -> SizeWE, EmptyCell -> Cross, RowBand/Label -> Arrow,
-	// Outside -> Default. Listed in HtZone declaration order so a future zone
-	// added to the enum without a case here is easy to spot in review.
+	// Exhaustive over every HtZone enumerator: TaskBody/Milestone/Text ->
+	// SizeAll, TaskEdgeL/R -> SizeWE, EmptyCell -> Cross, RowBand/Label ->
+	// Arrow, Outside -> Default. Listed in HtZone declaration order so a
+	// future zone added to the enum without a case here is easy to spot in
+	// review.
 	static const struct { HtZone zone; HtCursor expected; const char* msg; } kZoneCases[] = {
 		{ HtZone::Outside,    HtCursor::Default, "cursor: Outside -> Default" },
 		{ HtZone::TaskBody,   HtCursor::SizeAll, "cursor: TaskBody -> SizeAll" },
@@ -358,6 +376,7 @@ static bool RunCursorMapChecks() {
 		{ HtZone::Milestone,  HtCursor::SizeAll, "cursor: Milestone -> SizeAll" },
 		{ HtZone::Label,      HtCursor::Arrow,   "cursor: Label -> Arrow" },
 		{ HtZone::Marker,     HtCursor::SizeWE,  "cursor: Marker -> SizeWE (ew-resize)" },
+		{ HtZone::Text,       HtCursor::SizeAll, "cursor: Text -> SizeAll" },
 		{ HtZone::RowBand,    HtCursor::Arrow,   "cursor: RowBand -> Arrow" },
 		{ HtZone::EmptyCell,  HtCursor::Cross,   "cursor: EmptyCell -> Cross" },
 	};
@@ -365,7 +384,7 @@ static bool RunCursorMapChecks() {
 	// If this fires, a zone was added to/removed from HtZone without updating
 	// kZoneCases above -- the exhaustiveness this test promises would silently
 	// lapse otherwise.
-	static_assert(kZoneCount == 9, "HtZone case count changed: update kZoneCases in RunCursorMapChecks");
+	static_assert(kZoneCount == 10, "HtZone case count changed: update kZoneCases in RunCursorMapChecks");
 
 	for (const auto& c : kZoneCases) {
 		ok = Check(GanttCursorForZone(c.zone) == c.expected, c.msg) && ok;

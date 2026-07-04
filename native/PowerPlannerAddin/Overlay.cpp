@@ -186,15 +186,35 @@ POINT g_mouseDownPt = {};
 // without ever early-returning (the ghost still needs to paint every tick).
 bool g_gestureActive = false;
 bool g_dragActive = false;
-enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, Milestone, Create, Marker };
+enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, Milestone, Create, Marker, Text };
 DragKind g_dragKind = DragKind::None;
-std::string g_dragId;          // task, milestone, or marker PP_ID being dragged
+std::string g_dragId;          // task, milestone, marker, or text PP_ID being dragged
 RECT g_dragAnchorRect = {};    // original screen rect of the dragged item at gesture start
 std::string g_dragOrigStart;   // original ISO start date (task) or date (milestone)
 std::string g_dragOrigEnd;     // original ISO end date (task); empty for milestones
 float g_dragPxPerDay = 0.0f;   // SCREEN pixels-per-day for this gesture (see ComputeDragPxPerDay)
 long g_dragDeltaDays = 0;      // current candidate day delta (updated on move)
 POINT g_dragLastPt = {};       // last client point seen during the drag
+
+// ---- text-move gesture state -------------------------------------------------
+// A Text drag moves the PpText by a screen-pixel offset translated back into
+// slide POINTS (unlike every other drag kind, which works in whole days) —
+// text has no day-span of its own to derive a px/day scale from, and its
+// (dx, dy) offset is stored in points, not days. g_dragPxPerPt is the
+// SCREEN-pixels-per-POINT scale for this gesture, derived from the SAME
+// px/day scale every other gesture already uses (g_dragPxPerDay) divided by
+// PP_PROJ's ptPerDay (points per day): since PowerPoint's zoom is a single
+// uniform factor (never a separate horizontal/vertical scale), one px/pt
+// ratio is valid for BOTH dx and dy — no separate vertical (row-height-based)
+// scale is needed. g_dragTextAnchored mirrors the PpText's anchorId-empty-ness
+// at gesture start (read once, per A4) so UpdateDragGesture/CommitDragGesture
+// never need to re-read the doc to know which commit path applies.
+bool g_dragTextAnchored = false;
+float g_dragOrigDx = 0.0f;     // text's dx/dy (points) at gesture start
+float g_dragOrigDy = 0.0f;
+float g_dragPxPerPt = 0.0f;    // SCREEN pixels-per-POINT for this gesture
+float g_dragCandidateDx = 0.0f; // current candidate dx/dy (points), updated on move
+float g_dragCandidateDy = 0.0f;
 
 // Row-reassign (vertical) part of a TaskBody drag: the row band id under the
 // current drag point, and its screen rect. Recomputed every WM_MOUSEMOVE from
@@ -293,6 +313,7 @@ enum CardControlId {
 	CARD_ID_END = 103,
 	CARD_ID_PERCENT = 104,
 	CARD_ID_OK = 105,
+	CARD_ID_DELETE = 106, // TEXT mode only: label field + this button, no dates/percent/swatches
 	CARD_ID_SWATCH_BASE = 110, // 110..117 for the 8 color swatches
 };
 constexpr int kCardSwatchCount = 8;
@@ -320,10 +341,11 @@ HWND g_cardStartHwnd = NULL;
 HWND g_cardEndHwnd = NULL;
 HWND g_cardPercentHwnd = NULL;
 HWND g_cardOkHwnd = NULL;
+HWND g_cardDeleteHwnd = NULL;   // TEXT mode only: label field + this button
 HWND g_cardSwatchHwnd[kCardSwatchCount] = {};
 WNDPROC g_oldCardFieldProc = NULL; // shared subclass proc for the 4 EDIT children
 bool g_cardClosing = false;
-std::string g_cardKind;   // "TASK" | "MILESTONE"
+std::string g_cardKind;   // "TASK" | "MILESTONE" | "TEXT"
 std::string g_cardId;
 int g_cardSelectedSwatch = -1; // index into kCardSwatches, or -1 = no change
 std::string g_cardOrigColor;   // color value read at open time (for "no change" baseline)
@@ -407,11 +429,13 @@ void CommitInlineEdit();
 void CancelInlineEdit();
 void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& anchorScreenRect);
 void CommitCardEdit();
+void CommitCardDelete();
 void CancelCardEdit();
 void CloseCardEditor();
 bool IsEditSessionActive();
 void CancelDragGesture();
-void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId);
+void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId,
+	float candidateDx = 0.0f, float candidateDy = 0.0f);
 void CommitCreateGesture(const std::string& rowId, long startDay, long endDay);
 float ComputeEmptyCellPxPerDay();
 void ShowContextMenuForHit(const HtHit& hit, POINT clientPt);
@@ -614,9 +638,11 @@ void LayoutToolbarButtons(int width, int height) {
 	for (int i = 0; i < BUTTON_COUNT; ++i) ::SetRectEmpty(&g_buttonRects[i]);
 	// The mini-toolbar binds to the internal selection: visible for a task or
 	// milestone. ROW selection (new: a row band with no task/milestone under
-	// it) does not show the toolbar. The CHART_ROOT chrome path is unrelated
-	// to the internal model and keeps its pre-existing layout behavior.
-	bool toolbarEligible = g_hasSelectionChrome && g_selKind != "ROW";
+	// it) does not show the toolbar, nor does TEXT (Add/Del/+-% have no
+	// meaning for a text annotation; it gets its own delete-only editor via
+	// double-click instead). The CHART_ROOT chrome path is unrelated to the
+	// internal model and keeps its pre-existing layout behavior.
+	bool toolbarEligible = g_hasSelectionChrome && g_selKind != "ROW" && g_selKind != "TEXT";
 	if (!toolbarEligible || ::IsRectEmpty(&g_frameRect) || width <= 0 || height <= 0) return;
 
 	const int buttonW = g_buttonW;
@@ -780,7 +806,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			// PP_KIND, handled below via the marker-band synthesis, is what
 			// drives HtZone::Marker).
 			bool isMarkerLine = kindStr == "TODAY_LINE" || kindStr == "DEADLINE" || kindStr == "CUSTOM_MARKER";
-			if (kindStr != "ROW_LABEL" && kindStr != "TITLE" && kindStr != "TASK" && kindStr != "MILESTONE" && !isMarkerLine) continue;
+			if (kindStr != "ROW_LABEL" && kindStr != "TITLE" && kindStr != "TASK" && kindStr != "MILESTONE" && kindStr != "TEXT" && !isMarkerLine) continue;
 			if (isMarkerLine) {
 				// Ignore the rendered rect entirely (see comment above); derive
 				// the band from PP_PROJ + this marker's date instead. If PP_PROJ
@@ -824,6 +850,10 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			}
 			if (kindStr == "MILESTONE") {
 				g_hitSnapshot.items.push_back({ HtItemKind::Milestone, idStr, ToHtRect(rr) });
+				continue;
+			}
+			if (kindStr == "TEXT") {
+				g_hitSnapshot.items.push_back({ HtItemKind::Text, idStr, ToHtRect(rr) });
 				continue;
 			}
 			g_rowBands.push_back({ idStr, { g_chartScreenRect.left, rr.top, g_chartScreenRect.right, rr.bottom }, rr.left });
@@ -872,7 +902,8 @@ void SyncSelectionChromeFromOwnSelection() {
 	}
 
 	HtItemKind wantKind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone
-		: (g_ownSelKind == "MARKER") ? HtItemKind::Marker : HtItemKind::Task;
+		: (g_ownSelKind == "MARKER") ? HtItemKind::Marker
+		: (g_ownSelKind == "TEXT") ? HtItemKind::Text : HtItemKind::Task;
 	for (const auto& item : g_hitSnapshot.items) {
 		if (item.kind == wantKind && item.id == g_ownSelId) {
 			g_selKind = g_ownSelKind;
@@ -1089,6 +1120,13 @@ const PpMilestone* FindMilestone(const PpDocument& doc, const std::string& id) {
 	return nullptr;
 }
 
+const PpText* FindTextById(const PpDocument& doc, const std::string& id) {
+	for (const auto& t : doc.texts) {
+		if (t.id == id) return &t;
+	}
+	return nullptr;
+}
+
 // True while EITHER editor (simple inline title/row-label box, or the richer
 // card) owns keyboard focus / is mid-edit. Single choke point so hotkey
 // registration (UpdateHotkeyRegistration) and native-selection suppression
@@ -1152,8 +1190,15 @@ void SetCardInvalid(bool invalid) {
 // once at open time (LayoutCardControls is idempotent, so it is safe to call
 // again if the card were ever resized, though the card is currently
 // fixed-size). isMilestone hides the End-date and Percent rows entirely
-// (milestones have neither) and shrinks the window accordingly.
-void LayoutCardControls(bool isMilestone) {
+// (milestones have neither) and shrinks the window accordingly. isText (TEXT
+// mode: double-click on a PpText annotation) hides EVERY field except the
+// label, plus the 8 color swatches, and shows a Delete button (left-aligned)
+// alongside OK (right-aligned) instead — "label field only + delete button"
+// per the task spec; OK still commits the (possibly edited) label via
+// CommitCardEdit, Delete removes the text outright via CommitCardDelete.
+// isText implies isMilestone's Start/End/Percent suppression (a superset), so
+// callers pass both rather than this function re-deriving one from the other.
+void LayoutCardControls(bool isMilestone, bool isText) {
 	if (!g_cardHwnd) return;
 	const int pad = Scale(kBaseCardPad);
 	const int rowH = Scale(kBaseCardRowH);
@@ -1174,22 +1219,29 @@ void LayoutCardControls(bool isMilestone) {
 	};
 
 	placeRow(g_cardLabelHwnd, true);
-	placeRow(g_cardStartHwnd, true);
-	placeRow(g_cardEndHwnd, !isMilestone);
-	placeRow(g_cardPercentHwnd, !isMilestone);
+	placeRow(g_cardStartHwnd, !isText);
+	placeRow(g_cardEndHwnd, !isMilestone && !isText);
+	placeRow(g_cardPercentHwnd, !isMilestone && !isText);
 
-	// Swatch row: 8 small square buttons in a single row.
+	// Swatch row: 8 small square buttons in a single row (hidden in TEXT mode
+	// — PpText has no color field).
 	int swatchesW = kCardSwatchCount * swatchSize + (kCardSwatchCount - 1) * swatchGap;
 	int sx = pad + std::max(0, (cardW - pad * 2 - swatchesW) / 2);
 	for (int i = 0; i < kCardSwatchCount; ++i) {
 		if (!g_cardSwatchHwnd[i]) continue;
+		::ShowWindow(g_cardSwatchHwnd[i], isText ? SW_HIDE : SW_SHOW);
+		if (isText) continue;
 		::MoveWindow(g_cardSwatchHwnd[i], sx + i * (swatchSize + swatchGap), y, swatchSize, swatchSize, TRUE);
 	}
-	y += swatchSize + rowGap;
+	if (!isText) y += swatchSize + rowGap;
 
-	// OK button, right-aligned.
+	// Delete button (TEXT mode only), left-aligned; OK stays right-aligned.
 	const int okW = Scale(kBaseCardOkW);
 	const int okH = Scale(kBaseCardOkH);
+	if (g_cardDeleteHwnd) {
+		::ShowWindow(g_cardDeleteHwnd, isText ? SW_SHOW : SW_HIDE);
+		if (isText) ::MoveWindow(g_cardDeleteHwnd, pad, y, okW, okH, TRUE);
+	}
 	if (g_cardOkHwnd) {
 		::MoveWindow(g_cardOkHwnd, cardW - pad - okW, y, okW, okH, TRUE);
 	}
@@ -1242,6 +1294,12 @@ void EnsureCardWindow() {
 	g_cardOkHwnd = ::CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_DEFPUSHBUTTON,
 		0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)CARD_ID_OK, g_inst, NULL);
 	if (g_cardOkHwnd) ::SendMessageW(g_cardOkHwnd, WM_SETFONT, (WPARAM)font, TRUE);
+
+	// TEXT mode only (label field + this button, no dates/percent/swatches —
+	// see LayoutCardControls' isText branch, which hides everything else).
+	g_cardDeleteHwnd = ::CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+		0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)CARD_ID_DELETE, g_inst, NULL);
+	if (g_cardDeleteHwnd) ::SendMessageW(g_cardDeleteHwnd, WM_SETFONT, (WPARAM)font, TRUE);
 }
 
 // Destroy the card window + children and clear every bit of card state. Safe
@@ -1252,7 +1310,7 @@ void CloseCardEditor() {
 		::DestroyWindow(g_cardHwnd);
 		g_cardHwnd = NULL;
 	}
-	g_cardLabelHwnd = g_cardStartHwnd = g_cardEndHwnd = g_cardPercentHwnd = g_cardOkHwnd = NULL;
+	g_cardLabelHwnd = g_cardStartHwnd = g_cardEndHwnd = g_cardPercentHwnd = g_cardOkHwnd = g_cardDeleteHwnd = NULL;
 	for (int i = 0; i < kCardSwatchCount; ++i) g_cardSwatchHwnd[i] = NULL;
 	g_oldCardFieldProc = NULL;
 	g_cardKind.clear();
@@ -1281,9 +1339,14 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 		PpDocument doc = DocumentFromJson(json);
 
 		bool isMilestone = (kind == "MILESTONE");
+		bool isText = (kind == "TEXT");
 		std::string label, start, end, color;
 		int percent = 0;
-		if (isMilestone) {
+		if (isText) {
+			const PpText* txt = FindTextById(doc, id);
+			if (!txt) return;
+			label = txt->label;
+		} else if (isMilestone) {
 			const PpMilestone* ms = FindMilestone(doc, id);
 			if (!ms) return;
 			label = ms->label;
@@ -1315,9 +1378,9 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 		SetEditText(g_cardLabelHwnd, label);
 		SetEditText(g_cardStartHwnd, start);
 		SetEditText(g_cardEndHwnd, end);
-		if (!isMilestone) SetEditText(g_cardPercentHwnd, std::to_string(percent));
+		if (!isMilestone && !isText) SetEditText(g_cardPercentHwnd, std::to_string(percent));
 
-		LayoutCardControls(isMilestone);
+		LayoutCardControls(isMilestone, isText);
 		SetCardInvalid(false);
 
 		RECT rc = anchorScreenRect;
@@ -1360,14 +1423,45 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 // Validate + commit every field of the open card in ONE undo entry. Returns
 // without closing the card if validation fails (invalid dates: parse failure
 // or end < start) — the task spec requires the editor to STAY OPEN with a
-// red-border/beep cue rather than silently discarding the user's edits.
+// red-border/beep cue rather than silently discarding the user's edits. TEXT
+// mode has no dates/percent/color to validate — it only ever commits the
+// label (via SetTextLabel, not SetEntityLabel, which does not know about
+// PpText ids).
 void CommitCardEdit() {
 	if (!g_cardHwnd || g_cardKind.empty() || g_mutating) return;
 	std::string kind = g_cardKind;
 	std::string id = g_cardId;
 	bool isMilestone = (kind == "MILESTONE");
+	bool isText = (kind == "TEXT");
 
 	std::string label = GetEditText(g_cardLabelHwnd);
+
+	if (isText) {
+		SetCardInvalid(false);
+		CloseCardEditor();
+		g_mutating = true;
+		try {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) {
+				PpDocument doc = DocumentFromJson(json);
+				if (SetTextLabel(doc, id, label)) RebuildChart(doc, id);
+			}
+		}
+		catch (const _com_error&) {
+			OvLog(L"COM error committing text card edit");
+		}
+		catch (const std::exception&) {
+			OvLog(L"document error committing text card edit");
+		}
+		catch (...) {
+			OvLog(L"unknown error committing text card edit");
+		}
+		g_mutating = false;
+		SetOwnSelection(kind, id);
+		FocusPowerPoint();
+		return;
+	}
+
 	std::string startText = GetEditText(g_cardStartHwnd);
 	std::string endText = isMilestone ? startText : GetEditText(g_cardEndHwnd);
 	std::string percentText = isMilestone ? "" : GetEditText(g_cardPercentHwnd);
@@ -1458,6 +1552,39 @@ void CommitCardEdit() {
 	}
 	g_mutating = false;
 	SetOwnSelection(kind, id);
+	FocusPowerPoint();
+}
+
+// TEXT mode's Delete button: removes the text outright (mirrors
+// HandleHotkeyDelete's TEXT branch) and closes the card — there is nothing
+// left to keep editing once the text itself is gone.
+void CommitCardDelete() {
+	if (!g_cardHwnd || g_cardKind != "TEXT" || g_mutating) return;
+	std::string id = g_cardId;
+	CloseCardEditor();
+
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (!json.empty()) {
+			PpDocument doc = DocumentFromJson(json);
+			if (DeleteById(doc, id)) {
+				RebuildChart(doc, "");
+				ClearOwnSelection();
+				RequestOverlayRepaint();
+			}
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error committing card delete");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error committing card delete");
+	}
+	catch (...) {
+		OvLog(L"unknown error committing card delete");
+	}
+	g_mutating = false;
 	FocusPowerPoint();
 }
 
@@ -1618,6 +1745,9 @@ void ApplyClickSelection(const HtHit& hit) {
 	case HtZone::Marker:
 		SetOwnSelection("MARKER", hit.id);
 		return;
+	case HtZone::Text:
+		SetOwnSelection("TEXT", hit.id);
+		return;
 	case HtZone::RowBand:
 		if (!hit.rowId.empty()) {
 			SetOwnSelection("ROW", hit.rowId);
@@ -1657,6 +1787,12 @@ void ResetDragGestureState() {
 	g_createRowId.clear();
 	g_createAnchorDay = 0;
 	g_createCurrentDay = 0;
+	g_dragTextAnchored = false;
+	g_dragOrigDx = 0.0f;
+	g_dragOrigDy = 0.0f;
+	g_dragPxPerPt = 0.0f;
+	g_dragCandidateDx = 0.0f;
+	g_dragCandidateDy = 0.0f;
 }
 
 // SCREEN-PIXELS-per-day for the gesture. WM_MOUSEMOVE deltas are screen
@@ -1694,17 +1830,17 @@ float ComputeDragPxPerDay(const RECT& anchorRect, long anchorSpanDays) {
 }
 
 // Begin a drag-move-resize gesture anchored at a TaskBody/TaskEdgeL/
-// TaskEdgeR/Milestone/Marker hit. Reads the document once (per A4's guidance
-// to read doc dates at gesture start) so subsequent WM_MOUSEMOVE handling
-// stays COM-free. No-ops (leaves gesture state untouched) if the doc/task/
-// milestone/marker can't be resolved — the gesture then behaves as a plain
-// click-vs-drag-less capture (existing WM_LBUTTONUP click-select logic still
-// applies on threshold-within release).
+// TaskEdgeR/Milestone/Marker/Text hit. Reads the document once (per A4's
+// guidance to read doc dates at gesture start) so subsequent WM_MOUSEMOVE
+// handling stays COM-free. No-ops (leaves gesture state untouched) if the
+// doc/task/milestone/marker/text can't be resolved — the gesture then
+// behaves as a plain click-vs-drag-less capture (existing WM_LBUTTONUP
+// click-select logic still applies on threshold-within release).
 void StartDragGesture(const HtHit& hit, POINT downPt) {
 	ResetDragGestureState();
 	if (hit.zone != HtZone::TaskBody && hit.zone != HtZone::TaskEdgeL &&
 		hit.zone != HtZone::TaskEdgeR && hit.zone != HtZone::Milestone &&
-		hit.zone != HtZone::Marker) {
+		hit.zone != HtZone::Marker && hit.zone != HtZone::Text) {
 		return;
 	}
 	if (!g_app) return;
@@ -1713,7 +1849,8 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 	PpDocument doc = DocumentFromJson(json);
 
 	HtItemKind wantKind = (hit.zone == HtZone::Milestone) ? HtItemKind::Milestone
-		: (hit.zone == HtZone::Marker) ? HtItemKind::Marker : HtItemKind::Task;
+		: (hit.zone == HtZone::Marker) ? HtItemKind::Marker
+		: (hit.zone == HtZone::Text) ? HtItemKind::Text : HtItemKind::Task;
 	RECT anchorRect = {};
 	bool haveRect = false;
 	for (const auto& item : g_hitSnapshot.items) {
@@ -1724,6 +1861,56 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 		}
 	}
 	if (!haveRect) return;
+
+	if (hit.zone == HtZone::Text) {
+		const PpText* txt = nullptr;
+		for (const auto& t : doc.texts) if (t.id == hit.id) { txt = &t; break; }
+		if (!txt) return;
+		g_dragKind = DragKind::Text;
+		g_dragId = hit.id;
+		g_dragTextAnchored = !txt->anchorId.empty();
+		g_dragOrigDx = txt->dx;
+		g_dragOrigDy = txt->dy;
+		// For a FREE text, g_dragOrigStart carries its current cell date (like
+		// Marker/Milestone) so the day-delta path below can compute its new
+		// (rowId, date) cell exactly like a TaskBody/Marker drag; unused (left
+		// empty) for an ANCHORED text, which only ever moves via dx/dy.
+		g_dragOrigStart = txt->date;
+		g_dragOrigEnd.clear();
+		// A text's rect carries no day-span of its own to derive a px/day
+		// scale from (like Milestone/Marker), so fall back to scanning the
+		// snapshot for a task with a usable span (ComputeDragPxPerDay(rect,0)),
+		// then convert that px/day scale to px/point via PP_PROJ's ptPerDay —
+		// see g_dragPxPerPt's header comment for why one px/pt ratio covers
+		// both axes. An ANCHORED text only needs the px/pt scale (dx/dy is a
+		// continuous point offset); a FREE text needs BOTH: px/day for its
+		// day-granularity (rowId,date) re-homing, and px/pt purely so the
+		// mid-drag ghost/tooltip can preview the same continuous offset a
+		// mouse-up would otherwise snap to whole days at (the residual dx/dy
+		// is zeroed on commit either way — see CommitDragGesture).
+		g_dragPxPerDay = ComputeDragPxPerDay(anchorRect, 0);
+		PpProj proj;
+		if (g_dragPxPerDay > 0.0f && ParseProj(g_chartProj, &proj) && proj.ptPerDay > 0.0f) {
+			g_dragPxPerPt = g_dragPxPerDay / proj.ptPerDay;
+		}
+		if (!g_dragTextAnchored) {
+			// Free text can be dragged to a different row, mirroring TaskBody's
+			// row-reassign tracking (UpdateDragGesture/CommitDragGesture reuse
+			// g_dragTargetRowId/g_dragTargetRowRect for this).
+			g_dragOrigRowId = txt->rowId;
+			g_dragTargetRowId = txt->rowId;
+			g_dragTargetRowRect = anchorRect;
+			for (const auto& band : g_rowBands) {
+				if (band.rowId == txt->rowId) { g_dragTargetRowRect = band.screenRect; break; }
+			}
+		}
+		if (g_dragPxPerPt <= 0.0f) { ResetDragGestureState(); return; }
+		g_dragAnchorRect = anchorRect;
+		g_dragLastPt = downPt;
+		g_dragDeltaDays = 0;
+		g_gestureActive = true;
+		return;
+	}
 
 	if (hit.zone == HtZone::Marker) {
 		const PpMarker* mk = nullptr;
@@ -1888,6 +2075,34 @@ void UpdateDragGesture(POINT pt) {
 		return;
 	}
 
+	if (g_dragKind == DragKind::Text) {
+		// Points, not days: the total screen-pixel displacement since the
+		// gesture anchor converted back to slide points via g_dragPxPerPt (not
+		// incremental per-move deltas, so rounding never accumulates drift —
+		// same reasoning as every other drag kind's day-delta). Used directly
+		// as the new dx/dy for an ANCHORED text; only feeds the ghost preview
+		// for a FREE text (whose commit re-homes to a whole-day cell instead —
+		// see g_dragDeltaDays below).
+		if (g_dragPxPerPt > 0.0f) {
+			g_dragCandidateDx = g_dragOrigDx + (float)dx / g_dragPxPerPt;
+			g_dragCandidateDy = g_dragOrigDy + (float)dy / g_dragPxPerPt;
+		}
+		if (!g_dragTextAnchored) {
+			// Free text: day-delta (for its new date) + row retarget, exactly
+			// like a TaskBody drag.
+			g_dragDeltaDays = (g_dragPxPerDay > 0.0f) ? (long)::lround((double)dx / (double)g_dragPxPerDay) : 0;
+			long screenY = pt.y + g_windowOriginY;
+			if (const RowBand* band = RowBandAtScreenY(screenY)) {
+				g_dragTargetRowId = band->rowId;
+				g_dragTargetRowRect = band->screenRect;
+			}
+			// Same "keep the last valid target" behavior as TaskBody when no
+			// band is under the pointer (above/below the chart).
+		}
+		RequestOverlayRepaint();
+		return;
+	}
+
 	long newDelta = (g_dragPxPerDay > 0.0f) ? (long)::lround((double)dx / (double)g_dragPxPerDay) : 0;
 	g_dragDeltaDays = newDelta;
 
@@ -1966,11 +2181,15 @@ void CancelDragGesture() {
 // would otherwise wipe g_gestureActive/g_dragActive/g_dragKind/etc. out from
 // under this function before it ever ran.
 //
-// targetRowId is only meaningful for DragKind::TaskBody (row-reassign); pass
-// "" for edge/milestone drags where no row retarget applies.
-void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId) {
-	bool rowChangeRequested = (kind == DragKind::TaskBody) && !targetRowId.empty();
-	if (deltaDays == 0 && !rowChangeRequested) return;
+// targetRowId is only meaningful for DragKind::TaskBody/Text(free) (row-
+// reassign); pass "" for edge/milestone/anchored-text drags where no row
+// retarget applies. candidateDx/candidateDy are only meaningful for
+// DragKind::Text (the final gesture-snapshot dx/dy in POINTS, see
+// WM_LBUTTONUP's Text-specific recompute); every other kind ignores them.
+void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId,
+	float candidateDx, float candidateDy) {
+	bool rowChangeRequested = (kind == DragKind::TaskBody || kind == DragKind::Text) && !targetRowId.empty();
+	if (kind != DragKind::Text && deltaDays == 0 && !rowChangeRequested) return;
 	if (!g_app || g_mutating) return;
 
 	g_mutating = true;
@@ -2022,6 +2241,34 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 				bool dateChanged = (deltaDays != 0) && NudgeTask(doc, id, deltaDays);
 				changed = rowChanged || dateChanged;
 				selKind = "TASK";
+			} else if (kind == DragKind::Text) {
+				// Re-read anchored-ness fresh (nothing else mutates the doc
+				// between gesture start and commit, so this agrees with
+				// g_dragTextAnchored anyway — same "re-read fresh" reasoning as
+				// TaskBody's row-reassign above).
+				const PpText* txt = nullptr;
+				for (const auto& t : doc.texts) if (t.id == id) { txt = &t; break; }
+				if (txt) {
+					if (!txt->anchorId.empty()) {
+						// Anchored: dx/dy only, no rowId/date re-homing. Suppress a
+						// no-op commit (fix-percent-noop-undo's pattern: a gesture
+						// that resolves to the SAME dx/dy — e.g. it never crossed
+						// the click threshold in a way that changed px/pt rounding
+						// — must not pollute undo).
+						bool dxyChanged = (candidateDx != txt->dx) || (candidateDy != txt->dy);
+						if (dxyChanged) changed = MoveText(doc, id, candidateDx, candidateDy);
+					} else {
+						// Free: re-home to the (possibly new) row + the day-shifted
+						// date, with the residual dx/dy ZEROED (per the task spec —
+						// the new position IS the cell origin, no leftover offset).
+						std::string newDate = DaysToDate(DateToDays(txt->date) + deltaDays);
+						std::string rowId = rowChangeRequested ? targetRowId : txt->rowId;
+						bool cellChanged = (rowId != txt->rowId) || (newDate != txt->date);
+						bool residualChanged = (txt->dx != 0.0f) || (txt->dy != 0.0f);
+						if (cellChanged || residualChanged) changed = MoveText(doc, id, 0.0f, 0.0f, rowId, newDate);
+					}
+				}
+				selKind = "TEXT";
 			} else { // TaskEdgeL / TaskEdgeR
 				// Candidate dates from the FRESHLY-read task (not the gesture-
 				// start snapshot in g_dragOrigStart/End, which is unavailable
@@ -2232,9 +2479,26 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		std::string createRowId = g_createRowId;
 		long createAnchorDay = g_createAnchorDay;
 		long createCurrentDay = g_createCurrentDay;
+		bool dragTextAnchored = g_dragTextAnchored;
+		float dragOrigDx = g_dragOrigDx, dragOrigDy = g_dragOrigDy;
+		float dragCandidateDx = g_dragCandidateDx, dragCandidateDy = g_dragCandidateDy;
 		float gesturePxPerDay = g_dragPxPerDay; // snapshot: ReleaseCapture below zeroes the live global (see CREATE branch's isClick check)
+		float gesturePxPerPt = g_dragPxPerPt;
 		long finalDx = pt.x - g_mouseDownPt.x;
-		if (wasGestureActive && gesturePxPerDay > 0.0f) {
+		long finalDy = pt.y - g_mouseDownPt.y;
+		if (wasGestureActive && dragKind == DragKind::Text) {
+			// Points, not days (see UpdateDragGesture's Text branch): recompute
+			// the final candidate dx/dy from THIS up-point rather than trusting
+			// the last MOUSEMOVE, same reasoning as every other kind's day-delta
+			// recompute below.
+			if (gesturePxPerPt > 0.0f) {
+				dragCandidateDx = dragOrigDx + (float)finalDx / gesturePxPerPt;
+				dragCandidateDy = dragOrigDy + (float)finalDy / gesturePxPerPt;
+			}
+			if (!dragTextAnchored && gesturePxPerDay > 0.0f) {
+				dragDeltaDays = (long)::lround((double)finalDx / (double)gesturePxPerDay);
+			}
+		} else if (wasGestureActive && gesturePxPerDay > 0.0f) {
 			if (dragKind == DragKind::Create) {
 				createCurrentDay = createAnchorDay + (long)::lround((double)finalDx / (double)gesturePxPerDay);
 			} else {
@@ -2304,7 +2568,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 				}
 			} else if (wasGestureActive && wasDragActive) {
 				try {
-					CommitDragGesture(dragKind, dragId, dragDeltaDays, dragTargetRowId);
+					CommitDragGesture(dragKind, dragId, dragDeltaDays, dragTargetRowId, dragCandidateDx, dragCandidateDy);
 				} catch (...) {
 					OvLog(L"drag gesture commit failed");
 				}
@@ -2357,16 +2621,20 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		HtHit hit = HitTestClientPoint(pt);
 		if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
-			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone) {
-			// The floating card editor (V2): double-clicking a bar or
-			// milestone opens the richer editor instead of the simpler
-			// TITLE/ROW_LABEL inline box. Resolve the item's CURRENT screen
-			// rect from the hit snapshot (same source g_lastHit/drag-start
-			// use) so the card anchors to where the bar actually is now.
-			const char* wantKindStr = (hit.zone == HtZone::Milestone) ? "MILESTONE" : "TASK";
+			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone || hit.zone == HtZone::Text) {
+			// The floating card editor (V2): double-clicking a bar, milestone,
+			// or text annotation opens the richer editor instead of the
+			// simpler TITLE/ROW_LABEL inline box (TEXT uses the same card in a
+			// reduced "text mode" — label field + delete button only, see
+			// OpenCardEditor). Resolve the item's CURRENT screen rect from the
+			// hit snapshot (same source g_lastHit/drag-start use) so the card
+			// anchors to where the item actually is now.
+			const char* wantKindStr = (hit.zone == HtZone::Milestone) ? "MILESTONE"
+				: (hit.zone == HtZone::Text) ? "TEXT" : "TASK";
+			HtItemKind wantItemKind = (hit.zone == HtZone::Milestone) ? HtItemKind::Milestone
+				: (hit.zone == HtZone::Text) ? HtItemKind::Text : HtItemKind::Task;
 			for (const auto& item : g_hitSnapshot.items) {
-				bool kindMatches = (hit.zone == HtZone::Milestone) ? (item.kind == HtItemKind::Milestone) : (item.kind == HtItemKind::Task);
-				if (kindMatches && item.id == hit.id) {
+				if (item.kind == wantItemKind && item.id == hit.id) {
 					RECT screenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
 					OpenCardEditor(wantKindStr, hit.id, screenRect);
 					return 0;
@@ -2509,6 +2777,10 @@ LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		int notify = HIWORD(wp);
 		if (id == CARD_ID_OK && notify == BN_CLICKED) {
 			CommitCardEdit();
+			return 0;
+		}
+		if (id == CARD_ID_DELETE && notify == BN_CLICKED) {
+			CommitCardDelete();
 			return 0;
 		}
 		if (id >= CARD_ID_SWATCH_BASE && id < CARD_ID_SWATCH_BASE + kCardSwatchCount && notify == BN_CLICKED) {
@@ -2729,8 +3001,34 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			g_dragAnchorRect.bottom - g_windowOriginY
 		};
 		long shiftPx = (long)::lround((double)g_dragDeltaDays * (double)g_dragPxPerDay);
+		// Text moves in POINTS (g_dragCandidateDx/Dy relative to g_dragOrigDx/
+		// Dy), not a day-delta — converted to a screen-pixel shift via
+		// g_dragPxPerPt (see g_dragPxPerPt's header comment). Computed up front
+		// so both the ghost-rect switch below and DragKind::Text's own branch
+		// can use it without duplicating the conversion.
+		long textShiftPxX = 0, textShiftPxY = 0;
+		if (g_dragKind == DragKind::Text && g_dragPxPerPt > 0.0f) {
+			textShiftPxX = (long)::lround((double)(g_dragCandidateDx - g_dragOrigDx) * (double)g_dragPxPerPt);
+			textShiftPxY = (long)::lround((double)(g_dragCandidateDy - g_dragOrigDy) * (double)g_dragPxPerPt);
+		}
 		RECT ghost = anchor;
 		switch (g_dragKind) {
+		case DragKind::Text:
+			ghost.left = anchor.left + textShiftPxX;
+			ghost.right = anchor.right + textShiftPxX;
+			ghost.top = anchor.top + textShiftPxY;
+			ghost.bottom = anchor.bottom + textShiftPxY;
+			if (!g_dragTextAnchored && !::IsRectEmpty(&g_dragTargetRowRect)) {
+				// Free text: retarget the ghost's row band vertically (row-
+				// reassign), keeping the horizontal shift — mirrors TaskBody.
+				int bandTop = g_dragTargetRowRect.top - g_windowOriginY;
+				int bandBottom = g_dragTargetRowRect.bottom - g_windowOriginY;
+				int h = anchor.bottom - anchor.top;
+				int cy = (bandTop + bandBottom) / 2;
+				ghost.top = cy - h / 2;
+				ghost.bottom = ghost.top + h;
+			}
+			break;
 		case DragKind::TaskEdgeL:
 			ghost.left = anchor.left + shiftPx;
 			if (ghost.left > ghost.right - 2) ghost.left = ghost.right - 2; // keep end>=start visually too
@@ -2797,11 +3095,26 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 
 		// Tooltip: candidate dates near the cursor, plus the target row when
 		// a TaskBody drag has retargeted to a different row than it started.
-		std::string candStart, candEnd;
-		ComputeDragCandidateDates(candStart, candEnd);
-		std::wstring tip = Widen(candStart) + L" → " + Widen(candEnd);
-		if (g_dragKind == DragKind::TaskBody && !g_dragTargetRowId.empty() && g_dragTargetRowId != g_dragOrigRowId) {
-			tip += L"  (" + Widen(g_dragTargetRowId) + L")";
+		// Text has no "dates" of its own to preview this way (an ANCHORED
+		// text's g_dragOrigStart is empty; a FREE text's IS a date, but the
+		// tooltip still reads more naturally as an offset/row than a bare
+		// date) — show the point offset instead, plus the target row for a
+		// FREE text row-reassign (mirrors TaskBody's row suffix).
+		std::wstring tip;
+		if (g_dragKind == DragKind::Text) {
+			wchar_t buf[64];
+			::swprintf_s(buf, 64, L"dx %.0f, dy %.0f", g_dragCandidateDx, g_dragCandidateDy);
+			tip = buf;
+			if (!g_dragTextAnchored && !g_dragTargetRowId.empty() && g_dragTargetRowId != g_dragOrigRowId) {
+				tip += L"  (" + Widen(g_dragTargetRowId) + L")";
+			}
+		} else {
+			std::string candStart, candEnd;
+			ComputeDragCandidateDates(candStart, candEnd);
+			tip = Widen(candStart) + L" → " + Widen(candEnd);
+			if (g_dragKind == DragKind::TaskBody && !g_dragTargetRowId.empty() && g_dragTargetRowId != g_dragOrigRowId) {
+				tip += L"  (" + Widen(g_dragTargetRowId) + L")";
+			}
 		}
 		Gdiplus::Font tipFont(L"Segoe UI", g_tooltipFontPx, FontStyleRegular, UnitPixel);
 		RectF tipBounds;
@@ -3087,12 +3400,12 @@ void RebuildChart(PpDocument& doc, const std::string& selectId) {
 // snapshot, so — same reasoning as CommitDragGesture/HandleContextMenuCommand
 // — SyncSelectionChromeFromOwnSelection must wait for the next Tick()).
 
-// WM_HOTKEY(Delete): delete the selected task/milestone and clear selection.
+// WM_HOTKEY(Delete): delete the selected task/milestone/text and clear selection.
 void HandleHotkeyDelete() {
 	if (!g_app || g_mutating) return;
 	const std::string selId = g_ownSelId;
 	const std::string selKind = g_ownSelKind;
-	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE")) return;
+	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE" && selKind != "TEXT")) return;
 
 	g_mutating = true;
 	try {
@@ -3202,9 +3515,14 @@ void RegisterAllHotkeys() {
 	g_hotkeysActive = true;
 }
 
-// Evaluate shouldRegister = (internal selection is TASK/MILESTONE) AND
+// Evaluate shouldRegister = (internal selection is TASK/MILESTONE/TEXT) AND
 // (PowerPoint is the foreground app) AND (not mid-gesture/mutation/inline-
 // edit) and register/unregister on a TRANSITION only. Called every Tick().
+// TEXT is included so the Delete hotkey works on a selected text annotation
+// (HandleHotkeyDelete below); the Left/Right/Shift+Left/Right nudge handlers
+// already no-op for any selection kind other than TASK/MILESTONE, so
+// registering the whole group for a TEXT selection is safe — those handlers
+// simply do nothing when invoked with a TEXT selection.
 // PowerPoint-foreground is checked by comparing the foreground window's owning
 // process id against our OWN process id (GetCurrentProcessId): the overlay
 // DLL runs IN-PROCESS inside POWERPNT.EXE (per the task brief), so "foreground
@@ -3217,7 +3535,7 @@ void RegisterAllHotkeys() {
 void UpdateHotkeyRegistration() {
 	if (!g_hwnd) return;
 
-	bool selectionIsTaskOrMilestone = (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE") && !g_ownSelId.empty();
+	bool selectionIsTaskOrMilestone = (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE" || g_ownSelKind == "TEXT") && !g_ownSelId.empty();
 
 	bool foregroundIsOurs = false;
 	if (g_hostActiveOverrideMode >= 0) {
@@ -3886,6 +4204,16 @@ void OverlayStop() {
 HWND OverlayHwnd() { return g_hwnd; }
 
 const char* Overlay_GetSelectedIdForTest() { return g_ownSelId.c_str(); }
+
+int Overlay_GetSelectedKindForTest() {
+	if (g_ownSelId.empty()) return OVERLAY_SELKIND_NONE_FOR_TEST;
+	if (g_ownSelKind == "TASK") return OVERLAY_SELKIND_TASK_FOR_TEST;
+	if (g_ownSelKind == "MILESTONE") return OVERLAY_SELKIND_MILESTONE_FOR_TEST;
+	if (g_ownSelKind == "ROW") return OVERLAY_SELKIND_ROW_FOR_TEST;
+	if (g_ownSelKind == "MARKER") return OVERLAY_SELKIND_MARKER_FOR_TEST;
+	if (g_ownSelKind == "TEXT") return OVERLAY_SELKIND_TEXT_FOR_TEST;
+	return OVERLAY_SELKIND_NONE_FOR_TEST;
+}
 
 void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altDown) {
 	g_cursorOverrideEnabled = enabled;

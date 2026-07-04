@@ -23,7 +23,8 @@ enum class HtItemKind {
 	Milestone,
 	RowLabel,
 	Title,
-	Marker  // TODAY_LINE / DEADLINE / CUSTOM_MARKER vertical date lines
+	Marker,  // TODAY_LINE / DEADLINE / CUSTOM_MARKER vertical date lines
+	Text     // PpText annotation (anchored or free-floating), PP_KIND=TEXT
 };
 
 struct HtItem {
@@ -67,6 +68,10 @@ enum class HtZone {
 	Label,      // inside a ROW_LABEL or TITLE text rect (kind + id)
 	Marker,     // within +-edgeBandPx of a vertical marker line (id = marker id);
 	            // below TaskBody/TaskEdge/Milestone, above RowBand/EmptyCell
+	Text,       // inside a PpText annotation's rendered rect (id = text id);
+	            // below TaskBody/TaskEdge/Milestone/Marker, above RowBand/
+	            // EmptyCell (a text sitting over open timeline space still
+	            // wins so it can be selected/dragged/deleted)
 	RowBand,    // inside a row band but left of / around the label column
 	            // (rowId set), or chart background outside any band (rowId empty)
 	EmptyCell   // inside a row band's timeline area with nothing under the
@@ -204,7 +209,7 @@ HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind = HtItemKind::Ta
 // testable from the PowerPoint-free ops harness.
 enum class HtCursor {
 	Arrow,     // default: RowBand, Label, outside any special widget
-	SizeAll,   // TaskBody, Milestone: whole-item move
+	SizeAll,   // TaskBody, Milestone, Text: whole-item move
 	SizeWE,    // TaskEdgeL/TaskEdgeR/Marker: horizontal resize (ew-resize)
 	Cross,     // EmptyCell: click-drag creates a new task here
 	Hand,      // toolbar / hover-insert-row '+' / move-chart grip chrome widgets

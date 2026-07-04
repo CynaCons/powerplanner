@@ -78,7 +78,23 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 		}
 	}
 
-	// 4) Labels (row labels + title).
+	// 4) Text annotations: a real rendered rect (unlike markers' synthesized
+	//    band), so a plain InRect check suffices. Below task/milestone hits
+	//    (already returned above — a text placed over a task stays subordinate
+	//    to the task itself), above Labels/Markers/RowBand/EmptyCell (a text
+	//    sitting over open timeline space still wins so it stays selectable/
+	//    draggable/deletable).
+	for (const auto& it : snap.items) {
+		if (it.kind != HtItemKind::Text) continue;
+		if (InRect(it.rect, x, y)) {
+			hit.zone = HtZone::Text;
+			hit.kind = HtItemKind::Text;
+			hit.id = it.id;
+			return hit;
+		}
+	}
+
+	// 5) Labels (row labels + title).
 	for (const auto& it : snap.items) {
 		if (it.kind != HtItemKind::RowLabel && it.kind != HtItemKind::Title) continue;
 		if (InRect(it.rect, x, y)) {
@@ -89,7 +105,7 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 		}
 	}
 
-	// 5) Markers (vertical date lines): thin rendered lines, so the overlay
+	// 6) Markers (vertical date lines): thin rendered lines, so the overlay
 	//    synthesizes each marker's hit rect as a band spanning the chart's
 	//    full vertical extent, +-edgeBandPx wide. Below task/milestone hits
 	//    (already returned above), above RowBand/EmptyCell (below). The
@@ -113,7 +129,7 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 		}
 	}
 
-	// 6) Row bands: right of the row's label column is an empty timeline cell;
+	// 7) Row bands: right of the row's label column is an empty timeline cell;
 	//    left of / around the label column is the generic row band.
 	for (const auto& band : snap.rowBands) {
 		if (y < band.yTop || y >= band.yBottom) continue;
@@ -281,6 +297,7 @@ HtCursor GanttCursorForZone(HtZone zone) {
 	switch (zone) {
 	case HtZone::TaskBody:
 	case HtZone::Milestone:
+	case HtZone::Text:
 		return HtCursor::SizeAll;
 	case HtZone::TaskEdgeL:
 	case HtZone::TaskEdgeR:

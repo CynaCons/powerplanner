@@ -52,6 +52,7 @@
 #include "../PowerPlannerAddin/GanttBuilder.h"
 #include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttLayout.h"
+#include "../PowerPlannerAddin/GanttOps.h"
 #include "../PowerPlannerAddin/Overlay.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes.
 #ifndef min
@@ -1822,6 +1823,228 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"MARKERDRAG: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"MARKERDRAG PASS\n" : L"MARKERDRAG FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 13: TEXTELEM ----------------------------------------------
+			// PpText end-to-end wiring (this unit): add one ANCHORED text
+			// (anchored to task "t1") and one FREE text (row "r_research",
+			// date "2026-06-10") via GanttOps' AddText, then rebuild via
+			// UpdateGantt so both actually appear as PP_KIND=TEXT shapes.
+			// Click the FREE text at its rendered rect's center (a real rect,
+			// unlike Marker's synthesized band — see GanttHitTest's Text
+			// zone), assert the overlay's internal selection model resolves
+			// to kind=Text (Overlay_GetSelectedKindForTest — the id-only hook
+			// can't disambiguate a text id from a task/milestone id sharing
+			// the same string across independent tests). Then drag it
+			// straight down by one row-band height (mirrors DRAGROW's
+			// row-rect gathering) combined with a horizontal shift (mirrors
+			// MARKERDRAG's day math), and re-read PP_DOC: both rowId AND
+			// date must have changed to the dragged-to cell.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					auto WNarrowTx = [](const wchar_t* wtext) -> std::string {
+						if (!wtext || !*wtext) return "";
+						int len = (int)::wcslen(wtext);
+						int nb = ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, NULL, 0, NULL, NULL);
+						std::string s(nb, '\0');
+						if (nb > 0) ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, &s[0], nb, NULL, NULL);
+						return s;
+					};
+
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					std::string anchTextId, freeTextId;
+					if (!chartRoot) {
+						wprintf(L"TEXTELEM: could not find CHART_ROOT\n");
+					} else {
+						std::string docJson = WNarrowTx((const wchar_t*)chartRoot->GetTags()->Item(_bstr_t(L"PP_DOC")));
+						PpDocument doc = DocumentFromJson(docJson);
+						anchTextId = AddText(doc, "Anchored note", "t1", "", "");
+						freeTextId = AddText(doc, "Free note", "", "r_research", "2026-06-10");
+						if (anchTextId.empty() || freeTextId.empty()) {
+							wprintf(L"TEXTELEM: AddText failed to return an id\n");
+						} else {
+							HRESULT hr = UpdateGantt(app, doc, freeTextId);
+							if (FAILED(hr)) wprintf(L"TEXTELEM: UpdateGantt failed hr=0x%08lX\n", (unsigned long)hr);
+						}
+					}
+
+					// Re-find CHART_ROOT (UpdateGantt may have reconciled in place,
+					// but re-finding by tag is the same defensive pattern INPLACE/
+					// DRAGROW use rather than trusting a possibly-stale pointer).
+					PowerPoint::ShapePtr chartRoot2;
+					if (!anchTextId.empty() && !freeTextId.empty()) {
+						long n2 = shapes->GetCount();
+						for (long i = 1; i <= n2 && !chartRoot2; ++i) {
+							PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+							_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+							if (kind == L"CHART_ROOT") chartRoot2 = sh;
+						}
+					}
+
+					PowerPoint::ShapePtr freeTextChild;
+					struct RowRectTx { std::wstring rowId; float top; float height; };
+					std::vector<RowRectTx> rowRects;
+					if (chartRoot2) {
+						PowerPoint::GroupShapesPtr grp = chartRoot2->GetGroupItems();
+						long gn = grp->GetCount();
+						for (long j = 1; j <= gn; ++j) {
+							PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+							_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+							if (ckind == L"TEXT") {
+								_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								std::string cidUtf8 = WNarrowTx(cid.length() ? (const wchar_t*)cid : L"");
+								if (cidUtf8 == freeTextId) freeTextChild = child;
+							}
+							if (ckind == L"ROW_LABEL") {
+								_bstr_t rid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								std::wstring rowId = rid.length() ? (const wchar_t*)rid : L"";
+								if (!rowId.empty()) rowRects.push_back({ rowId, child->GetTop(), child->GetHeight() });
+							}
+						}
+					}
+					std::sort(rowRects.begin(), rowRects.end(), [](const RowRectTx& a, const RowRectTx& b) { return a.top < b.top; });
+
+					int origIdx = -1;
+					for (size_t k = 0; k < rowRects.size(); ++k) {
+						if (WNarrowTx(rowRects[k].rowId.c_str()) == "r_research") { origIdx = (int)k; break; }
+					}
+
+					HWND ov = OverlayHwnd();
+					if (!freeTextChild || !ov || origIdx < 0 || origIdx + 1 >= (int)rowRects.size()) {
+						wprintf(L"TEXTELEM: could not find free TEXT child / overlay hwnd / adjacent row band\n");
+					} else {
+						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+						float left = freeTextChild->GetLeft(), top = freeTextChild->GetTop();
+						float w = freeTextChild->GetWidth(), h = freeTextChild->GetHeight();
+						POINT screenPt = {
+							win->PointsToScreenPixelsX(left + w / 2.0f),
+							win->PointsToScreenPixelsY(top + h / 2.0f)
+						};
+						POINT clientPt = screenPt;
+						::ScreenToClient(ov, &clientPt);
+
+						// Clear whatever the PRIOR stage (MARKERDRAG) left
+						// selected first: its mini-toolbar can still be visible
+						// and, depending on where the new text landed, could
+						// overlap the text's click point and swallow the click
+						// as a toolbar-button hit instead of a selection change.
+						// A click on the chart's title-strip background (a
+						// RowBand hit with an empty rowId) deselects cleanly and
+						// is far from any row band's toolbar.
+						{
+							float chartLeft = chartRoot2->GetLeft(), chartTop = chartRoot2->GetTop();
+							POINT bgScreenPt = {
+								win->PointsToScreenPixelsX(chartLeft + 10.0f),
+								win->PointsToScreenPixelsY(chartTop + 5.0f)
+							};
+							POINT bgClientPt = bgScreenPt;
+							::ScreenToClient(ov, &bgClientPt);
+							SetOverlayCursorOverride(bgScreenPt);
+							LPARAM bgLp = MAKELPARAM((short)bgClientPt.x, (short)bgClientPt.y);
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, bgLp);
+							::PostMessageW(ov, WM_LBUTTONUP, 0, bgLp);
+							PumpFor(400);
+						}
+
+						SetOverlayCursorOverride(screenPt);
+
+						// Click first: select, then assert the internal selection
+						// model resolved to kind=Text (not task/milestone/marker/
+						// row) via the new Overlay_GetSelectedKindForTest hook.
+						LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+						::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+						PumpFor(400);
+
+						const char* gotIdAfterClick = Overlay_GetSelectedIdForTest();
+						std::string gotIdAfterClickStr = gotIdAfterClick ? gotIdAfterClick : "";
+						int gotKindAfterClick = Overlay_GetSelectedKindForTest();
+						bool selectedAsText = (gotIdAfterClickStr == freeTextId) && (gotKindAfterClick == OVERLAY_SELKIND_TEXT_FOR_TEST);
+						if (!selectedAsText) {
+							wprintf(L"TEXTELEM: expected selected id '%hs' kind=text(%d), got id='%hs' kind=%d\n",
+								freeTextId.c_str(), (int)OVERLAY_SELKIND_TEXT_FOR_TEST, gotIdAfterClickStr.c_str(), gotKindAfterClick);
+						}
+
+						// Row-band height in SCREEN pixels (DRAGROW's approach) for
+						// the vertical component, combined with a horizontal
+						// day-shift (MARKERDRAG's approach) via PP_PROJ.
+						int rowTopScreen = win->PointsToScreenPixelsY(rowRects[origIdx].top);
+						int nextRowTopScreen = win->PointsToScreenPixelsY(rowRects[origIdx + 1].top);
+						int bandHeightPx = nextRowTopScreen - rowTopScreen;
+						std::wstring targetRowId = rowRects[origIdx + 1].rowId;
+
+						std::string projJson = WNarrowTx((const wchar_t*)chartRoot2->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+						PpProj proj;
+						bool haveProj = ParseProj(projJson, &proj);
+						const long kDragDays = 3;
+						long shiftPx = 0;
+						if (haveProj) {
+							int screenX1 = win->PointsToScreenPixelsX(proj.originX);
+							int screenX2 = win->PointsToScreenPixelsX(proj.originX + proj.ptPerDay);
+							double pxPerDay = (double)(screenX2 - screenX1);
+							shiftPx = (long)::lround(kDragDays * pxPerDay);
+						}
+
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+						PumpFor(60);
+						const int kSteps = 5;
+						for (int s = 1; s <= kSteps; ++s) {
+							int mx = clientPt.x + (int)(shiftPx * s / kSteps);
+							int my = clientPt.y + (int)((long)bandHeightPx * s / kSteps);
+							SetOverlayCursorOverride({ screenPt.x + (mx - clientPt.x), screenPt.y + (my - clientPt.y) });
+							LPARAM moveLp = MAKELPARAM((short)mx, (short)my);
+							::PostMessageW(ov, WM_MOUSEMOVE, 0, moveLp);
+							PumpFor(60);
+						}
+						int finalX = clientPt.x + (int)shiftPx;
+						int finalY = clientPt.y + bandHeightPx;
+						LPARAM finalMoveLp = MAKELPARAM((short)finalX, (short)finalY);
+						for (int extra = 0; extra < 3; ++extra) {
+							SetOverlayCursorOverride({ screenPt.x + (int)shiftPx, screenPt.y + bandHeightPx });
+							::PostMessageW(ov, WM_MOUSEMOVE, 0, finalMoveLp);
+							PumpFor(60);
+						}
+						::PostMessageW(ov, WM_LBUTTONUP, 0, finalMoveLp);
+						PumpFor(800);
+
+						std::string afterJson = ReadGanttFromSlide(app);
+						PpDocument docAfter = DocumentFromJson(afterJson);
+						std::string newRowId, newDate;
+						bool foundAfter = false;
+						for (const auto& t : docAfter.texts) {
+							if (t.id == freeTextId) { newRowId = t.rowId; newDate = t.date; foundAfter = true; break; }
+						}
+						std::string targetRowIdUtf8 = WNarrowTx(targetRowId.c_str());
+						std::string expectDate = DaysToDate(DateToDays("2026-06-10") + kDragDays);
+						bool rowChanged = foundAfter && newRowId == targetRowIdUtf8;
+						bool dateChanged = foundAfter && newDate == expectDate;
+						if (!rowChanged) {
+							wprintf(L"TEXTELEM: expected rowId '%hs', got '%hs'\n", targetRowIdUtf8.c_str(), newRowId.c_str());
+						}
+						if (!dateChanged) {
+							wprintf(L"TEXTELEM: expected date '%hs', got '%hs'\n", expectDate.c_str(), newDate.c_str());
+						}
+						pass = selectedAsText && rowChanged && dateChanged;
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"TEXTELEM: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"TEXTELEM PASS\n" : L"TEXTELEM FAIL\n");
 				if (!pass) rc = 1;
 			}
 
