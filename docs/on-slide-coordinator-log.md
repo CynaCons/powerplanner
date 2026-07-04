@@ -251,3 +251,12 @@ concurrently with each other or with ppoverlay/ppreflow.
   suppression code covers it as cheap insurance and is exercised in-proc only.
   UIA (IUIAutomation) flagged unexplored if real reproduction is ever needed.
 - cycle 4 — dispatched fix-capture-hardening (sonnet, Overlay lane serial).
+- fix-capture-hardening → validated clean rebuild, full suite green → 4243863.
+  Tick catch-all (std::exception + ...), GDI+ GetLastStatus gates before ULW push,
+  WM_MOUSEWHEEL/HWHEEL forwarded to cached PowerPoint hwnd (self-target guard),
+  InvalidateHitSnapshot on RebuildChart + reflow-changed, grip moved top-right
+  (badge collision). Overlay.cpp only.
+- cycle 5 — dispatched own-selection-model (sonnet): internal selection on
+  mouse-UP click (4px threshold), SetCapture lifecycle + WM_CAPTURECHANGED cancel
+  (review amendment), chrome+toolbar rebound to internal state, suppressed-pick
+  mirror, Overlay_GetSelectedIdForTest hook, OWNSEL harness stage.
