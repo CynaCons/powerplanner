@@ -18,10 +18,18 @@
 //                       suppressed by the overlay's Tick() (Unselect()'d),
 //                       while selecting the CHART_ROOT group itself is left
 //                       alone (move-grip / Alt+click escape hatch).
+//   Stage 4: OWNSEL   — a synthetic click gesture selects purely via the
+//                       overlay's own selection model (no COM Shape::Select).
+//   Stage 5: DRAG     — a synthetic drag gesture (LBUTTONDOWN + several
+//                       MOUSEMOVEs + LBUTTONUP posted to the overlay hwnd)
+//                       shifts a TASK bar by exactly N days, verified by
+//                       re-reading PP_DOC; selection must survive the drag.
 //
 //   ppoverlay.exe <output.png>
 #include "../PowerPlannerAddin/pch.h"
 #include "../PowerPlannerAddin/GanttBuilder.h"
+#include "../PowerPlannerAddin/GanttJson.h"
+#include "../PowerPlannerAddin/GanttLayout.h"
 #include "../PowerPlannerAddin/Overlay.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes.
 #ifndef min
@@ -454,6 +462,159 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"OWNSEL: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"OWNSEL PASS\n" : L"OWNSEL FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 5: DRAG ------------------------------------------------
+			// Select a TASK via a posted click (same route as OWNSEL), read its
+			// dates from PP_DOC, then simulate a horizontal drag of the bar by
+			// exactly N days (computed from the chart's PP_PROJ ptPerDay so the
+			// pixel shift is exact) via WM_LBUTTONDOWN + several WM_MOUSEMOVEs +
+			// WM_LBUTTONUP posted straight to the overlay hwnd. Re-read PP_DOC
+			// afterward: dates must have shifted by exactly N days, and the
+			// overlay's own-selection model must still report the same task id
+			// (A2: no deselect-after-drag flicker).
+			if (rc == 0) {
+				bool pass = false;
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+
+					PowerPoint::ShapePtr taskChild;
+					std::wstring taskId;
+					if (chartRoot) {
+						PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+						long gn = grp->GetCount();
+						for (long j = 1; j <= gn && !taskChild; ++j) {
+							PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+							_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+							if (ckind == L"TASK") {
+								taskChild = child;
+								_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+								taskId = cid.length() ? (const wchar_t*)cid : L"";
+							}
+						}
+					}
+
+					HWND ov = OverlayHwnd();
+					if (!chartRoot || !taskChild || taskId.empty() || !ov) {
+						wprintf(L"DRAG: could not find CHART_ROOT/TASK child or overlay hwnd\n");
+					} else {
+						PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+						float left = taskChild->GetLeft(), top = taskChild->GetTop();
+						float w = taskChild->GetWidth(), h = taskChild->GetHeight();
+						POINT screenPt = {
+							win->PointsToScreenPixelsX(left + w / 2.0f),
+							win->PointsToScreenPixelsY(top + h / 2.0f)
+						};
+						POINT clientPt = screenPt;
+						::ScreenToClient(ov, &clientPt);
+
+						// Select it first (same click-select route as OWNSEL) so we
+						// can also assert the selection survives the drag.
+						LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+						::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+						PumpFor(400);
+
+						// Read PP_DOC + PP_PROJ once, before the drag (mirrors the
+						// add-in's own gesture-start read).
+						auto WNarrow = [](const wchar_t* wtext) -> std::string {
+							if (!wtext || !*wtext) return "";
+							int len = (int)::wcslen(wtext);
+							int nb = ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, NULL, 0, NULL, NULL);
+							std::string s(nb, '\0');
+							if (nb > 0) ::WideCharToMultiByte(CP_UTF8, 0, wtext, len, &s[0], nb, NULL, NULL);
+							return s;
+						};
+						std::string docJsonBefore = WNarrow((const wchar_t*)chartRoot->GetTags()->Item(_bstr_t(L"PP_DOC")));
+						std::string projJson = WNarrow((const wchar_t*)chartRoot->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+						PpDocument docBefore = DocumentFromJson(docJsonBefore);
+						std::string taskIdUtf8 = WNarrow(taskId.c_str());
+
+						std::string origStart, origEnd;
+						for (const auto& t : docBefore.tasks) {
+							if (t.id == taskIdUtf8) { origStart = t.start; origEnd = t.end; break; }
+						}
+
+						long minDay = 0, pad = 0; float ptPerDay = 1.0f, originX = 0.0f;
+						::sscanf_s(projJson.c_str(), "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%f,\"originX\":%f}",
+							&minDay, &pad, &ptPerDay, &originX);
+
+						if (origStart.empty() || ptPerDay <= 0.0f) {
+							wprintf(L"DRAG: could not resolve task dates or ptPerDay before drag\n");
+						} else {
+							const long kDragDays = 7;
+							// px-per-day in SCREEN pixels: ptPerDay is in slide points;
+							// PointsToScreenPixelsX/Y already folds in zoom, so derive
+							// the screen px/pt ratio from the task rect itself (its
+							// width in points is known from GetWidth()).
+							int screenLeft = win->PointsToScreenPixelsX(left);
+							int screenRight = win->PointsToScreenPixelsX(left + w);
+							double pxPerPt = (screenRight > screenLeft) ? (double)(screenRight - screenLeft) / (double)w : 1.0;
+							long shiftPx = (long)::lround(kDragDays * ptPerDay * pxPerPt);
+
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+							PumpFor(60);
+							// Several intermediate moves (not a single jump) so
+							// g_dragActive latches on the first > 4px move, matching
+							// a real drag gesture.
+							const int kSteps = 5;
+							for (int s = 1; s <= kSteps; ++s) {
+								int mx = clientPt.x + (int)(shiftPx * s / kSteps);
+								LPARAM moveLp = MAKELPARAM((short)mx, (short)clientPt.y);
+								::PostMessageW(ov, WM_MOUSEMOVE, 0, moveLp);
+								PumpFor(60);
+							}
+							int finalX = clientPt.x + (int)shiftPx;
+							LPARAM upLp = MAKELPARAM((short)finalX, (short)clientPt.y);
+							::PostMessageW(ov, WM_LBUTTONUP, 0, upLp);
+							PumpFor(800);
+
+							// ReadGanttFromSlide takes IDispatch* and returns std::string
+							// directly (UTF-8); no wide round-trip needed here.
+							std::string afterJson = ReadGanttFromSlide(app);
+							PpDocument docAfter = DocumentFromJson(afterJson);
+
+							std::string newStart, newEnd;
+							bool foundAfter = false;
+							for (const auto& t : docAfter.tasks) {
+								if (t.id == taskIdUtf8) { newStart = t.start; newEnd = t.end; foundAfter = true; break; }
+							}
+
+							std::string expectStart = DaysToDate(DateToDays(origStart) + kDragDays);
+							std::string expectEnd = DaysToDate(DateToDays(origEnd) + kDragDays);
+
+							const char* gotIdUtf8 = Overlay_GetSelectedIdForTest();
+							std::string gotId = gotIdUtf8 ? gotIdUtf8 : "";
+
+							bool datesShifted = foundAfter && newStart == expectStart && newEnd == expectEnd;
+							bool selectionKept = (gotId == taskIdUtf8);
+
+							if (!datesShifted) {
+								wprintf(L"DRAG: expected %hs..%hs, got %hs..%hs\n",
+									expectStart.c_str(), expectEnd.c_str(),
+									newStart.c_str(), newEnd.c_str());
+							}
+							if (!selectionKept) {
+								wprintf(L"DRAG: expected selected id '%s', got '%hs'\n", taskId.c_str(), gotId.c_str());
+							}
+							pass = datesShifted && selectionKept;
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"DRAG: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"DRAG PASS\n" : L"DRAG FAIL\n");
 				if (!pass) rc = 1;
 			}
 		} catch (const _com_error& e) {

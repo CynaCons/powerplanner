@@ -4,6 +4,7 @@
 #include "GanttJson.h"
 #include "GanttOps.h"
 #include "GanttHitTest.h"
+#include "GanttLayout.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes. Define
 // them only for the header, then drop them so std::min/std::max keep working.
 #ifndef min
@@ -24,6 +25,7 @@
 #undef PP_OVERLAY_UNDEF_MAX
 #endif
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -89,11 +91,31 @@ std::string g_ownSelKind;
 std::string g_ownSelId;
 
 // Left-button gesture tracking (down -> up), used to distinguish a click
-// (select) from a drag (does nothing yet — future unit) and to own mouse
-// capture for the duration of the gesture.
+// (select) from a drag and to own mouse capture for the duration of the
+// gesture.
 bool g_captureActive = false;
 POINT g_mouseDownPt = {};
 const int kDragThresholdPx = 4;
+
+// ---- drag-move-resize gesture state -----------------------------------------
+// A gesture is anchored on WM_LBUTTONDOWN over a draggable hit zone (task body
+// or edge, or a milestone). g_dragActive latches true once the pointer moves
+// beyond kDragThresholdPx (never re-derived from up-vs-down endpoints — see
+// WM_MOUSEMOVE). g_gestureActive is broader: true for the whole capture
+// lifetime of a draggable-zone gesture (from LBUTTONDOWN, even before the
+// threshold is crossed) so Tick() knows to suppress selection-chrome sync
+// without ever early-returning (the ghost still needs to paint every tick).
+bool g_gestureActive = false;
+bool g_dragActive = false;
+enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, Milestone };
+DragKind g_dragKind = DragKind::None;
+std::string g_dragId;          // task or milestone PP_ID being dragged
+RECT g_dragAnchorRect = {};    // original screen rect of the dragged item at gesture start
+std::string g_dragOrigStart;   // original ISO start date (task) or date (milestone)
+std::string g_dragOrigEnd;     // original ISO end date (task); empty for milestones
+float g_dragPxPerDay = 0.0f;   // SCREEN pixels-per-day for this gesture (see ComputeDragPxPerDay)
+long g_dragDeltaDays = 0;      // current candidate day delta (updated on move)
+POINT g_dragLastPt = {};       // last client point seen during the drag
 std::wstring g_badge = L"PowerPlanner";
 RECT g_buttonRects[BUTTON_COUNT] = {};
 RECT g_frameRect = {};
@@ -159,6 +181,7 @@ enum OverlayButton {
 // Forward
 void PaintOverlay(Gdiplus::Graphics& g, int W, int H);
 void RenderOverlay();
+void RequestOverlayRepaint();
 void HandleToolbarButton(int button);
 void HandleHoverInsertRow();
 void RebuildChart(PpDocument& doc, const std::string& selectId);
@@ -166,6 +189,8 @@ void OvLog(const wchar_t* msg);
 void OpenInlineEditor(const EditRegion& region);
 void CommitInlineEdit();
 void CancelInlineEdit();
+void CancelDragGesture();
+void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays);
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
@@ -789,6 +814,264 @@ void ApplyClickSelection(const HtHit& hit) {
 	}
 }
 
+// Reset all drag-gesture state to idle. Idempotent — safe to call from
+// WM_CAPTURECHANGED (including our own ReleaseCapture, which delivers it) as
+// well as from an explicit cancel.
+void ResetDragGestureState() {
+	g_gestureActive = false;
+	g_dragActive = false;
+	g_dragKind = DragKind::None;
+	g_dragId.clear();
+	::SetRectEmpty(&g_dragAnchorRect);
+	g_dragOrigStart.clear();
+	g_dragOrigEnd.clear();
+	g_dragPxPerDay = 0.0f;
+	g_dragDeltaDays = 0;
+	g_dragLastPt = {};
+}
+
+// SCREEN-PIXELS-per-day for the gesture. WM_MOUSEMOVE deltas are screen
+// pixels and must never be mixed with PP_PROJ's ptPerDay field, which is in
+// slide POINTS, without a COM-derived points->pixels zoom factor — which
+// WM_MOUSEMOVE handling deliberately avoids (per A4, no COM on every move).
+//
+// The hit snapshot's item rects (g_hitSnapshot, built each Tick from
+// PointsToScreenPixelsX/Y) are already in screen pixels, so deriving
+// px/day from ANY task's rect-width / day-span in the current snapshot
+// gives the exact same axis scale as the anchor item (all tasks share one
+// time axis) and needs no COM call. This also covers the milestone case
+// (a milestone has no day-span of its own): fall back to the first task
+// found in the snapshot when the anchor itself isn't a task with a usable
+// span (anchorSpanDays <= 0).
+float ComputeDragPxPerDay(const RECT& anchorRect, long anchorSpanDays) {
+	if (anchorSpanDays > 0) {
+		float widthPx = (float)(anchorRect.right - anchorRect.left);
+		if (widthPx > 0.0f) return widthPx / (float)anchorSpanDays;
+	}
+	if (!g_app) return 0.0f;
+	std::string json = ReadGanttFromSlide(g_app);
+	if (json.empty()) return 0.0f;
+	PpDocument doc = DocumentFromJson(json);
+	for (const auto& item : g_hitSnapshot.items) {
+		if (item.kind != HtItemKind::Task) continue;
+		const PpTask* task = FindTask(doc, item.id);
+		if (!task) continue;
+		long span = DateToDays(task->end) - DateToDays(task->start) + 1;
+		if (span <= 0) continue;
+		float widthPx = (float)(item.rect.right - item.rect.left);
+		if (widthPx > 0.0f) return widthPx / (float)span;
+	}
+	return 0.0f;
+}
+
+// Begin a drag-move-resize gesture anchored at a TaskBody/TaskEdgeL/
+// TaskEdgeR/Milestone hit. Reads the document once (per A4's guidance to read
+// doc dates at gesture start) so subsequent WM_MOUSEMOVE handling stays
+// COM-free. No-ops (leaves gesture state untouched) if the doc/task/milestone
+// can't be resolved — the gesture then behaves as a plain click-vs-drag-less
+// capture (existing WM_LBUTTONUP click-select logic still applies on threshold-
+// within release).
+void StartDragGesture(const HtHit& hit, POINT downPt) {
+	ResetDragGestureState();
+	if (hit.zone != HtZone::TaskBody && hit.zone != HtZone::TaskEdgeL &&
+		hit.zone != HtZone::TaskEdgeR && hit.zone != HtZone::Milestone) {
+		return;
+	}
+	if (!g_app) return;
+	std::string json = ReadGanttFromSlide(g_app);
+	if (json.empty()) return;
+	PpDocument doc = DocumentFromJson(json);
+
+	RECT anchorRect = {};
+	bool haveRect = false;
+	for (const auto& item : g_hitSnapshot.items) {
+		if (item.id == hit.id &&
+			((hit.zone == HtZone::Milestone && item.kind == HtItemKind::Milestone) ||
+			 (hit.zone != HtZone::Milestone && item.kind == HtItemKind::Task))) {
+			anchorRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+			haveRect = true;
+			break;
+		}
+	}
+	if (!haveRect) return;
+
+	if (hit.zone == HtZone::Milestone) {
+		const PpMilestone* ms = nullptr;
+		for (const auto& m : doc.milestones) if (m.id == hit.id) { ms = &m; break; }
+		if (!ms) return;
+		g_dragKind = DragKind::Milestone;
+		g_dragId = hit.id;
+		g_dragOrigStart = ms->date;
+		g_dragOrigEnd.clear();
+		g_dragPxPerDay = ComputeDragPxPerDay(anchorRect, 0);
+	} else {
+		const PpTask* task = FindTask(doc, hit.id);
+		if (!task) return;
+		g_dragKind = (hit.zone == HtZone::TaskEdgeL) ? DragKind::TaskEdgeL
+			: (hit.zone == HtZone::TaskEdgeR) ? DragKind::TaskEdgeR : DragKind::TaskBody;
+		g_dragId = hit.id;
+		g_dragOrigStart = task->start;
+		g_dragOrigEnd = task->end;
+		long spanDays = DateToDays(task->end) - DateToDays(task->start) + 1;
+		g_dragPxPerDay = ComputeDragPxPerDay(anchorRect, spanDays);
+	}
+	if (g_dragPxPerDay <= 0.0f) { ResetDragGestureState(); return; }
+
+	g_dragAnchorRect = anchorRect;
+	g_dragLastPt = downPt;
+	g_dragDeltaDays = 0;
+	g_gestureActive = true;
+}
+
+// Recompute the candidate day delta from the total horizontal displacement
+// since the gesture anchor (not incremental per-move deltas, so rounding
+// never accumulates drift) and request a repaint if it changed the ghost.
+void UpdateDragGesture(POINT pt) {
+	if (!g_gestureActive) return;
+	g_dragLastPt = pt;
+	long dx = pt.x - g_mouseDownPt.x;
+	long dy = pt.y - g_mouseDownPt.y;
+	if (!g_dragActive) {
+		if (dx < -kDragThresholdPx || dx > kDragThresholdPx || dy < -kDragThresholdPx || dy > kDragThresholdPx) {
+			g_dragActive = true;
+		} else {
+			return; // still within click threshold: no ghost yet
+		}
+	}
+	long newDelta = (g_dragPxPerDay > 0.0f) ? (long)::lround((double)dx / (double)g_dragPxPerDay) : 0;
+	if (newDelta != g_dragDeltaDays) {
+		g_dragDeltaDays = newDelta;
+		RequestOverlayRepaint();
+	} else {
+		RequestOverlayRepaint(); // A2/task spec: repaint on each move (cheap)
+	}
+}
+
+// Compute the candidate dates for a gesture (original dates shifted by the
+// day delta, per drag kind), clamping end >= start. Pure — takes the gesture
+// facts as parameters rather than reading g_drag* globals, because the
+// commit path (CommitDragGesture) calls this AFTER those globals have
+// already been cleared by WM_CAPTURECHANGED's CancelDragGesture (see
+// CommitDragGesture's comment). The live-globals convenience overload below
+// is for PaintOverlay's mid-drag tooltip, where the globals are still valid.
+void ComputeDragCandidateDates(DragKind kind, const std::string& origStart, const std::string& origEnd,
+	long deltaDays, std::string& outStart, std::string& outEnd) {
+	long startDay = DateToDays(origStart);
+	long endDay = origEnd.empty() ? startDay : DateToDays(origEnd);
+	switch (kind) {
+	case DragKind::TaskEdgeL:
+		startDay += deltaDays;
+		if (startDay > endDay) startDay = endDay; // clamp end>=start
+		break;
+	case DragKind::TaskEdgeR:
+		endDay += deltaDays;
+		if (endDay < startDay) endDay = startDay;
+		break;
+	case DragKind::TaskBody:
+	case DragKind::Milestone:
+	default:
+		startDay += deltaDays;
+		endDay += deltaDays;
+		break;
+	}
+	outStart = DaysToDate(startDay);
+	outEnd = DaysToDate(endDay);
+}
+
+// Convenience overload for callers reading the CURRENT (live) gesture state
+// (PaintOverlay's mid-drag tooltip) — NOT used by the commit path (see above).
+void ComputeDragCandidateDates(std::string& outStart, std::string& outEnd) {
+	ComputeDragCandidateDates(g_dragKind, g_dragOrigStart, g_dragOrigEnd, g_dragDeltaDays, outStart, outEnd);
+}
+
+// Cancel an in-progress gesture (Esc, or WM_CAPTURECHANGED losing capture):
+// discard all gesture state and repaint so the ghost disappears. Selection is
+// untouched.
+void CancelDragGesture() {
+	if (!g_gestureActive) return;
+	ResetDragGestureState();
+	RequestOverlayRepaint();
+}
+
+// Commit on WM_LBUTTONUP with an active drag: mutate the document via
+// GanttOps and rebuild, then re-apply the internal selection (A2) so the
+// dragged item stays selected instead of flickering to deselected. A
+// zero-day delta is a no-op — no rebuild, no undo pollution.
+//
+// Takes the gesture snapshot as PARAMETERS rather than reading the live
+// g_drag* globals: the caller (WM_LBUTTONUP) must call ::ReleaseCapture()
+// before this to release its own mouse capture, and — because capture is on
+// our own hwnd — that delivers WM_CAPTURECHANGED synchronously, which calls
+// CancelDragGesture() (to cover the externally-stolen-capture case) and
+// would otherwise wipe g_gestureActive/g_dragActive/g_dragKind/etc. out from
+// under this function before it ever ran.
+void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays) {
+	if (deltaDays == 0 || !g_app || g_mutating) return;
+
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (!json.empty()) {
+			PpDocument doc = DocumentFromJson(json);
+			bool changed = false;
+			std::string selKind;
+			if (kind == DragKind::Milestone) {
+				// Milestones have no length; a date shift is a body-style nudge.
+				changed = NudgeTask(doc, id, deltaDays); // no-op if id is not a task
+				if (!changed) {
+					for (auto& ms : doc.milestones) {
+						if (ms.id == id) {
+							ms.date = DaysToDate(DateToDays(ms.date) + deltaDays);
+							changed = true;
+							break;
+						}
+					}
+				}
+				selKind = "MILESTONE";
+			} else if (kind == DragKind::TaskBody) {
+				changed = NudgeTask(doc, id, deltaDays);
+				selKind = "TASK";
+			} else { // TaskEdgeL / TaskEdgeR
+				// Candidate dates from the FRESHLY-read task (not the gesture-
+				// start snapshot in g_dragOrigStart/End, which is unavailable
+				// here — see this function's header comment): equivalent since
+				// nothing else mutates the doc between gesture start and commit.
+				if (const PpTask* task = FindTask(doc, id)) {
+					std::string newStart, newEnd;
+					ComputeDragCandidateDates(kind, task->start, task->end, deltaDays, newStart, newEnd);
+					changed = SetTaskDates(doc, id, newStart, newEnd);
+				}
+				selKind = "TASK";
+			}
+			if (changed) {
+				RebuildChart(doc, id);
+				// A2: set the internal selection synchronously so it is never
+				// momentarily empty (avoiding a deselect-then-reselect flicker).
+				// Do NOT call SyncSelectionChromeFromOwnSelection() here: RebuildChart
+				// just called InvalidateHitSnapshot(), so the hit snapshot is empty
+				// until the next Tick()'s BuildRowBands walk repopulates it from the
+				// freshly-rebuilt shapes — syncing against the stale/empty snapshot
+				// right now would immediately clear the selection we just set (see
+				// SyncSelectionChromeFromOwnSelection's "not found -> ClearOwnSelection"
+				// fallback). The next Tick() calls it once the snapshot is valid again,
+				// exactly like the existing HandleToolbarButton commit pattern.
+				SetOwnSelection(selKind, id);
+				RequestOverlayRepaint();
+			}
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error committing drag gesture");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error committing drag gesture");
+	}
+	catch (...) {
+		OvLog(L"unknown error committing drag gesture");
+	}
+	g_mutating = false;
+}
+
 // The overlay's HTCLIENT region swallows WM_MOUSEWHEEL/WM_MOUSEHWHEEL (they
 // route to whichever window is under the cursor, which is us), so without
 // this, Ctrl+wheel zoom and wheel-scroll are dead over the chart. Forward the
@@ -842,17 +1125,51 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		g_mouseDownPt = pt;
 		g_captureActive = true;
 		::SetCapture(hwnd);
+		// Anchor a potential drag gesture on a draggable hit zone. This does
+		// NOT commit to a drag yet — WM_MOUSEMOVE latches g_dragActive only
+		// once the pointer crosses the threshold; a plain click still selects
+		// on WM_LBUTTONUP exactly as before.
+		StartDragGesture(g_lastHit, pt);
+		return 0;
+	}
+	if (msg == WM_MOUSEMOVE) {
+		// lp is CLIENT coordinates for WM_MOUSEMOVE (unlike WM_MOUSEWHEEL) —
+		// see the LOWORD/HIWORD idiom used throughout this handler.
+		if (g_gestureActive) {
+			POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+			UpdateDragGesture(pt);
+		}
 		return 0;
 	}
 	if (msg == WM_CAPTURECHANGED) {
-		// Some other window stole capture mid-gesture: cancel it. Selection is
-		// left exactly as it was (no click-select on this aborted gesture).
+		// Some other window stole capture mid-gesture (including our own
+		// ReleaseCapture on LBUTTONUP, which also delivers this message):
+		// cancel any in-progress drag gesture idempotently. Selection is left
+		// exactly as it was (no click-select on an aborted gesture).
 		g_captureActive = false;
+		CancelDragGesture();
 		return 0;
 	}
 	if (msg == WM_LBUTTONUP) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		bool wasCaptureActive = g_captureActive;
+		// Snapshot the gesture-in-progress state BEFORE ReleaseCapture: capture
+		// release on our own hwnd delivers WM_CAPTURECHANGED synchronously
+		// (self-inflicted, per A4), and that handler calls CancelDragGesture()
+		// to cover externally-stolen capture — which would otherwise wipe
+		// g_gestureActive/g_dragActive/g_dragKind/etc. out from under us right
+		// here. Recompute the final delta from THIS up-point (rather than
+		// trusting g_dragDeltaDays from the last MOUSEMOVE) so the commit is
+		// exact even if the up-point moved fractionally since that move.
+		bool wasGestureActive = g_gestureActive;
+		bool wasDragActive = g_dragActive;
+		DragKind dragKind = g_dragKind;
+		std::string dragId = g_dragId;
+		long dragDeltaDays = g_dragDeltaDays;
+		if (wasGestureActive && g_dragPxPerDay > 0.0f) {
+			long dx = pt.x - g_mouseDownPt.x;
+			dragDeltaDays = (long)::lround((double)dx / (double)g_dragPxPerDay);
+		}
 		if (g_captureActive) {
 			g_captureActive = false;
 			::ReleaseCapture();
@@ -883,20 +1200,33 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			return 0;
 		}
 		// Click-vs-drag: only a gesture that started with our WM_LBUTTONDOWN
-		// (capture was active) and stayed within the drag threshold selects.
-		// A drag (>4px) does nothing yet (next unit) and must not disturb the
-		// current selection.
+		// (capture was active) decides anything here. A drag that crossed the
+		// threshold (g_dragActive, latched by WM_MOUSEMOVE — never re-derived
+		// from these up/down endpoints) commits via GanttOps; otherwise this
+		// is a plain click and selects exactly as before.
 		if (wasCaptureActive) {
-			long dx = pt.x - g_mouseDownPt.x;
-			long dy = pt.y - g_mouseDownPt.y;
-			bool isClick = (dx >= -kDragThresholdPx && dx <= kDragThresholdPx &&
-				dy >= -kDragThresholdPx && dy <= kDragThresholdPx);
-			if (isClick) {
-				HtHit hit = HitTestClientPoint(g_mouseDownPt);
-				ApplyClickSelection(hit);
-				SyncSelectionChromeFromOwnSelection();
-				RequestOverlayRepaint();
+			if (wasGestureActive && wasDragActive) {
+				try {
+					CommitDragGesture(dragKind, dragId, dragDeltaDays);
+				} catch (...) {
+					OvLog(L"drag gesture commit failed");
+				}
+				ResetDragGestureState();
+			} else {
+				ResetDragGestureState();
+				long dx = pt.x - g_mouseDownPt.x;
+				long dy = pt.y - g_mouseDownPt.y;
+				bool isClick = (dx >= -kDragThresholdPx && dx <= kDragThresholdPx &&
+					dy >= -kDragThresholdPx && dy <= kDragThresholdPx);
+				if (isClick) {
+					HtHit hit = HitTestClientPoint(g_mouseDownPt);
+					ApplyClickSelection(hit);
+					SyncSelectionChromeFromOwnSelection();
+					RequestOverlayRepaint();
+				}
 			}
+		} else {
+			ResetDragGestureState();
 		}
 		return 0;
 	}
@@ -1093,6 +1423,85 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		}
 	}
 
+	// Drag-move-resize ghost: a translucent preview of where the dragged
+	// task/milestone will land, plus a small tooltip with the candidate
+	// dates. Drawn from gesture state only — no COM here (PaintOverlay runs
+	// off UpdateLayeredWindow's back-buffer path, not a tick).
+	if (g_gestureActive && g_dragActive) {
+		RECT anchor = {
+			g_dragAnchorRect.left - g_windowOriginX,
+			g_dragAnchorRect.top - g_windowOriginY,
+			g_dragAnchorRect.right - g_windowOriginX,
+			g_dragAnchorRect.bottom - g_windowOriginY
+		};
+		long shiftPx = (long)::lround((double)g_dragDeltaDays * (double)g_dragPxPerDay);
+		RECT ghost = anchor;
+		switch (g_dragKind) {
+		case DragKind::TaskEdgeL:
+			ghost.left = anchor.left + shiftPx;
+			if (ghost.left > ghost.right - 2) ghost.left = ghost.right - 2; // keep end>=start visually too
+			break;
+		case DragKind::TaskEdgeR:
+			ghost.right = anchor.right + shiftPx;
+			if (ghost.right < ghost.left + 2) ghost.right = ghost.left + 2;
+			break;
+		case DragKind::TaskBody:
+		case DragKind::Milestone:
+		default:
+			ghost.left = anchor.left + shiftPx;
+			ghost.right = anchor.right + shiftPx;
+			break;
+		}
+
+		if (g_dragKind == DragKind::Milestone) {
+			// Diamond shifted with the gesture, matching the milestone marker.
+			int cx = (ghost.left + ghost.right) / 2;
+			int cy = (anchor.top + anchor.bottom) / 2;
+			int rx = (anchor.right - anchor.left) / 2;
+			int ry = (anchor.bottom - anchor.top) / 2;
+			GraphicsPath diamond;
+			Gdiplus::Point pts[4] = {
+				Gdiplus::Point(cx, cy - ry), Gdiplus::Point(cx + rx, cy),
+				Gdiplus::Point(cx, cy + ry), Gdiplus::Point(cx - rx, cy)
+			};
+			diamond.AddPolygon(pts, 4);
+			SolidBrush ghostFill(GpColor(140, ACCENT));
+			g.FillPath(&ghostFill, &diamond);
+			Pen ghostPen(GpColor(220, ACCENT), 1.5f);
+			g.DrawPath(&ghostPen, &diamond);
+		} else {
+			GraphicsPath ghostPath;
+			AddRoundRect(ghostPath, (REAL)ghost.left, (REAL)ghost.top,
+				(REAL)(ghost.right - ghost.left), (REAL)(ghost.bottom - ghost.top), 3.0f);
+			SolidBrush ghostFill(GpColor(110, ACCENT));
+			g.FillPath(&ghostFill, &ghostPath);
+			Pen ghostPen(GpColor(220, ACCENT), 1.5f);
+			g.DrawPath(&ghostPen, &ghostPath);
+		}
+
+		// Tooltip: candidate dates near the cursor.
+		std::string candStart, candEnd;
+		ComputeDragCandidateDates(candStart, candEnd);
+		std::wstring tip = Widen(candStart) + L" → " + Widen(candEnd);
+		Gdiplus::Font tipFont(L"Segoe UI", 10.0f, FontStyleRegular, UnitPixel);
+		RectF tipBounds;
+		g.MeasureString(tip.c_str(), -1, &tipFont, PointF(0, 0), &tipBounds);
+		int tipPad = 5;
+		int tipX = g_dragLastPt.x + 14;
+		int tipY = g_dragLastPt.y + 14;
+		int tipW = (int)tipBounds.Width + tipPad * 2;
+		int tipH = (int)tipBounds.Height + tipPad * 2;
+		GraphicsPath tipPath;
+		AddRoundRect(tipPath, (REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH, 3.0f);
+		SolidBrush tipBg(GpColor(235, RGB(32, 33, 36)));
+		g.FillPath(&tipBg, &tipPath);
+		StringFormat tipFmt;
+		tipFmt.SetAlignment(StringAlignmentCenter);
+		tipFmt.SetLineAlignment(StringAlignmentCenter);
+		SolidBrush tipText(Color(255, 255, 255, 255));
+		g.DrawString(tip.c_str(), -1, &tipFont, RectF((REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH), &tipFmt, &tipText);
+	}
+
 	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
 
 	RECT frame = g_frameRect;
@@ -1279,6 +1688,7 @@ void HideOverlay() {
 		g_captureActive = false;
 		if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
 	}
+	ResetDragGestureState();
 	ClearHoverState();
 	g_lastLeftButtonDown = false;
 	g_rowBands.clear();
@@ -1449,9 +1859,12 @@ void Tick() {
 
 		// VK_ESCAPE cancels an in-progress capture gesture (drag or pending
 		// click) — it does NOT touch the internal selection itself. General
-		// Esc (deselecting a made selection) is a later unit.
+		// Esc (deselecting a made selection) is a later unit. Latency is
+		// bounded by the 150ms tick period (by design — this is tick-polled,
+		// not event-driven).
 		if (g_captureActive && (::GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
 			g_captureActive = false;
+			CancelDragGesture();
 			if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
 		}
 
@@ -1537,28 +1950,22 @@ void Tick() {
 		// PowerPoint selection — it is driven entirely from the internal
 		// selection model, kept in sync with the freshly-rebuilt snapshot /
 		// row bands above. Skipped when CHART_ROOT chrome (old path) already
-		// claimed g_selKind/g_hasSelectionChrome this tick.
-		if (!chartRootNativelySelected) {
+		// claimed g_selKind/g_hasSelectionChrome this tick, OR while a drag
+		// gesture is active (A1): the gesture owns the ghost/chrome for its
+		// duration and re-deriving chrome mid-drag from a snapshot that is
+		// about to be invalidated by the eventual commit's RebuildChart is
+		// unnecessary churn — the commit path re-syncs explicitly (A2).
+		if (!chartRootNativelySelected && !g_gestureActive) {
 			SyncSelectionChromeFromOwnSelection();
 		}
 
-		if (g_hasSelectionChrome) {
-			bool mouseUp = !(::GetKeyState(VK_LBUTTON) & 0x8000);
-			if (mouseUp) {
-				std::string kStr = g_selKind;
-				if (kStr == "TASK" || kStr == "MILESTONE") {
-					bool changed = false;
-					ReflowFromSlide(g_app, &changed);
-					if (changed) {
-						ClearSelectionState();
-						InvalidateHitSnapshot();
-						ShowOverlayForChartRect(g_chartScreenRect);
-						RequestOverlayRepaint();
-						return;
-					}
-				}
-			}
-		}
+		// NOTE: the old auto-reflow-on-mouse-up-idle-tick block that lived
+		// here is gone (A1). It predated the own-selection/drag-gesture model:
+		// chart clicks never reach PowerPoint anymore (the overlay captures
+		// them), so there is no native shape drag left for ReflowFromSlide to
+		// pick up on an idle tick — the WM_LBUTTONUP drag-commit path (see
+		// CommitDragGesture) is the only way task/milestone dates change now.
+		// ReflowFromSlide itself is untouched and still used by the harness.
 
 		ShowOverlayForChartRect(g_chartScreenRect);
 		if (chartChanged || hoverChanged || mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
@@ -1609,6 +2016,7 @@ void OverlayStop() {
 		g_captureActive = false;
 		if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
 	}
+	ResetDragGestureState();
 	if (g_hwnd) { ::DestroyWindow(g_hwnd); g_hwnd = NULL; }
 	FreeBackBuffer();
 	if (g_gdiplusToken) {

@@ -133,6 +133,20 @@ bool NudgeTask(PpDocument& doc, const std::string& taskId, long deltaDays) {
 	return false;
 }
 
+bool SetTaskDates(PpDocument& doc, const std::string& taskId, const std::string& startISO, const std::string& endISO) {
+	for (auto& task : doc.tasks) {
+		if (task.id == taskId) {
+			long startDay = DateToDays(startISO);
+			long endDay = DateToDays(endISO);
+			if (endDay < startDay) endDay = startDay; // enforce end >= start
+			task.start = DaysToDate(startDay);
+			task.end = DaysToDate(endDay);
+			return true;
+		}
+	}
+	return false;
+}
+
 bool SetTitle(PpDocument& doc, const std::string& title) {
 	doc.title = title;
 	return true;

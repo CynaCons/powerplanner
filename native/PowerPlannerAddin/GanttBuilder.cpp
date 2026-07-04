@@ -360,6 +360,16 @@ std::string ReadGanttFromSlide(IDispatch* pApp) {
 	return "";
 }
 
+bool ParseProj(const std::string& projJson, PpProj* out) {
+	if (!out || projJson.empty()) return false;
+	PpProj p;
+	int n = ::sscanf_s(projJson.c_str(), "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%f,\"originX\":%f}",
+		&p.minDay, &p.pad, &p.ptPerDay, &p.originX);
+	if (n != 4 || p.ptPerDay <= 0.0f) return false;
+	*out = p;
+	return true;
+}
+
 HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 	if (outChanged) *outChanged = false;
 	if (!pApp) return E_POINTER;
@@ -380,9 +390,9 @@ HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 		std::string projJson = Narrow((const wchar_t*)group->GetTags()->Item(_bstr_t(L"PP_PROJ")));
 		if (docJson.empty() || projJson.empty()) return S_FALSE;
 
-		long minDay = 0, pad = 0; float ptPerDay = 1.0f, originX = 0.0f;
-		::sscanf_s(projJson.c_str(), "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%f,\"originX\":%f}", &minDay, &pad, &ptPerDay, &originX);
-		if (ptPerDay <= 0.0f) return S_FALSE;
+		PpProj proj;
+		if (!ParseProj(projJson, &proj)) return S_FALSE;
+		long minDay = proj.minDay, pad = proj.pad; float ptPerDay = proj.ptPerDay, originX = proj.originX;
 
 		PpDocument doc = DocumentFromJson(docJson);
 		std::map<std::string, std::pair<float, float>> pos;
