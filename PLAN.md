@@ -529,9 +529,14 @@ per unit: behavioral harness marker + shape-property assertions + slide-export
 PNG vs mockup; user visual review at every slice boundary.
 - [x] S1 The Look — theme tokens, visual gate, rail label column, hierarchical
       two-band date header (s1-theme-tokens · s1-visual-gate · s1-rail-labels
-      · s1-hier-axis) — all 4 units gated green; **awaiting user visual review**
-- [ ] S2 App bar shell — pure model + docked window + global commands
-      (s2-appbar-model · s2-appbar-window)
+      · s1-hier-axis) — all 4 units gated green; **user-reviewed 2026-07-05,
+      two overlay defects logged below (feed S3 / need a suppression spike)**
+- [x] S2 App bar shell — pure model + docked window + global commands
+      (s2-appbar-model · s2-appbar-window) — both units GATE-FULL green from a
+      clean rebuild 2026-07-05 (APPBAR MODEL OK + APPBAR stage + SCOPE extended);
+      **awaiting user visual review (AC4: live PP at 100%/150% DPI, no focus
+      steal)**. Built coordinator→Cursor(composer-2.5): I specced/gated, Cursor
+      implemented.
 - [ ] S3 Rows are objects — ops + selection/reorder/indent UX (s3-row-ops ·
       s3-row-selection)
 - [ ] S4 Task & marker context complete — swatches/labels live, marker
@@ -540,6 +545,32 @@ PNG vs mockup; user visual review at every slice boundary.
 - [ ] S5 Dependencies + notes — link mode, unlink, note entry points
       (s5-dep-ops · s5-link-mode)
 - [ ] S6 Menus from the shared registry + final sweep (s6-menus · s6-final)
+
+**S1 visual-review findings (2026-07-05) — user-reported on the live showcase;
+root-caused in `Overlay.cpp`, tracked for the slices noted:**
+- [ ] **Row highlight is mis-sized / missing on rail rows** — `BuildRowBands()`
+      (`Overlay.cpp`) derives each row's highlight band from that row's
+      `ROW_LABEL` text-box rect, so the band matches the label glyph box, not
+      the row's full lane; a row with an empty label (rail-task rows such as
+      "Implementation" / "QA + polish") emits no `ROW_LABEL` shape and gets no
+      band at all. Fix lands as part of **S3 `s3-row-selection`** (rail hit
+      zones + rail-model highlight rendering replace the label-rect band). Do
+      not patch the placeholder band separately — build it correctly in S3.
+- [ ] **Raw PowerPoint shapes/text remain selectable (suppression is leaky)** —
+      selection suppression is polled/reactive (150 ms `Unselect` on the next
+      Tick, and only for `PP_KIND`-tagged chart children while the add-in
+      overlay is loaded and PowerPoint is the foreground app). By the N7
+      `FALLBACK_POLLING_ONLY` architecture (no subclassable per-slide window)
+      it is best-effort, not true input prevention: a click flashes a native
+      selection before the tick clears it, and untagged shapes (e.g. a plain
+      title textbox, or any shape outside `CHART_ROOT`) are never suppressed.
+      This is NOT scheduled work today and NOT fully solvable in the current
+      architecture. Documented mitigations: (a) S2 `s2-appbar-window` must not
+      steal focus, keeping the host live; (b) tag/guard any chrome shapes the
+      chart owns so they fall under suppression; (c) a true-prevention approach
+      (low-level input hook or a real capture window covering the chart) needs
+      its own spike — flagged here so it is not assumed done by the S1 floor's
+      `SUPPRESS PASS`, which only exercises a freshly-inserted, unscaled chart.
 
 ### N6 — Installer + Packaging
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
