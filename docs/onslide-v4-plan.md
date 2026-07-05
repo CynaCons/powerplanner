@@ -175,7 +175,7 @@ freshly inserted chart resemble the mockup.*
 ### S2 — App bar shell + global commands
 *Spec: R8 (window, anatomy, globals), tokens §4–6. Ground rule 9 mandatory.*
 
-- [ ] **s2-appbar-model** — Pure module `GanttAppBar.h` (HEADER-ONLY if at all
+- [x] **s2-appbar-model** — Pure module `GanttAppBar.h` (HEADER-ONLY if at all
   possible — else update every bat): `AppBarItem {int cmd; std::string label;
   int icon; bool enabled; bool danger;}`, `BuildAppBar(selKind, doc, selId)
   → groups` implementing the R8 table exactly (task rows get the Row group;

@@ -3,6 +3,7 @@
 #include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttOps.h"
 #include "../PowerPlannerAddin/GanttHitTest.h"
+#include "../PowerPlannerAddin/GanttAppBar.h"
 #include "../PowerPlannerAddin/GanttTheme.h"
 #include "../PowerPlannerAddin/GanttScene.h"
 
@@ -879,6 +880,263 @@ static bool RunGridOpsChecks() {
 	return ok;
 }
 
+static const AppBarGroup* AppBarFindGroup(const AppBarModel& model, const std::string& label) {
+	for (const auto& g : model.groups) {
+		if (g.label == label) return &g;
+	}
+	return nullptr;
+}
+
+static const AppBarItem* AppBarFindItem(const AppBarGroup& group, int cmd) {
+	for (const auto& item : group.items) {
+		if (item.cmd == cmd) return &item;
+	}
+	return nullptr;
+}
+
+static const AppBarItem* AppBarFindItemInModel(const AppBarModel& model, int cmd) {
+	for (const auto& g : model.groups) {
+		const AppBarItem* item = AppBarFindItem(g, cmd);
+		if (item) return item;
+	}
+	return nullptr;
+}
+
+static int AppBarCountSwatches(const AppBarModel& model) {
+	int n = 0;
+	for (const auto& g : model.groups) {
+		for (const auto& item : g.items) {
+			if (item.icon == AppBarIcon::Swatch) ++n;
+		}
+	}
+	return n;
+}
+
+static bool AppBarGlobalOk(const AppBarModel& model, const PpDocument& doc, const char* ctx) {
+	bool ok = true;
+	ok = Check(!model.groups.empty(), "appbar global: model has groups") && ok;
+	const AppBarGroup& global = model.groups.back();
+	ok = Check(global.label == "SCALE", "appbar global: last group is SCALE") && ok;
+	ok = Check(global.items.size() >= 7, "appbar global: SCALE has scale+labels+grid items") && ok;
+	const int scaleCmds[] = {
+		HtCmd_ScaleDay, HtCmd_ScaleWeek, HtCmd_ScaleMonth,
+		HtCmd_ScaleQuarter, HtCmd_ScaleYear
+	};
+	const char* scaleLabels[] = { "D", "W", "M", "Q", "Y" };
+	for (int i = 0; i < 5; ++i) {
+		ok = Check(global.items[i].cmd == scaleCmds[i] &&
+			global.items[i].label == scaleLabels[i] &&
+			global.items[i].icon == AppBarIcon::ScaleSeg,
+			"appbar global: scale segment order") && ok;
+	}
+	int activeCount = 0;
+	for (int i = 0; i < 5; ++i) if (global.items[i].active) ++activeCount;
+	ok = Check(activeCount == 1, "appbar global: exactly one scale segment active") && ok;
+	const AppBarItem* labelsItem = AppBarFindItem(global, HtCmd_ToggleRailLabels);
+	ok = Check(labelsItem != nullptr && labelsItem->label == "Labels" &&
+		labelsItem->icon == AppBarIcon::LabelsToggle &&
+		labelsItem->active == doc.railLabels,
+		"appbar global: Labels item tracks railLabels") && ok;
+	ok = Check(AppBarFindItem(global, HtCmd_CycleGrid) != nullptr, "appbar global: Grid item present") && ok;
+	(void)ctx;
+	return ok;
+}
+
+static bool RunAppBarModelChecks() {
+	bool ok = true;
+
+	// --- None ---
+	{
+		PpDocument doc;
+		AppBarModel m = BuildAppBar(AppBarSel::None, doc, "");
+		ok = Check(m.name.empty(), "appbar none: name empty") && ok;
+		ok = Check(m.groups.size() == 2, "appbar none: INSERT + SCALE groups") && ok;
+		const AppBarGroup* insert = AppBarFindGroup(m, "INSERT");
+		ok = Check(insert != nullptr && insert->items.size() == 5, "appbar none: INSERT has 5 items") && ok;
+		if (insert) {
+			const int cmds[] = {
+				HtCmd_AddRow, HtCmd_InsertTask, HtCmd_InsertMilestone,
+				HtCmd_InsertMarker, HtCmd_InsertNote
+			};
+			for (int i = 0; i < 5; ++i) {
+				ok = Check(insert->items[i].cmd == cmds[i], "appbar none: INSERT item order") && ok;
+			}
+		}
+		ok = AppBarGlobalOk(m, doc, "none") && ok;
+	}
+
+	// --- Global scale active flags ---
+	{
+		PpDocument doc;
+		doc.scale = "month";
+		AppBarModel m = BuildAppBar(AppBarSel::None, doc, "");
+		ok = Check(m.groups.back().items[2].active, "appbar scale: month -> M active") && ok;
+		ok = Check(!m.groups.back().items[0].active && !m.groups.back().items[4].active,
+			"appbar scale: month -> D/Q inactive") && ok;
+		doc.scale = "quarter";
+		m = BuildAppBar(AppBarSel::None, doc, "");
+		ok = Check(m.groups.back().items[3].active, "appbar scale: quarter -> Q active") && ok;
+		doc.railLabels = true;
+		m = BuildAppBar(AppBarSel::None, doc, "");
+		const AppBarItem* labelsItem = AppBarFindItem(m.groups.back(), HtCmd_ToggleRailLabels);
+		ok = Check(labelsItem && labelsItem->active, "appbar scale: railLabels -> Labels active") && ok;
+	}
+
+	// --- Task ---
+	{
+		PpDocument doc;
+		doc.rows.push_back(PpRow{"r1", "Row 1", "", false});
+		doc.tasks.push_back(PpTask{"t1", "My Task", "2026-01-01", "2026-01-05", "r1", "", 0});
+		AppBarModel m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		ok = Check(m.name == "My Task", "appbar task: name is task label") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_Edit) != nullptr, "appbar task: has Edit") && ok;
+		ok = Check(AppBarCountSwatches(m) == 8, "appbar task: exactly 8 swatches") && ok;
+		for (int i = 0; i < 8; ++i) {
+			const int swatchCmds[] = {
+				HtCmd_Swatch1, HtCmd_Swatch2, HtCmd_Swatch3, HtCmd_Swatch4,
+				HtCmd_Swatch5, HtCmd_Swatch6, HtCmd_Swatch7, HtCmd_Swatch8
+			};
+			const AppBarItem* sw = AppBarFindItemInModel(m, swatchCmds[i]);
+			ok = Check(sw && sw->data == kAppBarSwatches[i], "appbar task: swatch data order") && ok;
+		}
+		const AppBarItem* sw1 = AppBarFindItemInModel(m, HtCmd_Swatch1);
+		ok = Check(sw1 && sw1->active, "appbar task: empty color -> swatch1 active") && ok;
+		doc.tasks[0].color = "#7A4FA3";
+		m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		const AppBarItem* sw3 = AppBarFindItemInModel(m, HtCmd_Swatch3);
+		ok = Check(sw3 && sw3->active, "appbar task: #7A4FA3 -> swatch3 active") && ok;
+		doc.tasks[0].color = "#7a4fa3";
+		m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		sw3 = AppBarFindItemInModel(m, HtCmd_Swatch3);
+		ok = Check(sw3 && sw3->active, "appbar task: #7a4fa3 lowercase -> swatch3 active") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgeMinus1) != nullptr, "appbar task: has NudgeMinus1") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgePlus1) != nullptr, "appbar task: has NudgePlus1") && ok;
+		doc.tasks[0].labelPlacement = "";
+		m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		const AppBarItem* lbl = AppBarFindItemInModel(m, HtCmd_CycleLabelPlacement);
+		ok = Check(lbl && lbl->label == "Label: bar", "appbar task: empty placement -> Label: bar") && ok;
+		doc.tasks[0].labelPlacement = "bar";
+		m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		lbl = AppBarFindItemInModel(m, HtCmd_CycleLabelPlacement);
+		ok = Check(lbl && lbl->label == "Label: bar", "appbar task: bar placement -> Label: bar") && ok;
+		doc.tasks[0].labelPlacement = "rail";
+		m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		lbl = AppBarFindItemInModel(m, HtCmd_CycleLabelPlacement);
+		ok = Check(lbl && lbl->label == "Label: rail", "appbar task: rail placement -> Label: rail") && ok;
+		const AppBarItem* del = AppBarFindItemInModel(m, HtCmd_Delete);
+		ok = Check(del && del->danger, "appbar task: Delete is danger") && ok;
+		const AppBarItem* unlink = AppBarFindItemInModel(m, HtCmd_Unlink);
+		ok = Check(unlink && !unlink->enabled, "appbar task: Unlink disabled with no deps") && ok;
+		doc.deps.push_back(PpDependency{"d1", "t1", "other", "finish-to-start"});
+		m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		unlink = AppBarFindItemInModel(m, HtCmd_Unlink);
+		ok = Check(unlink && unlink->enabled, "appbar task: Unlink enabled when dep touches task") && ok;
+		ok = AppBarGlobalOk(m, doc, "task") && ok;
+	}
+
+	// --- Task rail-row rule ---
+	{
+		PpDocument doc;
+		doc.rows.push_back(PpRow{"r1", "Row 1", "", false});
+		doc.tasks.push_back(PpTask{"t1", "Task", "2026-01-01", "2026-01-05", "r1", "", 0});
+		AppBarModel m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		ok = Check(AppBarFindGroup(m, "ROW") == nullptr, "appbar task rail: no ROW without rail") && ok;
+		doc.railLabels = true;
+		m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		ok = Check(AppBarFindGroup(m, "ROW") != nullptr, "appbar task rail: ROW when doc.railLabels") && ok;
+		doc.railLabels = false;
+		doc.tasks.push_back(PpTask{"t2", "Rail peer", "2026-01-01", "2026-01-05", "r1", "", 0, "rail"});
+		m = BuildAppBar(AppBarSel::Task, doc, "t1");
+		ok = Check(AppBarFindGroup(m, "ROW") != nullptr, "appbar task rail: ROW when peer has rail placement") && ok;
+	}
+
+	// --- Row ---
+	{
+		PpDocument doc;
+		doc.rows.push_back(PpRow{"r1", "Row Label", "", false});
+		AppBarModel m = BuildAppBar(AppBarSel::Row, doc, "r1");
+		ok = Check(m.name == "Row Label", "appbar row: name is row label") && ok;
+		const AppBarGroup* row = AppBarFindGroup(m, "ROW");
+		ok = Check(row != nullptr && row->items.size() == 7, "appbar row: ROW group has 7 items") && ok;
+		if (row) {
+			ok = Check(row->items[0].cmd == HtCmd_AddRowAbove && row->items[0].label == "Above", "appbar row: Above") && ok;
+			ok = Check(row->items[1].cmd == HtCmd_AddRowBelow && row->items[1].label == "Below", "appbar row: Below") && ok;
+			ok = Check(row->items[2].cmd == HtCmd_MoveRowUp && row->items[2].label.empty(), "appbar row: MoveUp") && ok;
+			ok = Check(row->items[3].cmd == HtCmd_MoveRowDown && row->items[3].label.empty(), "appbar row: MoveDown") && ok;
+			ok = Check(row->items[4].cmd == HtCmd_IndentRow && row->items[4].label == "Indent", "appbar row: Indent") && ok;
+			ok = Check(row->items[5].cmd == HtCmd_OutdentRow && row->items[5].label == "Outdent", "appbar row: Outdent") && ok;
+			ok = Check(row->items[6].cmd == HtCmd_DeleteRow && row->items[6].danger, "appbar row: danger DeleteRow") && ok;
+		}
+		ok = AppBarGlobalOk(m, doc, "row") && ok;
+	}
+
+	// --- Milestone ---
+	{
+		PpDocument doc;
+		doc.milestones.push_back(PpMilestone{"m1", "MS", "2026-01-01", "r1", ""});
+		AppBarModel m = BuildAppBar(AppBarSel::Milestone, doc, "m1");
+		ok = Check(AppBarFindItemInModel(m, HtCmd_Edit) != nullptr, "appbar milestone: Edit") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgeMinus1) != nullptr, "appbar milestone: NudgeMinus1") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgePlus1) != nullptr, "appbar milestone: NudgePlus1") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_AddNote) != nullptr, "appbar milestone: AddNote") && ok;
+		const AppBarItem* del = AppBarFindItemInModel(m, HtCmd_Delete);
+		ok = Check(del && del->danger, "appbar milestone: danger Delete") && ok;
+		ok = Check(AppBarCountSwatches(m) == 0, "appbar milestone: no swatches") && ok;
+		ok = AppBarGlobalOk(m, doc, "milestone") && ok;
+	}
+
+	// --- Marker ---
+	{
+		PpDocument doc;
+		doc.markers.push_back(PpMarker{"mk1", "today", "Today", "2026-01-01", ""});
+		AppBarModel m = BuildAppBar(AppBarSel::Marker, doc, "mk1");
+		ok = Check(AppBarFindItemInModel(m, HtCmd_Rename) != nullptr, "appbar marker: Rename") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgeMinus1) != nullptr, "appbar marker: NudgeMinus1") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgePlus1) != nullptr, "appbar marker: NudgePlus1") && ok;
+		const AppBarItem* del = AppBarFindItemInModel(m, HtCmd_Delete);
+		ok = Check(del && del->danger, "appbar marker: danger Delete") && ok;
+		ok = AppBarGlobalOk(m, doc, "marker") && ok;
+	}
+
+	// --- Note ---
+	{
+		PpDocument doc;
+		doc.texts.push_back(PpText{"n1", "My Note", "", "r1", "2026-01-01", "", 0, 0});
+		AppBarModel m = BuildAppBar(AppBarSel::Note, doc, "n1");
+		ok = Check(m.name == "My Note", "appbar note: name from label") && ok;
+		ok = Check(AppBarFindItemInModel(m, HtCmd_Edit) != nullptr, "appbar note: Edit") && ok;
+		const AppBarItem* reanchor = AppBarFindItemInModel(m, HtCmd_ReanchorNote);
+		ok = Check(reanchor && reanchor->label == "Re-anchor", "appbar note: Re-anchor") && ok;
+		const AppBarItem* del = AppBarFindItemInModel(m, HtCmd_Delete);
+		ok = Check(del && del->danger, "appbar note: danger Delete") && ok;
+		doc.texts[0].label = "";
+		m = BuildAppBar(AppBarSel::Note, doc, "n1");
+		ok = Check(m.name == "Note", "appbar note: empty label falls back to Note") && ok;
+		ok = AppBarGlobalOk(m, doc, "note") && ok;
+	}
+
+	// --- Global LAST for every selection type ---
+	{
+		PpDocument doc;
+		doc.rows.push_back(PpRow{"r1", "R", "", false});
+		doc.tasks.push_back(PpTask{"t1", "T", "2026-01-01", "2026-01-05", "r1", "", 0});
+		doc.milestones.push_back(PpMilestone{"m1", "M", "2026-01-01", "r1", ""});
+		doc.markers.push_back(PpMarker{"mk1", "today", "Mk", "2026-01-01", ""});
+		doc.texts.push_back(PpText{"n1", "N", "", "r1", "2026-01-01", "", 0, 0});
+		const AppBarSel sels[] = {
+			AppBarSel::None, AppBarSel::Task, AppBarSel::Row,
+			AppBarSel::Milestone, AppBarSel::Marker, AppBarSel::Note
+		};
+		const char* ids[] = { "", "t1", "r1", "m1", "mk1", "n1" };
+		for (int i = 0; i < 6; ++i) {
+			AppBarModel m = BuildAppBar(sels[i], doc, ids[i]);
+			ok = Check(m.groups.back().label == "SCALE", "appbar global: SCALE last for every sel") && ok;
+		}
+	}
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -984,6 +1242,9 @@ int main() {
 	bool gridOpsOk = RunGridOpsChecks();
 	ok = gridOpsOk && ok;
 
+	bool appBarOk = RunAppBarModelChecks();
+	ok = appBarOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -1013,6 +1274,9 @@ int main() {
 	}
 	if (gridOpsOk) {
 		std::printf("GRID OPS OK\n");
+	}
+	if (appBarOk) {
+		std::printf("APPBAR MODEL OK\n");
 	}
 	return 0;
 }
