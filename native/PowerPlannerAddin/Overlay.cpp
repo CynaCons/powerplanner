@@ -4,6 +4,8 @@
 #include "GanttJson.h"
 #include "GanttOps.h"
 #include "GanttHitTest.h"
+#include "GanttAppBar.h"
+#include "GanttTheme.h"
 #include "GanttLayout.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes. Define
 // them only for the header, then drop them so std::min/std::max keep working.
@@ -137,6 +139,22 @@ bool     g_shown = false;
 bool     g_mutating = false;
 bool     g_inTick = false;
 ULONG_PTR g_gdiplusToken = 0;
+
+// ---- bottom app bar (second layered chrome window) -------------------------
+HWND g_appBarHwnd = NULL;
+const wchar_t* const kAppBarClass = L"PowerPlannerAppBar";
+HDC g_abDc = NULL; HBITMAP g_abBmp = NULL; HGDIOBJ g_abOld = NULL;
+void* g_abBits = nullptr; int g_abW = 0, g_abH = 0;
+bool g_appBarShown = false;
+AppBarModel g_appBar;
+bool g_appBarValid = false;
+std::string g_appBarSelKindBuilt, g_appBarSelIdBuilt;
+std::string g_appBarDocSig;
+int g_appBarHoverCmd = 0;
+struct AppBarHitRect { int cmd; RECT rc; bool enabled; };
+std::vector<AppBarHitRect> g_appBarHits;
+int g_appBarContentW = 0, g_appBarContentH = 0;
+
 // PowerPoint's main window, cached each Tick() from the Application COM object.
 // Used to forward input (e.g. mouse wheel) that the overlay captures but does
 // not itself handle, so Ctrl+wheel zoom/scroll still reaches PowerPoint.
@@ -439,6 +457,7 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 void CommitCreateGesture(const std::string& rowId, long startDay, long endDay);
 float ComputeEmptyCellPxPerDay();
 void ShowContextMenuForHit(const HtHit& hit, POINT clientPt);
+void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT clientPt);
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -3376,6 +3395,559 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	}
 }
 
+// ---- BOTTOM APP BAR --------------------------------------------------------
+
+COLORREF AbRgb(unsigned long v) {
+	return RGB((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+}
+
+Gdiplus::Color GpToken(BYTE a, unsigned long rgb) {
+	return Gdiplus::Color(a, (BYTE)((rgb >> 16) & 0xFF), (BYTE)((rgb >> 8) & 0xFF), (BYTE)(rgb & 0xFF));
+}
+
+Gdiplus::Font* MakeAppBarFont(Gdiplus::REAL px, int style) {
+	return new Gdiplus::Font(L"Segoe UI", px, style, Gdiplus::UnitPixel);
+}
+
+Gdiplus::REAL MeasureTextW(Gdiplus::Graphics& g, Gdiplus::Font& font, const wchar_t* text) {
+	Gdiplus::RectF bounds;
+	g.MeasureString(text, -1, &font, Gdiplus::PointF(0, 0), &bounds);
+	return bounds.Width;
+}
+
+AppBarSel AppBarSelFromKind(const std::string& kind) {
+	if (kind == "TASK") return AppBarSel::Task;
+	if (kind == "ROW") return AppBarSel::Row;
+	if (kind == "MILESTONE") return AppBarSel::Milestone;
+	if (kind == "MARKER") return AppBarSel::Marker;
+	if (kind == "TEXT") return AppBarSel::Note;
+	return AppBarSel::None;
+}
+
+void RebuildAppBarModelFromSlide() {
+	if (!g_app) return;
+	if (g_mutating) return;
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (!json.empty()) {
+			PpDocument doc = DocumentFromJson(json);
+			AppBarSel sel = AppBarSelFromKind(g_ownSelKind);
+			g_appBar = BuildAppBar(sel, doc, g_ownSelId);
+			g_appBarSelKindBuilt = g_ownSelKind;
+			g_appBarSelIdBuilt = g_ownSelId;
+			g_appBarDocSig = doc.scale + (doc.railLabels ? "1" : "0");
+			g_appBarValid = true;
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error rebuilding app-bar model");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error rebuilding app-bar model");
+	}
+	catch (...) {
+		OvLog(L"unknown error rebuilding app-bar model");
+	}
+	g_mutating = false;
+}
+
+int AppBarShadowInset() { return Scale(4); }
+
+int AppBarContainerHeight() { return Scale(36); }
+
+int AppBarButtonHeight() { return Scale(5) * 2 + (int)ScaleF(11.5f); }
+
+int AppBarSegChipSize() { return Scale(22); }
+
+int AppBarSwatchSize() { return Scale(15); }
+
+int MeasureAppBarItemWidth(Gdiplus::Graphics* g, Gdiplus::Font* btnFont, const AppBarItem& item) {
+	const int btnPadX = Scale(8);
+	const int btnPadY = Scale(5);
+	const int chip = AppBarSegChipSize();
+	const int sw = AppBarSwatchSize();
+	if (item.icon == AppBarIcon::ScaleSeg) return chip;
+	if (item.icon == AppBarIcon::Swatch) return sw;
+	int w = btnPadX * 2;
+	if (item.icon == AppBarIcon::MoveUp || item.icon == AppBarIcon::MoveDown) w += Scale(10);
+	if (!item.label.empty() && g && btnFont) {
+		std::wstring wl(item.label.begin(), item.label.end());
+		w += (int)std::ceil(MeasureTextW(*g, *btnFont, wl.c_str()));
+	} else if (!item.label.empty()) {
+		w += Scale((int)(item.label.size() * 7));
+	}
+	if (w < Scale(20)) w = Scale(20);
+	(void)btnPadY;
+	return w;
+}
+
+int MeasureAppBarSegmentedWidth(const std::vector<AppBarItem>& items, size_t from, size_t to) {
+	const int chip = AppBarSegChipSize();
+	const int innerPad = Scale(3);
+	return innerPad * 2 + (int)(to - from) * chip;
+}
+
+void MeasureAppBar() {
+	const int padH = Scale(6);
+	const int gap = Scale(2);
+	const int groupPad = Scale(7);
+	const int hairline = Scale(1);
+	const int nameGap = Scale(8);
+	int w = padH * 2;
+	int h = AppBarContainerHeight();
+	g_appBarContentW = 0;
+	g_appBarContentH = h;
+
+	Gdiplus::Graphics* measureG = nullptr;
+	Gdiplus::Font* btnFont = nullptr;
+	try {
+		Gdiplus::Bitmap bmp(1, 1, PixelFormat32bppPARGB);
+		measureG = new Gdiplus::Graphics(&bmp);
+		btnFont = MakeAppBarFont(ScaleF(11.5f), Gdiplus::FontStyleRegular);
+		Gdiplus::Font* nameFont = MakeAppBarFont(ScaleF(11.5f), Gdiplus::FontStyleItalic);
+		if (!g_appBar.name.empty()) {
+			std::wstring nw(g_appBar.name.begin(), g_appBar.name.end());
+			w += (int)std::ceil(MeasureTextW(*measureG, *nameFont, nw.c_str())) + nameGap;
+		}
+		delete nameFont;
+
+		bool firstGroup = true;
+		for (const auto& group : g_appBar.groups) {
+			if (!firstGroup) w += hairline + gap * 2;
+			firstGroup = false;
+			w += groupPad;
+			if (!group.label.empty()) {
+				w += Scale((int)(group.label.size() * 6)) + gap;
+			}
+			for (size_t i = 0; i < group.items.size(); ) {
+				if (group.items[i].icon == AppBarIcon::ScaleSeg) {
+					size_t j = i;
+					while (j < group.items.size() && group.items[j].icon == AppBarIcon::ScaleSeg) ++j;
+					w += MeasureAppBarSegmentedWidth(group.items, i, j);
+					if (j < group.items.size()) w += gap;
+					i = j;
+				} else {
+					w += MeasureAppBarItemWidth(measureG, btnFont, group.items[i]);
+					if (i + 1 < group.items.size()) w += gap;
+					++i;
+				}
+			}
+			w += groupPad;
+		}
+	}
+	catch (...) {
+		w = padH * 2 + Scale(200);
+	}
+	delete btnFont;
+	delete measureG;
+	g_appBarContentW = w;
+	g_appBarContentH = h;
+}
+
+void DrawAppBarChevron(Gdiplus::Graphics& g, int cx, int cy, bool up, unsigned long color) {
+	using namespace Gdiplus;
+	const int half = Scale(4);
+	Pen pen(GpToken(255, color), ScaleF(1.5f));
+	if (up) {
+		g.DrawLine(&pen, cx - half, cy + half / 2, cx, cy - half / 2);
+		g.DrawLine(&pen, cx, cy - half / 2, cx + half, cy + half / 2);
+	} else {
+		g.DrawLine(&pen, cx - half, cy - half / 2, cx, cy + half / 2);
+		g.DrawLine(&pen, cx, cy + half / 2, cx + half, cy - half / 2);
+	}
+}
+
+void PaintAppBarSegmented(Gdiplus::Graphics& g, int x, int y, const std::vector<AppBarItem>& items, size_t from, size_t to) {
+	using namespace Gdiplus;
+	const int chip = AppBarSegChipSize();
+	const int innerPad = Scale(3);
+	const int pillH = chip + innerPad * 2;
+	const int pillW = innerPad * 2 + (int)(to - from) * chip;
+	GraphicsPath pillPath;
+	AddRoundRect(pillPath, (REAL)x, (REAL)y, (REAL)pillW, (REAL)pillH, (REAL)(pillH / 2));
+	SolidBrush track(GpToken(255, gt::railSurface));
+	g.FillPath(&track, &pillPath);
+	Gdiplus::Font* chipFont = MakeAppBarFont(ScaleF(11.5f), FontStyleBold);
+	StringFormat sf;
+	sf.SetAlignment(StringAlignmentCenter);
+	sf.SetLineAlignment(StringAlignmentCenter);
+	int cx = x + innerPad;
+	int cy = y + innerPad;
+	for (size_t i = from; i < to; ++i) {
+		const AppBarItem& item = items[i];
+		RECT chipRc = { cx, cy, cx + chip, cy + chip };
+		if (item.active) {
+			GraphicsPath activePath;
+			AddRoundRect(activePath, (REAL)cx, (REAL)cy, (REAL)chip, (REAL)chip, ScaleF(5.0f));
+			SolidBrush white(GpToken(255, gt::surface));
+			g.FillPath(&white, &activePath);
+			Pen shadow(GpToken(80, gt::outline), 1.0f);
+			g.DrawPath(&shadow, &activePath);
+		}
+		std::wstring wl(item.label.begin(), item.label.end());
+		SolidBrush textBrush(GpToken(255, item.active ? gt::primary : gt::ink2));
+		g.DrawString(wl.c_str(), -1, chipFont, RectF((REAL)cx, (REAL)cy, (REAL)chip, (REAL)chip), &sf, &textBrush);
+		if (item.enabled) g_appBarHits.push_back({ item.cmd, chipRc, true });
+		cx += chip;
+	}
+	delete chipFont;
+}
+
+void PaintAppBarSwatch(Gdiplus::Graphics& g, int x, int y, const AppBarItem& item) {
+	using namespace Gdiplus;
+	const int sw = AppBarSwatchSize();
+	const int rad = Scale(4);
+	RECT rc = { x, y, x + sw, y + sw };
+	unsigned long fillRgb = gt::ParseHexColor(item.data, gt::swatch1);
+	GraphicsPath swPath;
+	AddRoundRect(swPath, (REAL)x, (REAL)y, (REAL)sw, (REAL)sw, (REAL)rad);
+	SolidBrush fill(GpToken(255, fillRgb));
+	g.FillPath(&fill, &swPath);
+	if (item.active) {
+		Pen ring(GpToken(255, gt::primary), 2.0f);
+		g.DrawPath(&ring, &swPath);
+	}
+	if (item.enabled) g_appBarHits.push_back({ item.cmd, rc, true });
+}
+
+void PaintAppBarButton(Gdiplus::Graphics& g, int x, int y, const AppBarItem& item, Gdiplus::Font& btnFont) {
+	using namespace Gdiplus;
+	const int btnPadX = Scale(8);
+	const int btnPadY = Scale(5);
+	const int btnH = AppBarButtonHeight();
+	int btnW = MeasureAppBarItemWidth(&g, &btnFont, item);
+	RECT rc = { x, y, x + btnW, y + btnH };
+	bool hovered = item.enabled && item.cmd == g_appBarHoverCmd;
+	unsigned long textRgb = gt::ink;
+	unsigned long fillRgb = 0;
+	if (!item.enabled) {
+		textRgb = gt::ink3;
+	} else if (hovered && item.danger) {
+		fillRgb = gt::dangerSoft;
+		textRgb = gt::deadline;
+	} else if (hovered) {
+		fillRgb = gt::primarySoft;
+		textRgb = gt::primary;
+	} else if (item.danger) {
+		textRgb = gt::deadline;
+	}
+	if (fillRgb != 0) {
+		GraphicsPath pillPath;
+		AddRoundRect(pillPath, (REAL)x, (REAL)y, (REAL)btnW, (REAL)btnH, (REAL)Scale(7));
+		SolidBrush fill(GpToken(255, fillRgb));
+		g.FillPath(&fill, &pillPath);
+	}
+	BYTE textAlpha = item.enabled ? 255 : 102;
+	int contentX = x + btnPadX;
+	int contentY = y + btnPadY;
+	if (item.icon == AppBarIcon::MoveUp || item.icon == AppBarIcon::MoveDown) {
+		DrawAppBarChevron(g, contentX + Scale(5), y + btnH / 2, item.icon == AppBarIcon::MoveUp, textRgb);
+		contentX += Scale(12);
+	}
+	if (!item.label.empty()) {
+		std::wstring wl(item.label.begin(), item.label.end());
+		SolidBrush textBrush(GpToken(textAlpha, textRgb));
+		StringFormat sf;
+		sf.SetLineAlignment(StringAlignmentCenter);
+		g.DrawString(wl.c_str(), -1, &btnFont, RectF((REAL)contentX, (REAL)contentY,
+			(REAL)(btnW - btnPadX * 2), (REAL)(btnH - btnPadY * 2)), &sf, &textBrush);
+	}
+	if (item.enabled) g_appBarHits.push_back({ item.cmd, rc, true });
+}
+
+void PaintAppBar(Gdiplus::Graphics& g, int W, int H) {
+	using namespace Gdiplus;
+	g_appBarHits.clear();
+	const int inset = AppBarShadowInset();
+	const int containerH = AppBarContainerHeight();
+	const int containerW = W - inset * 2;
+	const int containerY = inset;
+	const int containerX = inset;
+	const int padH = Scale(6);
+	const int gap = Scale(2);
+	const int groupPad = Scale(7);
+	const int hairline = Scale(1);
+	const int nameGap = Scale(8);
+	const int btnH = AppBarButtonHeight();
+
+	// Soft drop shadow
+	{
+		GraphicsPath shadowPath;
+		AddRoundRect(shadowPath, (REAL)(containerX + Scale(1)), (REAL)(containerY + Scale(2)),
+			(REAL)containerW, (REAL)containerH, (REAL)Scale(11));
+		SolidBrush shadow(GpToken(40, gt::ink3));
+		g.FillPath(&shadow, &shadowPath);
+	}
+
+	GraphicsPath containerPath;
+	AddRoundRect(containerPath, (REAL)containerX, (REAL)containerY,
+		(REAL)containerW, (REAL)containerH, (REAL)Scale(11));
+	SolidBrush surface(GpToken(255, gt::surface));
+	g.FillPath(&surface, &containerPath);
+	Pen border(GpToken(255, gt::outline), 1.0f);
+	g.DrawPath(&border, &containerPath);
+
+	Gdiplus::Font* groupFont = MakeAppBarFont(ScaleF(9.0f), FontStyleBold);
+	Gdiplus::Font* btnFont = MakeAppBarFont(ScaleF(11.5f), FontStyleRegular);
+	Gdiplus::Font* nameFont = MakeAppBarFont(ScaleF(11.5f), FontStyleItalic);
+
+	int x = containerX + padH;
+	int contentY = containerY + (containerH - btnH) / 2;
+
+	if (!g_appBar.name.empty()) {
+		std::wstring nw(g_appBar.name.begin(), g_appBar.name.end());
+		SolidBrush nameBrush(GpToken(255, gt::ink2));
+		StringFormat sf;
+		sf.SetLineAlignment(StringAlignmentCenter);
+		g.DrawString(nw.c_str(), -1, nameFont, RectF((REAL)x, (REAL)contentY,
+			(REAL)(containerW - padH * 2), (REAL)btnH), &sf, &nameBrush);
+		x += (int)std::ceil(MeasureTextW(g, *nameFont, nw.c_str())) + nameGap;
+	}
+
+	bool firstGroup = true;
+	for (const auto& group : g_appBar.groups) {
+		if (!firstGroup) {
+			int sepX = x + gap;
+			Pen hair(GpToken(255, gt::outline), (REAL)hairline);
+			g.DrawLine(&hair, sepX, containerY + Scale(8), sepX, containerY + containerH - Scale(8));
+			x += hairline + gap * 2;
+		}
+		firstGroup = false;
+		x += groupPad;
+
+		if (!group.label.empty()) {
+			std::wstring gl(group.label.begin(), group.label.end());
+			for (auto& ch : gl) if (ch >= L'a' && ch <= L'z') ch = (wchar_t)(ch - L'a' + L'A');
+			SolidBrush labelBrush(GpToken(255, gt::ink3));
+			StringFormat sf;
+			sf.SetLineAlignment(StringAlignmentCenter);
+			g.DrawString(gl.c_str(), -1, groupFont, RectF((REAL)x, (REAL)contentY,
+				(REAL)Scale(60), (REAL)btnH), &sf, &labelBrush);
+			x += (int)std::ceil(MeasureTextW(g, *groupFont, gl.c_str())) + gap;
+		}
+
+		for (size_t i = 0; i < group.items.size(); ) {
+			if (group.items[i].icon == AppBarIcon::ScaleSeg) {
+				size_t j = i;
+				while (j < group.items.size() && group.items[j].icon == AppBarIcon::ScaleSeg) ++j;
+				const int chip = AppBarSegChipSize();
+				const int innerPad = Scale(3);
+				const int segH = chip + innerPad * 2;
+				int segY = containerY + (containerH - segH) / 2;
+				PaintAppBarSegmented(g, x, segY, group.items, i, j);
+				x += MeasureAppBarSegmentedWidth(group.items, i, j);
+				if (j < group.items.size()) x += gap;
+				i = j;
+			} else if (group.items[i].icon == AppBarIcon::Swatch) {
+				const int sw = AppBarSwatchSize();
+				int swY = containerY + (containerH - sw) / 2;
+				PaintAppBarSwatch(g, x, swY, group.items[i]);
+				x += sw;
+				if (i + 1 < group.items.size()) x += gap;
+				++i;
+			} else {
+				PaintAppBarButton(g, x, contentY, group.items[i], *btnFont);
+				x += MeasureAppBarItemWidth(&g, btnFont, group.items[i]);
+				if (i + 1 < group.items.size()) x += gap;
+				++i;
+			}
+		}
+		x += groupPad;
+	}
+
+	delete nameFont;
+	delete btnFont;
+	delete groupFont;
+}
+
+void FreeAppBarBackBuffer() {
+	if (g_abDc) {
+		if (g_abOld) ::SelectObject(g_abDc, g_abOld);
+		::DeleteDC(g_abDc);
+		g_abDc = NULL;
+		g_abOld = NULL;
+	}
+	if (g_abBmp) {
+		::DeleteObject(g_abBmp);
+		g_abBmp = NULL;
+	}
+	g_abBits = nullptr;
+	g_abW = 0;
+	g_abH = 0;
+}
+
+bool EnsureAppBarBackBuffer(int w, int h) {
+	if (g_abDc && g_abBits && g_abW == w && g_abH == h) return true;
+	FreeAppBarBackBuffer();
+	BITMAPINFO bi = {};
+	bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bi.bmiHeader.biWidth = w;
+	bi.bmiHeader.biHeight = -h;
+	bi.bmiHeader.biPlanes = 1;
+	bi.bmiHeader.biBitCount = 32;
+	bi.bmiHeader.biCompression = BI_RGB;
+	void* bits = nullptr;
+	HDC screen = ::GetDC(NULL);
+	HBITMAP bmp = ::CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+	HDC dc = ::CreateCompatibleDC(screen);
+	::ReleaseDC(NULL, screen);
+	if (!bmp || !dc || !bits) {
+		if (dc) ::DeleteDC(dc);
+		if (bmp) ::DeleteObject(bmp);
+		return false;
+	}
+	g_abOld = ::SelectObject(dc, bmp);
+	g_abDc = dc;
+	g_abBmp = bmp;
+	g_abBits = bits;
+	g_abW = w;
+	g_abH = h;
+	return true;
+}
+
+void RenderAppBar() {
+	if (!g_appBarHwnd || !g_gdiplusToken) return;
+	RECT wr;
+	if (!::GetWindowRect(g_appBarHwnd, &wr)) return;
+	int w = wr.right - wr.left, h = wr.bottom - wr.top;
+	if (w <= 0 || h <= 0) return;
+	if (!EnsureAppBarBackBuffer(w, h)) return;
+	try {
+		Gdiplus::Bitmap surface(w, h, w * 4, PixelFormat32bppPARGB, (BYTE*)g_abBits);
+		if (surface.GetLastStatus() != Gdiplus::Ok) return;
+		Gdiplus::Graphics g(&surface);
+		if (g.GetLastStatus() != Gdiplus::Ok) return;
+		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+		g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+		g.Clear(Gdiplus::Color(0, 0, 0, 0));
+		PaintAppBar(g, w, h);
+		g.Flush(Gdiplus::FlushIntentionSync);
+		POINT dst = { wr.left, wr.top };
+		POINT src = { 0, 0 };
+		SIZE size = { w, h };
+		BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+		::UpdateLayeredWindow(g_appBarHwnd, NULL, &dst, &size, g_abDc, &src, 0, &bf, ULW_ALPHA);
+	}
+	catch (const std::exception&) {
+		OvLog(L"app-bar render failed (std::exception)");
+	}
+	catch (...) {
+		OvLog(L"app-bar render failed");
+	}
+}
+
+void HandleAppBarCommand(int cmd);
+
+LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	try {
+		if (msg == WM_NCHITTEST) return HTCLIENT;
+		if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+		if (msg == WM_MOUSEMOVE) {
+			POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+			int newHover = 0;
+			for (const auto& h : g_appBarHits) {
+				if (h.enabled && ::PtInRect(&h.rc, pt)) { newHover = h.cmd; break; }
+			}
+			if (newHover != g_appBarHoverCmd) {
+				g_appBarHoverCmd = newHover;
+				RenderAppBar();
+			}
+			TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+			::TrackMouseEvent(&tme);
+			return 0;
+		}
+		if (msg == WM_MOUSELEAVE) {
+			if (g_appBarHoverCmd != 0) {
+				g_appBarHoverCmd = 0;
+				RenderAppBar();
+			}
+			return 0;
+		}
+		if (msg == WM_LBUTTONUP) {
+			POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+			for (const auto& h : g_appBarHits) {
+				if (h.enabled && ::PtInRect(&h.rc, pt)) {
+					HandleAppBarCommand(h.cmd);
+					break;
+				}
+			}
+			return 0;
+		}
+	}
+	catch (const std::exception&) {
+		OvLog(L"AppBarWndProc: exception caught");
+	}
+	catch (...) {
+		OvLog(L"AppBarWndProc: exception caught");
+	}
+	return ::DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void EnsureAppBarWindow() {
+	if (g_appBarHwnd) return;
+	WNDCLASSEXW wc = { sizeof(wc) };
+	wc.lpfnWndProc = AppBarWndProc;
+	wc.hInstance = g_inst;
+	wc.hCursor = ::LoadCursor(NULL, IDC_ARROW);
+	wc.lpszClassName = kAppBarClass;
+	::RegisterClassExW(&wc);
+	g_appBarHwnd = ::CreateWindowExW(
+		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+		kAppBarClass, L"", WS_POPUP,
+		0, 0, 10, 10, NULL, NULL, g_inst, NULL);
+}
+
+void HideAppBar() {
+	if (g_appBarShown && g_appBarHwnd) { ::ShowWindow(g_appBarHwnd, SW_HIDE); g_appBarShown = false; }
+	g_appBarHoverCmd = 0;
+	g_appBarValid = false;
+}
+
+void ShowAppBar(const RECT& slideRect) {
+	EnsureAppBarWindow();
+	if (!g_appBarHwnd) return;
+	bool dpiChanged = UpdateDpiForWindow(g_appBarHwnd);
+	if (dpiChanged) UpdateDpiScaledMetrics();
+	if (g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt || !g_appBarValid) {
+		RebuildAppBarModelFromSlide();
+	}
+	MeasureAppBar();
+	const int shadow = AppBarShadowInset();
+	int maxW = (int)((slideRect.right - slideRect.left) * 0.94);
+	int w = g_appBarContentW + shadow * 2;
+	if (w > maxW) w = maxW;
+	int h = g_appBarContentH + shadow * 2;
+	int cx = (slideRect.left + slideRect.right) / 2;
+	int x = cx - w / 2;
+	int y = slideRect.bottom - Scale(8) - h;
+	::SetWindowPos(g_appBarHwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	g_appBarShown = true;
+	RenderAppBar();
+}
+
+void HandleAppBarCommand(int cmd) {
+	HtMenuOp op;
+	HtHit hit;
+	hit.id = g_ownSelId;
+	hit.rowId = g_ownSelId;
+	switch (cmd) {
+	case HtCmd_ScaleDay:    op.opKind = HtOpKind::SetScale; op.scale = "day"; break;
+	case HtCmd_ScaleWeek:   op.opKind = HtOpKind::SetScale; op.scale = "week"; break;
+	case HtCmd_ScaleMonth:  op.opKind = HtOpKind::SetScale; op.scale = "month"; break;
+	case HtCmd_ScaleQuarter:op.opKind = HtOpKind::SetScale; op.scale = "quarter"; break;
+	case HtCmd_ScaleYear:   op.opKind = HtOpKind::SetScale; op.scale = "year"; break;
+	case HtCmd_Delete:      op.opKind = HtOpKind::Delete; op.needsTaskId = true; break;
+	case HtCmd_NudgeMinus1: op.opKind = HtOpKind::Nudge; op.nudgeDays = -1; op.needsTaskId = true; break;
+	case HtCmd_NudgePlus1:  op.opKind = HtOpKind::Nudge; op.nudgeDays = 1; op.needsTaskId = true; break;
+	default: return;
+	}
+	HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
+	g_appBarValid = false;
+	RequestOverlayRepaint();
+}
+
 // Single choke point for every user-gesture commit (drag, create, toolbar
 // button, hover-insert row, inline-edit) — see CommitDragGesture/
 // CommitCreateGesture/HandleToolbarButton/HandleHoverInsertRow/
@@ -3946,7 +4518,7 @@ void Tick() {
 		TickGuard() { g_inTick = true; }
 		~TickGuard() { g_inTick = false; }
 	} tickGuard;
-	if (!g_app) { HideOverlay(); return; }
+	if (!g_app) { HideOverlay(); HideAppBar(); return; }
 	try {
 		RECT oldChartRect = g_chartScreenRect;
 		RECT oldSelRect = g_selScreenRect;
@@ -3993,7 +4565,7 @@ void Tick() {
 		}
 
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
-		if (!win) { HideOverlay(); return; }
+		if (!win) { HideOverlay(); HideAppBar(); return; }
 		g_pptHwnd = (HWND)(INT_PTR)g_app->GetHWND();
 
 		// Host-scoping: the overlay chrome (selection frame + toolbar) may be
@@ -4006,6 +4578,7 @@ void Tick() {
 		HWND ppRoot = ::GetAncestor(g_pptHwnd, GA_ROOT);
 		if (!IsHostActiveForOverlayChrome(ppRoot)) {
 			HideOverlay();
+			HideAppBar();
 			// The inline editor and card editor each already commit/cancel
 			// themselves on their own focus-loss messages (WM_KILLFOCUS for
 			// the inline editor, WM_ACTIVATE/WA_INACTIVE for the card), so by
@@ -4022,6 +4595,7 @@ void Tick() {
 		PowerPoint::ShapePtr chart = FindChartRoot(slide);
 		if (!chart) {
 			HideOverlay();
+			HideAppBar();
 			return;
 		}
 
@@ -4121,6 +4695,18 @@ void Tick() {
 		// ReflowFromSlide itself is untouched and still used by the harness.
 
 		ShowOverlayForChartRect(g_chartScreenRect);
+		RECT slideRect = g_chartScreenRect;
+		try {
+			PowerPoint::_PresentationPtr pres = g_app->GetActivePresentation();
+			if (pres) {
+				PowerPoint::PageSetupPtr ps = pres->GetPageSetup();
+				float sw = ps->GetSlideWidth(), sh = ps->GetSlideHeight();
+				slideRect = { win->PointsToScreenPixelsX(0.0f), win->PointsToScreenPixelsY(0.0f),
+					win->PointsToScreenPixelsX(sw), win->PointsToScreenPixelsY(sh) };
+				NormalizeRect(slideRect);
+			}
+		} catch (...) { slideRect = g_chartScreenRect; }
+		ShowAppBar(slideRect);
 		if (chartChanged || hoverChanged || mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
 			RequestOverlayRepaint();
 		}
@@ -4135,10 +4721,13 @@ void Tick() {
 		}
 	} catch (const _com_error&) {
 		HideOverlay();
+		HideAppBar();
 	} catch (const std::exception&) {
 		HideOverlay();
+		HideAppBar();
 	} catch (...) {
 		HideOverlay();
+		HideAppBar();
 	}
 }
 
@@ -4174,6 +4763,12 @@ void OverlayStop() {
 	UnregisterAllHotkeys(); // MUST run before DestroyWindow below (needs g_hwnd)
 	if (g_hwnd) { ::DestroyWindow(g_hwnd); g_hwnd = NULL; }
 	FreeBackBuffer();
+	if (g_appBarHwnd) { ::DestroyWindow(g_appBarHwnd); g_appBarHwnd = NULL; }
+	FreeAppBarBackBuffer();
+	g_appBarShown = false;
+	g_appBarValid = false;
+	g_appBarHits.clear();
+	g_appBar = AppBarModel{};
 	if (g_gdiplusToken) {
 		Gdiplus::GdiplusShutdown(g_gdiplusToken);
 		g_gdiplusToken = 0;
@@ -4202,6 +4797,23 @@ void OverlayStop() {
 }
 
 HWND OverlayHwnd() { return g_hwnd; }
+
+HWND OverlayAppBarHwnd() { return g_appBarHwnd; }
+
+bool OverlayAppBarButtonRectForTest(int cmd, RECT* outScreenRect) {
+	if (!outScreenRect || !g_appBarHwnd) return false;
+	for (const auto& h : g_appBarHits) {
+		if (h.cmd == cmd && h.enabled) {
+			RECT r = h.rc;
+			POINT tl{ r.left, r.top }, br{ r.right, r.bottom };
+			::ClientToScreen(g_appBarHwnd, &tl); ::ClientToScreen(g_appBarHwnd, &br);
+			outScreenRect->left = tl.x; outScreenRect->top = tl.y;
+			outScreenRect->right = br.x; outScreenRect->bottom = br.y;
+			return true;
+		}
+	}
+	return false;
+}
 
 const char* Overlay_GetSelectedIdForTest() { return g_ownSelId.c_str(); }
 

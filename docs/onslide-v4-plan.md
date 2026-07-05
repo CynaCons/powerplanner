@@ -183,7 +183,7 @@ freshly inserted chart resemble the mockup.*
   menu-command id space in `GanttHitTest.h` (ONE id space).
   - AC1 ⚙ ops-test asserts the full R8 table (every context: exact labels,
     order, enabled flags) — marker `APPBAR MODEL OK`; GATE-PURE exit 0.
-- [ ] **s2-appbar-window** — The window per ground rule 9: docked
+- [x] **s2-appbar-window** — The window per ground rule 9: docked
   bottom-center (8px up, ≤94% width, `appbar.height` @DPI), painted per
   tokens (container, group hairlines, group labels, buttons, hover via
   WM_MOUSEMOVE, segmented scale control with active chip, swatch row);

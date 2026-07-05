@@ -54,6 +54,7 @@
 #include "../PowerPlannerAddin/GanttLayout.h"
 #include "../PowerPlannerAddin/GanttOps.h"
 #include "../PowerPlannerAddin/Overlay.h"
+#include "../PowerPlannerAddin/GanttHitTest.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes.
 #ifndef min
 #define min(a, b) (((a) < (b)) ? (a) : (b))
@@ -1637,11 +1638,16 @@ int wmain(int argc, wchar_t** argv) {
 						PumpFor(1000);
 
 						bool overlayHidden = !::IsWindowVisible(ov);
+						HWND ab = OverlayAppBarHwnd();
+						bool abHidden = (!ab || !::IsWindowVisible(ab));
 						HWND card = ::FindWindowW(PP_CARD_EDITOR_CLASS, NULL);
 						bool cardHiddenOrGone = (!card || !::IsWindowVisible(card));
 
 						if (!overlayHidden) {
 							wprintf(L"SCOPE: overlay still visible while host-active override forces inactive\n");
+						}
+						if (!abHidden) {
+							wprintf(L"SCOPE: app-bar still visible while host-active override forces inactive\n");
 						}
 						if (!cardHiddenOrGone) {
 							wprintf(L"SCOPE: card editor still visible while host-active override forces inactive\n");
@@ -1652,12 +1658,16 @@ int wmain(int argc, wchar_t** argv) {
 						Overlay_SetHostActiveOverrideForTest(1);
 						PumpFor(1000);
 						bool overlayVisibleAgain = ::IsWindowVisible(ov);
+						bool abVisibleAgain = (ab && ::IsWindowVisible(ab));
 
 						if (!overlayVisibleAgain) {
 							wprintf(L"SCOPE: overlay did not reappear after forcing host-active again\n");
 						}
+						if (!abVisibleAgain) {
+							wprintf(L"SCOPE: app-bar did not reappear after forcing host-active again\n");
+						}
 
-						pass = overlayHidden && cardHiddenOrGone && overlayVisibleAgain;
+						pass = overlayHidden && abHidden && cardHiddenOrGone && overlayVisibleAgain && abVisibleAgain;
 					}
 				} catch (const _com_error& e) {
 					wprintf(L"SCOPE: COM error 0x%08lX\n", (unsigned long)e.Error());
@@ -2045,6 +2055,59 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"TEXTELEM: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"TEXTELEM PASS\n" : L"TEXTELEM FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 14: APPBAR -----------------------------------------------
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				bool step2 = false;
+				bool step3 = false;
+				try {
+					HWND ab = OverlayAppBarHwnd();
+					if (!ab || !::IsWindowVisible(ab)) {
+						wprintf(L"APPBAR: app-bar window missing/hidden\n");
+					} else {
+						auto PostAppBarClick = [&](int cmd) -> bool {
+							RECT r = {};
+							if (!OverlayAppBarButtonRectForTest(cmd, &r)) return false;
+							POINT pt = {
+								(r.left + r.right) / 2,
+								(r.top + r.bottom) / 2
+							};
+							::ScreenToClient(ab, &pt);
+							LPARAM lp = MAKELPARAM((short)pt.x, (short)pt.y);
+							::PostMessageW(ab, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+							::PostMessageW(ab, WM_LBUTTONUP, 0, lp);
+							return true;
+						};
+
+						if (!PostAppBarClick(HtCmd_ScaleMonth)) {
+							wprintf(L"APPBAR: could not locate Scale-M button rect\n");
+						} else {
+							PumpFor(700);
+							std::string docJson = ReadGanttFromSlide(app);
+							PpDocument doc = DocumentFromJson(docJson);
+							step2 = (doc.scale == "month");
+							if (!step2) wprintf(L"APPBAR: expected scale 'month', got '%hs'\n", doc.scale.c_str());
+						}
+
+						if (step2 && !PostAppBarClick(HtCmd_ScaleWeek)) {
+							wprintf(L"APPBAR: could not locate Scale-W button rect\n");
+						} else if (step2) {
+							PumpFor(700);
+							std::string docJson = ReadGanttFromSlide(app);
+							PpDocument doc = DocumentFromJson(docJson);
+							step3 = (doc.scale == "week");
+							if (!step3) wprintf(L"APPBAR: expected scale 'week', got '%hs'\n", doc.scale.c_str());
+						}
+						pass = step2 && step3;
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"APPBAR: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"APPBAR PASS\n" : L"APPBAR FAIL\n");
 				if (!pass) rc = 1;
 			}
 

@@ -81,6 +81,16 @@ void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altD
 // SetForegroundWindow on a real window.
 void Overlay_SetHostActiveOverrideForTest(int mode);
 
+// The bottom app-bar window handle (second layered chrome window); NULL if not
+// started. Same lifecycle/visibility as the overlay (Ground Rule 9 / G4).
+HWND OverlayAppBarHwnd();
+
+// Test hook: fill *outScreenRect with the SCREEN rect of the app-bar button
+// whose command id == cmd (an HtMenuCmd value). Returns false if no such button
+// is currently laid out. Lets the harness post an input-neutral click at a
+// button without hard-coded coordinates. Never touches COM.
+bool OverlayAppBarButtonRectForTest(int cmd, RECT* outScreenRect);
+
 // ---- floating card editor (double-click TaskBody/Milestone/Text) test hooks
 // The card is a real top-level window (WS_EX_TOOLWINDOW), registered under
 // this class name (mirrors Overlay.cpp's private kCardClass, kept in sync by
