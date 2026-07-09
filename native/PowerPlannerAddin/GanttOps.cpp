@@ -28,6 +28,22 @@ bool RowExists(const PpDocument& doc, const std::string& rowId) {
 	return false;
 }
 
+// True if any row in doc.rows is a child of rowId (groupId == rowId). Used by
+// IndentRow to enforce the 2-level nesting max (a row that already has
+// children cannot itself become a child).
+bool RowHasChildren(const PpDocument& doc, const std::string& rowId) {
+	for (const auto& row : doc.rows) if (row.groupId == rowId) return true;
+	return false;
+}
+
+// Index of rowId within doc.rows' flat display order, or -1 if absent.
+int RowIndexOf(const PpDocument& doc, const std::string& rowId) {
+	for (size_t i = 0; i < doc.rows.size(); ++i) {
+		if (doc.rows[i].id == rowId) return (int)i;
+	}
+	return -1;
+}
+
 template <typename T, typename Pred>
 bool RemoveIf(std::vector<T>& items, Pred pred) {
 	const auto oldSize = items.size();
@@ -112,6 +128,87 @@ bool DeleteById(PpDocument& doc, const std::string& id) {
 	if (RemoveIf(doc.markers, [&](const PpMarker& m) { return m.id == id; })) return true;
 	if (RemoveIf(doc.texts, [&](const PpText& t) { return t.id == id; })) return true;
 	return false;
+}
+
+// --- S3 row operations (pure) ---
+
+std::string AddRowAbove(PpDocument& doc, const std::string& refRowId, const std::string& label) {
+	int idx = RowIndexOf(doc, refRowId);
+	if (idx < 0) return "";
+
+	PpRow row;
+	row.id = NextId(doc, "row-");
+	row.label = label;
+	row.groupId = doc.rows[idx].groupId;
+	doc.rows.insert(doc.rows.begin() + idx, row);
+	return row.id;
+}
+
+std::string AddRowBelow(PpDocument& doc, const std::string& refRowId, const std::string& label) {
+	int idx = RowIndexOf(doc, refRowId);
+	if (idx < 0) return "";
+
+	PpRow row;
+	row.id = NextId(doc, "row-");
+	row.label = label;
+	row.groupId = doc.rows[idx].groupId;
+
+	// Skip past refRowId's own contiguous child block so the new row lands
+	// after the whole group, keeping the group contiguous.
+	size_t insertAt = (size_t)idx + 1;
+	while (insertAt < doc.rows.size() && doc.rows[insertAt].groupId == refRowId) ++insertAt;
+
+	doc.rows.insert(doc.rows.begin() + insertAt, row);
+	return row.id;
+}
+
+bool MoveRowUp(PpDocument& doc, const std::string& rowId) {
+	int idx = RowIndexOf(doc, rowId);
+	if (idx <= 0) return false; // not found (-1), or already at the top edge (0)
+	std::swap(doc.rows[idx], doc.rows[idx - 1]);
+	return true;
+}
+
+bool MoveRowDown(PpDocument& doc, const std::string& rowId) {
+	int idx = RowIndexOf(doc, rowId);
+	if (idx < 0 || idx >= (int)doc.rows.size() - 1) return false; // not found, or already at the bottom edge
+	std::swap(doc.rows[idx], doc.rows[idx + 1]);
+	return true;
+}
+
+bool IndentRow(PpDocument& doc, const std::string& rowId) {
+	int idx = RowIndexOf(doc, rowId);
+	if (idx < 0) return false;
+	if (RowHasChildren(doc, rowId)) return false; // would exceed the 2-level max
+
+	int parentIdx = -1;
+	for (int i = idx - 1; i >= 0; --i) {
+		if (doc.rows[i].groupId.empty()) { parentIdx = i; break; }
+	}
+	if (parentIdx < 0) return false; // no preceding top-level row
+
+	std::string parentId = doc.rows[parentIdx].id;
+	if (parentId == doc.rows[idx].groupId) return false; // already this row's parent (no-op)
+
+	doc.rows[idx].groupId = parentId;
+	return true;
+}
+
+bool OutdentRow(PpDocument& doc, const std::string& rowId) {
+	int idx = RowIndexOf(doc, rowId);
+	if (idx < 0 || doc.rows[idx].groupId.empty()) return false;
+	doc.rows[idx].groupId.clear();
+	return true;
+}
+
+bool DeleteRow(PpDocument& doc, const std::string& rowId) {
+	if (RowIndexOf(doc, rowId) < 0) return false;
+
+	// Re-parent children to top-level BEFORE the cascade removes the row.
+	for (auto& row : doc.rows) {
+		if (row.groupId == rowId) row.groupId.clear();
+	}
+	return DeleteById(doc, rowId);
 }
 
 bool MoveTaskToRow(PpDocument& doc, const std::string& taskId, const std::string& newRowId) {

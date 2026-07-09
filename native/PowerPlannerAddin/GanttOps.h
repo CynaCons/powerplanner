@@ -4,6 +4,35 @@
 #include <string>
 
 std::string AddRow(PpDocument& doc, const std::string& label, const std::string& afterRowId);
+// --- S3 row operations (pure) ---
+// Insert a new row with `label` immediately ABOVE / BELOW refRowId at the SAME
+// hierarchy level (same groupId as refRowId). AddRowBelow inserts after
+// refRowId AND after all of refRowId's child rows (keeps a group contiguous);
+// AddRowAbove inserts immediately before refRowId. Returns the new row id, or
+// "" if refRowId is not a row.
+std::string AddRowAbove(PpDocument& doc, const std::string& refRowId, const std::string& label);
+std::string AddRowBelow(PpDocument& doc, const std::string& refRowId, const std::string& label);
+
+// Swap rowId with the adjacent row in the flat doc.rows vector (a plain
+// positional swap — no group re-parenting). Returns false if rowId is not found
+// or is already at the top / bottom edge.
+bool MoveRowUp(PpDocument& doc, const std::string& rowId);
+bool MoveRowDown(PpDocument& doc, const std::string& rowId);
+
+// Indent rowId: make it a child of the nearest PRECEDING top-level row.
+// Guards (return false, NO change): rowId not found; no preceding row exists;
+// rowId currently HAS children (would exceed the 2-level max); the nearest
+// preceding top-level row is rowId's own current parent already (no-op).
+bool IndentRow(PpDocument& doc, const std::string& rowId);
+
+// Outdent rowId: promote a child row to top-level (groupId = ""). Returns false
+// if rowId is not found or is already top-level.
+bool OutdentRow(PpDocument& doc, const std::string& rowId);
+
+// Delete a row with the full cascade AND re-parent any of its child rows to
+// top-level (their groupId cleared). Returns false if rowId is not a row.
+bool DeleteRow(PpDocument& doc, const std::string& rowId);
+
 std::string AddTask(PpDocument& doc, const std::string& rowId, const std::string& label, const std::string& startISO, const std::string& endISO);
 bool DeleteById(PpDocument& doc, const std::string& id);
 bool MoveTaskToRow(PpDocument& doc, const std::string& taskId, const std::string& newRowId);

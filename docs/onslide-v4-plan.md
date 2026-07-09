@@ -205,7 +205,7 @@ freshly inserted chart resemble the mockup.*
 ### S3 — Rows are objects
 *Spec: R2 behavior B2.1–B2.6.*
 
-- [ ] **s3-row-ops** — Pure ops: `AddRowAbove/Below(doc, rowId)` (level of the
+- [x] **s3-row-ops** — Pure ops: `AddRowAbove/Below(doc, rowId)` (level of the
   reference row), `MoveRowUp/Down(doc, rowId)` (flat adjacent swap),
   `IndentRow`/`OutdentRow` (+ B2.4 normalization; guards: one level max, row
   with children can't indent), `DeleteRow` cascade (tasks, milestones,

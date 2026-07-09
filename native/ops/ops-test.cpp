@@ -1137,6 +1137,131 @@ static bool RunAppBarModelChecks() {
 	return ok;
 }
 
+// S3 s3-row-ops: pure row hierarchy operations (add above/below, move
+// up/down, indent/outdent, delete-with-reparent). Print 'ROW OPS OK' when
+// these pass.
+static PpDocument RowOpsDoc() {
+	PpDocument d;
+	d.rows.push_back(PpRow{"r1", "Row 1", "", false});
+	d.rows.push_back(PpRow{"r2", "Row 2", "r1", false}); // child of r1
+	d.rows.push_back(PpRow{"r3", "Row 3", "", false});
+	d.rows.push_back(PpRow{"r4", "Row 4", "", false});
+	return d;
+}
+static int RowPos(const PpDocument& doc, const std::string& rowId) {
+	for (size_t i = 0; i < doc.rows.size(); ++i) if (doc.rows[i].id == rowId) return (int)i;
+	return -1;
+}
+
+static bool RunRowOpsChecks() {
+	bool ok = true;
+
+	// --- AddRowAbove ---
+	{
+		PpDocument d = RowOpsDoc(); // r1(0,top) r2(1,child r1) r3(2,top) r4(3,top)
+		std::string above = AddRowAbove(d, "r3", "Above r3");
+		ok = Check(!above.empty(), "AddRowAbove returns a fresh id") && ok;
+		int aboveIdx = RowPos(d, above);
+		ok = Check(aboveIdx == RowPos(d, "r3") - 1, "AddRowAbove inserts immediately before the ref row") && ok;
+		ok = Check(aboveIdx >= 0 && d.rows[aboveIdx].groupId.empty(), "AddRowAbove inherits the (top-level) ref's groupId") && ok;
+		ok = Check(AddRowAbove(d, "missing-row", "Nope").empty(), "AddRowAbove returns \"\" for a missing ref") && ok;
+	}
+
+	// --- AddRowBelow ---
+	{
+		PpDocument d = RowOpsDoc(); // r1(0,top) r2(1,child r1) r3(2,top) r4(3,top)
+		std::string below = AddRowBelow(d, "r1", "Below r1");
+		ok = Check(!below.empty(), "AddRowBelow returns a fresh id") && ok;
+		int belowIdx = RowPos(d, below);
+		ok = Check(belowIdx == 2, "AddRowBelow (parent ref) lands after ref's whole child block") && ok;
+		ok = Check(belowIdx >= 0 && d.rows[belowIdx].groupId.empty(), "AddRowBelow inherits the ref's groupId") && ok;
+		ok = Check(RowPos(d, "r3") == 3, "AddRowBelow pushes rows after the child block down") && ok;
+
+		std::string belowChild = AddRowBelow(d, "r2", "Below r2");
+		int belowChildIdx = RowPos(d, belowChild);
+		ok = Check(belowChildIdx == RowPos(d, "r2") + 1, "AddRowBelow (childless ref) lands immediately after ref") && ok;
+		ok = Check(belowChildIdx >= 0 && d.rows[belowChildIdx].groupId == "r1", "AddRowBelow inherits a child ref's groupId") && ok;
+
+		ok = Check(AddRowBelow(d, "missing-row", "Nope").empty(), "AddRowBelow returns \"\" for a missing ref") && ok;
+	}
+
+	// --- MoveRowUp / MoveRowDown ---
+	{
+		PpDocument d = RowOpsDoc(); // r1(0) r2(1) r3(2) r4(3)
+		ok = Check(MoveRowUp(d, "r3") && d.rows[1].id == "r3" && d.rows[2].id == "r2", "MoveRowUp swaps with the previous row") && ok;
+		ok = Check(!MoveRowUp(d, "r1"), "MoveRowUp refuses at the top edge") && ok;
+		ok = Check(!MoveRowUp(d, "missing-row"), "MoveRowUp returns false for a missing row") && ok;
+
+		ok = Check(MoveRowDown(d, "r1") && d.rows[0].id == "r3" && d.rows[1].id == "r1", "MoveRowDown swaps with the next row") && ok;
+		ok = Check(!MoveRowDown(d, "r4"), "MoveRowDown refuses at the bottom edge") && ok;
+		ok = Check(!MoveRowDown(d, "missing-row"), "MoveRowDown returns false for a missing row") && ok;
+	}
+
+	// --- IndentRow: plain row indents under the nearest preceding top-level row ---
+	{
+		PpDocument d = RowOpsDoc(); // r1(0,top) r2(1,child r1) r3(2,top) r4(3,top)
+		ok = Check(IndentRow(d, "r3"), "IndentRow succeeds for a plain row with a preceding top-level row") && ok;
+		int idx = RowPos(d, "r3");
+		ok = Check(idx == 2 && d.rows[idx].groupId == "r1", "IndentRow re-parents to the nearest preceding top-level row (skipping child r2) without moving it") && ok;
+	}
+
+	// --- IndentRow: a row WITH children refuses ---
+	{
+		PpDocument d = RowOpsDoc(); // r1 already has child r2
+		ok = Check(!IndentRow(d, "r1"), "IndentRow refuses a row that already has children") && ok;
+		ok = Check(d.rows[RowPos(d, "r1")].groupId.empty(), "IndentRow leaves a refused row's groupId unchanged") && ok;
+	}
+
+	// --- IndentRow: no preceding row refuses ---
+	{
+		PpDocument d;
+		d.rows.push_back(PpRow{"only1", "Only 1", "", false});
+		d.rows.push_back(PpRow{"only2", "Only 2", "", false});
+		ok = Check(!IndentRow(d, "only1"), "IndentRow refuses the first row (no preceding row exists)") && ok;
+	}
+
+	// --- IndentRow: already that parent's child is a no-op ---
+	{
+		PpDocument d = RowOpsDoc(); // r2's groupId is already "r1", the nearest preceding top-level row
+		ok = Check(!IndentRow(d, "r2"), "IndentRow is a no-op (false) when already the nearest top-level row's child") && ok;
+		ok = Check(d.rows[RowPos(d, "r2")].groupId == "r1", "IndentRow no-op leaves groupId unchanged") && ok;
+	}
+
+	// --- IndentRow: missing row refuses ---
+	{
+		PpDocument d = RowOpsDoc();
+		ok = Check(!IndentRow(d, "missing-row"), "IndentRow returns false for a missing row") && ok;
+	}
+
+	// --- OutdentRow ---
+	{
+		PpDocument d = RowOpsDoc();
+		ok = Check(OutdentRow(d, "r2"), "OutdentRow promotes a child to top-level") && ok;
+		ok = Check(d.rows[RowPos(d, "r2")].groupId.empty(), "OutdentRow clears the promoted row's groupId") && ok;
+		ok = Check(!OutdentRow(d, "r1"), "OutdentRow refuses an already top-level row") && ok;
+		ok = Check(!OutdentRow(d, "missing-row"), "OutdentRow returns false for a missing row") && ok;
+	}
+
+	// --- DeleteRow ---
+	{
+		PpDocument d = RowOpsDoc();
+		d.tasks.push_back(PpTask{"t1", "Task on r1", "2026-01-01", "2026-01-05", "r1", "", 0});
+		d.milestones.push_back(PpMilestone{"m1", "MS on r1", "2026-01-01", "r1", ""});
+
+		ok = Check(DeleteRow(d, "r1"), "DeleteRow returns true for an existing parent row") && ok;
+		ok = Check(RowPos(d, "r1") < 0, "DeleteRow removes the parent row itself") && ok;
+		int r2idx = RowPos(d, "r2");
+		ok = Check(r2idx >= 0 && d.rows[r2idx].groupId.empty(), "DeleteRow re-parents a surviving child row to top-level") && ok;
+		bool taskGone = true; for (const auto& t : d.tasks) if (t.id == "t1") taskGone = false;
+		ok = Check(taskGone, "DeleteRow cascades away the parent's own tasks") && ok;
+		bool msGone = true; for (const auto& m : d.milestones) if (m.id == "m1") msGone = false;
+		ok = Check(msGone, "DeleteRow cascades away the parent's own milestones") && ok;
+		ok = Check(!DeleteRow(d, "missing-row"), "DeleteRow returns false for a non-row id") && ok;
+	}
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -1245,6 +1370,9 @@ int main() {
 	bool appBarOk = RunAppBarModelChecks();
 	ok = appBarOk && ok;
 
+	bool rowOpsOk = RunRowOpsChecks();
+	ok = rowOpsOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -1277,6 +1405,9 @@ int main() {
 	}
 	if (appBarOk) {
 		std::printf("APPBAR MODEL OK\n");
+	}
+	if (rowOpsOk) {
+		std::printf("ROW OPS OK\n");
 	}
 	return 0;
 }
