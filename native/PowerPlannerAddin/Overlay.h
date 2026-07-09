@@ -81,6 +81,11 @@ void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altD
 // SetForegroundWindow on a real window.
 void Overlay_SetHostActiveOverrideForTest(int mode);
 
+// Test hook: force the internal selection so a screenshot/visual harness can
+// capture each app-bar context without simulating a click. kind is one of
+// "TASK"/"MILESTONE"/"ROW"/"MARKER"/"TEXT"; a NULL/empty kind clears it. COM-free.
+void Overlay_SelectForTest(const char* kind, const char* id);
+
 // The bottom app-bar window handle (second layered chrome window); NULL if not
 // started. Same lifecycle/visibility as the overlay (Ground Rule 9 / G4).
 HWND OverlayAppBarHwnd();

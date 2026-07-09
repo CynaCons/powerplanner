@@ -146,6 +146,9 @@ const wchar_t* const kAppBarClass = L"PowerPlannerAppBar";
 HDC g_abDc = NULL; HBITMAP g_abBmp = NULL; HGDIOBJ g_abOld = NULL;
 void* g_abBits = nullptr; int g_abW = 0, g_abH = 0;
 bool g_appBarShown = false;
+RECT g_appBarLastRect = { 0, 0, 0, 0 };
+bool g_appBarGeomValid = false;   // false => force a reposition+repaint
+bool g_appBarModelDirty = true;   // true  => model changed, force repaint
 AppBarModel g_appBar;
 bool g_appBarValid = false;
 std::string g_appBarSelKindBuilt, g_appBarSelIdBuilt;
@@ -661,7 +664,11 @@ void LayoutToolbarButtons(int width, int height) {
 	// meaning for a text annotation; it gets its own delete-only editor via
 	// double-click instead). The CHART_ROOT chrome path is unrelated to the
 	// internal model and keeps its pre-existing layout behavior.
-	bool toolbarEligible = g_hasSelectionChrome && g_selKind != "ROW" && g_selKind != "TEXT";
+	// V4: the bottom app bar (R8) is now the command surface; the old floating
+	// mini-toolbar (Add/Del/-/+) is retired so it no longer double-renders next
+	// to a selection. Keep the layout/hit code intact but never make it eligible.
+	bool toolbarEligible = false;
+	(void)width; (void)height;
 	if (!toolbarEligible || ::IsRectEmpty(&g_frameRect) || width <= 0 || height <= 0) return;
 
 	const int buttonW = g_buttonW;
@@ -3438,6 +3445,7 @@ void RebuildAppBarModelFromSlide() {
 			g_appBarSelIdBuilt = g_ownSelId;
 			g_appBarDocSig = doc.scale + (doc.railLabels ? "1" : "0");
 			g_appBarValid = true;
+			g_appBarModelDirty = true;
 		}
 	}
 	catch (const _com_error&) {
@@ -3903,6 +3911,8 @@ void HideAppBar() {
 	if (g_appBarShown && g_appBarHwnd) { ::ShowWindow(g_appBarHwnd, SW_HIDE); g_appBarShown = false; }
 	g_appBarHoverCmd = 0;
 	g_appBarValid = false;
+	g_appBarGeomValid = false;
+	g_appBarModelDirty = true;
 }
 
 void ShowAppBar(const RECT& slideRect) {
@@ -3922,9 +3932,24 @@ void ShowAppBar(const RECT& slideRect) {
 	int cx = (slideRect.left + slideRect.right) / 2;
 	int x = cx - w / 2;
 	int y = slideRect.bottom - Scale(8) - h;
-	::SetWindowPos(g_appBarHwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	// Only reposition/repaint when geometry or the model actually changed —
+	// re-pushing the layered window every 150ms tick is what made it flicker
+	// (mirrors ShowOverlayForChartRect's dirty guard).
+	RECT want = { x, y, x + w, y + h };
+	bool geomChanged = !g_appBarGeomValid ||
+		want.left != g_appBarLastRect.left || want.top != g_appBarLastRect.top ||
+		want.right != g_appBarLastRect.right || want.bottom != g_appBarLastRect.bottom;
+	bool firstShow = !g_appBarShown;
+	if (geomChanged || firstShow) {
+		::SetWindowPos(g_appBarHwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		g_appBarLastRect = want;
+		g_appBarGeomValid = true;
+	}
 	g_appBarShown = true;
-	RenderAppBar();
+	if (geomChanged || firstShow || g_appBarModelDirty) {
+		RenderAppBar();
+		g_appBarModelDirty = false;
+	}
 }
 
 void HandleAppBarCommand(int cmd) {
@@ -4493,8 +4518,8 @@ bool IsHostActiveForOverlayChrome(HWND ppRoot) {
 	HWND fgRoot = ::GetAncestor(fg, GA_ROOT);
 
 	if (fgRoot == ppRoot) return true;
-	if (fg == g_hwnd || fg == g_editorHwnd || fg == g_cardHwnd) return true;
-	if (fgRoot == g_hwnd || fgRoot == g_editorHwnd || fgRoot == g_cardHwnd) return true;
+	if (fg == g_hwnd || fg == g_editorHwnd || fg == g_cardHwnd || fg == g_appBarHwnd) return true;
+	if (fgRoot == g_hwnd || fgRoot == g_editorHwnd || fgRoot == g_cardHwnd || fgRoot == g_appBarHwnd) return true;
 
 	DWORD ppPid = 0;
 	::GetWindowThreadProcessId(ppRoot, &ppPid);
@@ -4816,6 +4841,11 @@ bool OverlayAppBarButtonRectForTest(int cmd, RECT* outScreenRect) {
 }
 
 const char* Overlay_GetSelectedIdForTest() { return g_ownSelId.c_str(); }
+
+void Overlay_SelectForTest(const char* kind, const char* id) {
+	if (!kind || !*kind) { ClearOwnSelection(); return; }
+	SetOwnSelection(kind, id ? id : "");
+}
 
 int Overlay_GetSelectedKindForTest() {
 	if (g_ownSelId.empty()) return OVERLAY_SELKIND_NONE_FOR_TEST;
