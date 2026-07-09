@@ -129,7 +129,6 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
           if (rowId) {
             if (tool.activeTool === 'add-task') {
               const newTaskId = newId('task');
-              doc.tasks; // typescript no-op
               const stores = useDocumentStore.getState();
               stores.addTask({
                 id: newTaskId,
