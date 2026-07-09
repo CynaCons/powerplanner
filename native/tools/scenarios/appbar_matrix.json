@@ -1,0 +1,14 @@
+{
+  "name": "appbar_matrix",
+  "description": "Capture the docked app bar in every selection context (None / TASK / ROW / MILESTONE). Uses the existing ppappbarshot --matrix mode and Overlay_SelectForTest seam. Produces ab-*.png artifacts.",
+  "exe": "ppappbarshot",
+  "args": ["--matrix"],
+  "timeout": 120,
+  "retries": 1,
+  "expected_markers": [
+    "APPBAR-MATRIX NONE OK",
+    "APPBAR-MATRIX TASK OK",
+    "APPBAR-MATRIX ROW OK",
+    "APPBAR-MATRIX MILESTONE OK"
+  ]
+}

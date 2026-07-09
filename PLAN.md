@@ -527,6 +527,19 @@ reference) · [docs/onslide-v4-plan.md](docs/onslide-v4-plan.md) (14 units in 6
 vertical slices, ground rules, gates, acceptance criteria). Triple acceptance
 per unit: behavioral harness marker + shape-property assertions + slide-export
 PNG vs mockup; user visual review at every slice boundary.
+
+**Agent feedback loop tooling** ([docs/native-agent-feedback-loop-plan.md](docs/native-agent-feedback-loop-plan.md)):
+`native/tools/harness_driver.py` (+ `coordinator_bridge.py`, `scenarios/`)
+drives the pre-built harness exes from the repo root, taskkills PowerPoint per
+the single-PowerPoint rule, enforces per-scenario `expected_markers`, and
+writes structured `*_report.json` / `feedback-<unit>.json` (status
+PASS/FAIL/FLAKE/VISUAL_DIFF, markers, fresh artifacts, golden comparisons).
+CLI from repo root: `python native/tools/harness_driver.py scenario
+row_selection`. Delivered by an independent grok iteration 2026-07-09, then
+coordinator-reviewed and hardened (false-PASS marker regex, cwd/artifact
+paths, golden self-seeding, exit codes — coordinator log
+`feedback-loop-tooling`). Usage: `native/tools/README.md`.
+
 - [x] S1 The Look — theme tokens, visual gate, rail label column, hierarchical
       two-band date header (s1-theme-tokens · s1-visual-gate · s1-rail-labels
       · s1-hier-axis) — all 4 units gated green; **user-reviewed 2026-07-05,
@@ -537,8 +550,10 @@ PNG vs mockup; user visual review at every slice boundary.
       **awaiting user visual review (AC4: live PP at 100%/150% DPI, no focus
       steal)**. Built coordinator→Cursor(composer-2.5): I specced/gated, Cursor
       implemented.
-- [ ] S3 Rows are objects — ops + selection/reorder/indent UX (s3-row-ops ·
-      s3-row-selection)
+- [ ] S3 Rows are objects — ops + selection/reorder/indent UX: s3-row-ops
+      committed (2ac535c, ROW OPS OK); s3-row-selection remaining (absorbs the
+      S1 row-highlight defect fix; post-unit feedback via the row_selection
+      scenario + bridge).
 - [ ] S4 Task & marker context complete — swatches/labels live, marker
       management incl. the missing delete path (s4-task-context ·
       s4-marker-mgmt)

@@ -3383,13 +3383,13 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	int chartW = chart.right - chart.left;
 	int chartH = chart.bottom - chart.top;
 	int wx = chart.left - INFL, wy = chart.top - INFL - BADGE_H;
-	int ww = chartW + INFL * 2, wh = chartH + INFL * 2 + BADGE_H + TOOLBAR_H;
+	// V4/R8: the bottom app bar replaced the old floating mini-toolbar — do not
+	// reserve TOOLBAR_H below the chart (that strip was only for Add/Del/-/+).
+	int ww = chartW + INFL * 2, wh = chartH + INFL * 2 + BADGE_H;
 	g_windowOriginX = wx;
 	g_windowOriginY = wy;
 	UpdateSelectionFrameFromScreen();
-	const int toolbarMinW = 2 * (INFL + Scale(6)) + BUTTON_COUNT * g_buttonW + (BUTTON_COUNT - 1) * g_buttonGap;
-	if (ww < toolbarMinW) ww = toolbarMinW;
-	if (wh < BADGE_H + TOOLBAR_H + INFL * 2 + Scale(8)) wh = BADGE_H + TOOLBAR_H + INFL * 2 + Scale(8);
+	if (wh < BADGE_H + INFL * 2 + Scale(8)) wh = BADGE_H + INFL * 2 + Scale(8);
 	LayoutToolbarButtons(ww, wh);
 	LayoutGrip(ww, wh);
 	RECT oldWindow = {};
@@ -3631,6 +3631,9 @@ void PaintAppBarButton(Gdiplus::Graphics& g, int x, int y, const AppBarItem& ite
 	unsigned long fillRgb = 0;
 	if (!item.enabled) {
 		textRgb = gt::ink3;
+	} else if (item.active && !item.danger) {
+		fillRgb = gt::primarySoft;
+		textRgb = gt::primary;
 	} else if (hovered && item.danger) {
 		fillRgb = gt::dangerSoft;
 		textRgb = gt::deadline;
@@ -3907,12 +3910,14 @@ void EnsureAppBarWindow() {
 		0, 0, 10, 10, NULL, NULL, g_inst, NULL);
 }
 
-void HideAppBar() {
+void HideAppBar(bool keepGeomCache = false) {
 	if (g_appBarShown && g_appBarHwnd) { ::ShowWindow(g_appBarHwnd, SW_HIDE); g_appBarShown = false; }
 	g_appBarHoverCmd = 0;
-	g_appBarValid = false;
-	g_appBarGeomValid = false;
-	g_appBarModelDirty = true;
+	if (!keepGeomCache) {
+		g_appBarValid = false;
+		g_appBarGeomValid = false;
+		g_appBarModelDirty = true;
+	}
 }
 
 void ShowAppBar(const RECT& slideRect) {
@@ -3920,7 +3925,7 @@ void ShowAppBar(const RECT& slideRect) {
 	if (!g_appBarHwnd) return;
 	bool dpiChanged = UpdateDpiForWindow(g_appBarHwnd);
 	if (dpiChanged) UpdateDpiScaledMetrics();
-	if (g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt || !g_appBarValid) {
+	if (g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt || !g_appBarValid || g_appBarModelDirty) {
 		RebuildAppBarModelFromSlide();
 	}
 	MeasureAppBar();
@@ -4603,7 +4608,7 @@ void Tick() {
 		HWND ppRoot = ::GetAncestor(g_pptHwnd, GA_ROOT);
 		if (!IsHostActiveForOverlayChrome(ppRoot)) {
 			HideOverlay();
-			HideAppBar();
+			HideAppBar(true);
 			// The inline editor and card editor each already commit/cancel
 			// themselves on their own focus-loss messages (WM_KILLFOCUS for
 			// the inline editor, WM_ACTIVATE/WA_INACTIVE for the card), so by
@@ -4842,9 +4847,15 @@ bool OverlayAppBarButtonRectForTest(int cmd, RECT* outScreenRect) {
 
 const char* Overlay_GetSelectedIdForTest() { return g_ownSelId.c_str(); }
 
+void Overlay_InvalidateAppBarForTest() {
+	g_appBarValid = false;
+	g_appBarModelDirty = true;
+}
+
 void Overlay_SelectForTest(const char* kind, const char* id) {
-	if (!kind || !*kind) { ClearOwnSelection(); return; }
+	if (!kind || !*kind) { ClearOwnSelection(); Overlay_InvalidateAppBarForTest(); return; }
 	SetOwnSelection(kind, id ? id : "");
+	Overlay_InvalidateAppBarForTest();
 }
 
 int Overlay_GetSelectedKindForTest() {
@@ -4861,6 +4872,33 @@ void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altD
 	g_cursorOverrideEnabled = enabled;
 	g_cursorOverrideScreenPt = screenPt;
 	g_cursorOverrideAltDown = altDown;
+}
+
+const char* Overlay_DumpChromeStateForTest() {
+	static std::string s;
+	s.clear();
+	s += "{";
+	s += "\"ownSelKind\":\"" + g_ownSelKind + "\",";
+	s += "\"ownSelId\":\"" + g_ownSelId + "\",";
+	s += "\"rowBands\":[";
+	for (size_t i = 0; i < g_rowBands.size(); ++i) {
+		const auto& b = g_rowBands[i];
+		if (i > 0) s += ",";
+		s += "{";
+		s += "\"rowId\":\"" + b.rowId + "\",";
+		s += "\"left\":" + std::to_string(b.screenRect.left) + ",";
+		s += "\"top\":" + std::to_string(b.screenRect.top) + ",";
+		s += "\"right\":" + std::to_string(b.screenRect.right) + ",";
+		s += "\"bottom\":" + std::to_string(b.screenRect.bottom);
+		s += "}";
+	}
+	s += "],";
+	s += "\"hasDrag\":" + std::string((g_dragActive || g_gestureActive) ? "true" : "false") + ",";
+	s += "\"dragKind\":" + std::to_string(static_cast<int>(g_dragKind)) + ",";
+	s += "\"appBarVisible\":" + std::string(g_appBarShown ? "true" : "false") + ",";
+	s += "\"appBarValid\":" + std::string(g_appBarValid ? "true" : "false");
+	s += "}";
+	return s.c_str();
 }
 
 void Overlay_SetHostActiveOverrideForTest(int mode) {

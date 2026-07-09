@@ -126,6 +126,7 @@ run, not a previous one.
 - Interaction units that can't be unit-tested ship a **named, freshly-stamped**
   screen-capture artifact under `native/build/` whose filename includes the todo id;
   the coordinator confirms the file's mtime is after the agent run and inspects it.
+- After native UI/UX units, run the feedback loop driver (see native/tools) and record report.json / feedback-*.json in the log for structured agent visibility.
 
 A unit is `done` only when its gate passes from a clean rebuild — never on assertion.
 

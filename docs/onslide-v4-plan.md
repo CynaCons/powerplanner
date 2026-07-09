@@ -15,6 +15,13 @@
 > **STOP at the end of each slice** and wait for the user's visual review
 > before starting the next.
 
+> **Agent feedback tooling:** `native/tools/harness_driver.py` + scenarios +
+> bridge give structured post-unit feedback on S3+ UX (run from repo root;
+> scenarios enforce `expected_markers`; goldens fail when missing unless
+> `--update-goldens`). It AUGMENTS the gates — a unit's AC markers from a
+> clean rebuild remain the only acceptance authority. See
+> docs/native-agent-feedback-loop-plan.md.
+
 ## 0. Architecture you are building on (all shipped and green)
 
 Chart = grouped native shapes tagged `PP_KIND`/`PP_ID` under a `CHART_ROOT`
@@ -221,8 +228,9 @@ freshly inserted chart resemble the mockup.*
     `Overlay_GetSelectedKindForTest()==row`; click app-bar "Below" via rect
     hook ⇒ rows.size()+1 in PP_DOC; click "↓" ⇒ order swapped; Delete key ⇒
     row gone + cascade held (its task absent) ⇒ `ROWSEL PASS`.
-  - AC2 ⚙ GATE-FULL floor green; one undo entry per op (reuse INPLACE-style
-    undo count assert for one representative op).
+  - AC2 ⚙ GATE-FULL floor green; one undo entry per op, asserted INSIDE the
+    ROWSEL stage itself (INPLACE-style undo count around one representative
+    row op) so it is machine-enforced, not a report claim.
   - AC3 ✋ live check: select/reorder feels like the mockup. **User reviews.**
 
 ### S4 — Task & marker context complete
@@ -275,6 +283,11 @@ today without any new work — your gate is the NEW marker.*
   SetForegroundWindow+TrackPopupMenu idiom.
   - AC1 ⚙ ops-test: menu model for EVERY zone matches the registry (no dead
     ids, no divergent labels) — NEW marker `MENU MAP V4 OK`; GATE-PURE exit 0.
+    **Anti-tautology rule**: because builder and test would otherwise share
+    the registry, the test must ALSO pin literal expected labels+ids for at
+    least the task zone and background zone as hardcoded strings (e.g.
+    "Delete row" / `HtCmd_DeleteRow`) so a registry-wide regression cannot
+    self-validate.
   - AC2 ⚙ GATE-FULL floor green (menus are covered purely; no new stage).
 - [ ] **s6-final** — Full-suite validation from clean rebuild; export
   `visual-s6.png`; update `PLAN.md` N9 checkboxes; write a completion summary

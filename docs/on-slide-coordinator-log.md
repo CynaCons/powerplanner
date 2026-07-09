@@ -690,3 +690,51 @@ EXECUTION HANDOVER: the user will drive V4 with a Sonnet agent reading the
 plan doc directly. Coordinator note to that agent: docs/onslide-v4-plan.md
 section 1 ground rules are load-bearing; the regression floor in section 2
 must be green before AND after every unit.
+
+### Coordinator resumed for S3-S6 run-to-completion (2026-07-09)
+
+User directive: iterate until N9 V4 completion (S3-S6), leveraging grok/
+copilot/cursor sub-agents + the new native/tools feedback loop, with review
+rounds. State: S1 user-reviewed; S2 GATE-FULL green + s2-appbar-fix landed
+(277221d), AC4 user visual sign-off still open; s3-row-ops landed (2ac535c).
+Backlog re-seeded in session task list from the v4 plan checkboxes (state of
+record). Working-tree at session start carried UNCOMMITTED work from an
+independent grok iteration - see next entry.
+
+### feedback-loop-tooling — coordinator review of the independent iteration
+
+The 2026-07-09 independent (grok) iteration delivered docs/
+native-agent-feedback-loop-plan.md implementation: native/tools/
+(harness_driver.py, coordinator_bridge.py, scenarios/), Overlay.h/.cpp test
+hooks (Overlay_InvalidateAppBarForTest, Overlay_DumpChromeStateForTest,
+HideAppBar(keepGeomCache) flicker fix, active-chip paint), appbar-shot.cpp
+--report mode. Its log entry claimed COMPLETE/verified and was spliced
+mid-sentence into the harness-input-isolation entry (repaired here; entry
+rewritten truthfully).
+
+Coordinator validation (clean rebuild): GATE-PURE green (11 ops markers +
+conformance 1/1) and GATE-FULL green (13 stages + APPBAR PASS + INPUT
+NEUTRAL OK + FIT/FITPERSIST/REFLOW/SHAPE PROPS/VISUAL S1 OK) - the Overlay
+diff is sound. But an adversarial review (Claude sub-agent, 27 tool calls +
+live driver run) found the PYTHON DRIVER was a false-green machine:
+- B1 SUCCESS_MARKERS regex had a trailing empty alternation -> matched empty
+  string at every word boundary -> every rc=0 run PASS, retries dead code,
+  "FAILED" not caught (\bFAIL\b does not match FAILED).
+- B2 driver ran exes with cwd=native/ but harnesses write repo-root-relative
+  paths -> PNGs written into nonexistent native/native/build, captures
+  failed, appbar-shot.cpp ignored CaptureRectToPng returns and printed OK
+  anyway -> PASS with zero artifacts (reproduced live).
+- B3 driver never taskkilled POWERPNT (README claimed it as a feature) -
+  violates the single-PowerPoint rule.
+- H1 goldens self-seed on first run and can never fail; VISUAL_DIFF exited 0.
+- H2 --report mode unconditionally returned 0; parsed REPORT json discarded.
+- H3 scenario expected_markers never checked; row_selection's "ROW" matched
+  "DRAGROW PASS" (prints today) - the S3 scenario passed before S3 exists.
+- H5 completion claims in the feedback plan overstated (no report.json ever
+  produced; DPI standardization + gate-script integration not done).
+Dispatched feedback-loop-fix to a grok-build agent (first forced-edit grok
+unit through the new PowerSpawn grok CLI provider) with every fix pinned;
+coordinator re-verifies empirically (fault injection + live scenario rerun)
+before commit. STANDING RULE (new): tooling that reports on gates is itself
+gate-checked - a reporting layer ships only with a demonstrated true-negative
+(a run that FAILS when it should).

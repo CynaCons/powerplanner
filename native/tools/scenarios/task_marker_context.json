@@ -1,0 +1,10 @@
+{
+  "name": "task_marker_context",
+  "description": "S4 task & marker context smoke. Runs overlay harness for context around tasks/markers (swatches, labels, delete paths). TASKCTX/MARKERMGMT markers get added to expected_markers when S4 lands.",
+  "exe": "ppoverlay",
+  "args": [],
+  "timeout": 90,
+  "retries": 1,
+  "expected_markers": ["MARKERDRAG PASS", "TEXTELEM PASS", "INPUT NEUTRAL OK"],
+  "goldens": []
+}

@@ -1,0 +1,9 @@
+{
+  "name": "row_selection",
+  "description": "S3 row-selection UX smoke. Exercises overlay harness (selection model, hit zones). Validates base behavior + produces artifacts for visual review. When s3-row-selection lands, ROWSEL PASS must be added to expected_markers.",
+  "exe": "ppoverlay",
+  "args": [],
+  "timeout": 120,
+  "retries": 2,
+  "expected_markers": ["OWNSEL PASS", "SCOPE PASS", "INPUT NEUTRAL OK"]
+}

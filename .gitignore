@@ -19,6 +19,10 @@ terminals
 # Native add-in build output
 native/build
 
+# Python bytecode (native/tools harness driver)
+__pycache__/
+*.pyc
+
 # Rasterized/recorded artifacts (regenerable from SVG / the app)
 spec/visual/*.png
 

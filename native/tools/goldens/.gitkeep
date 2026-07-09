@@ -1,0 +1,3 @@
+Place golden PNGs here (e.g. s3-row-overlay.png) for compare_to_golden().
+Driver will create/update them with --update or update=True.
+Gitignored in practice for binaries but tracked for structure.

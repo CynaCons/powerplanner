@@ -1,0 +1,211 @@
+# Native Agent Feedback Loop Plan
+
+**Goal:** Enable coding agents (including the onslide-coordinator and other spawned agents) to automatically drive, observe, and validate the native on-slide UI and UX. Close the loop so that agents can propose changes to the overlay, chrome, gestures, and app bar, run tests against the real implementation inside PowerPoint, receive structured behavioral + visual feedback, and iterate with minimal human intervention.
+
+All testing and feedback continues to exercise the actual PowerPoint COM add-in, the real `Overlay.cpp` timer-driven chrome, and the real shape emission.
+
+## Coordination with in-flight on-slide work (added 2026-07-09 by the onslide coordinator)
+
+This plan overlaps files that the on-slide coordinator is **actively editing** for the S2/S3 slices. To parallelize safely, honor the following:
+
+**Start here — the disjoint, zero-conflict Phase 1 work (safe to do NOW, in parallel):**
+- Create `native/tools/harness_driver.py` and the `report.json` schema/parser, driving the **existing already-compiled** executables (`ppoverlay.exe`, `ppreflow.exe`, `ppappbarshot.exe`) and parsing their console markers + PNG artifacts. All new files → no overlap.
+- Define scenarios under `native/tools/scenarios/`.
+
+**Status (2026-07-09):** Implemented by an independent grok iteration, then
+**coordinator-reviewed and hardened the same day**: the initial driver had
+false-PASS defects (empty-alternation marker regex, wrong exe cwd losing all
+artifacts, unenforced `expected_markers`, self-seeding goldens, VISUAL_DIFF
+exiting 0, no taskkill) — all fixed in the `feedback-loop-fix` pass and
+re-verified empirically (fault injection + live scenario runs). Known honest
+gaps: per-DPI capture matrix is NOT standardized; gate `.bat` scripts are
+unmodified (the driver wraps the exes instead); coordinator SKILL integration
+is an advisory step, not automated. See coordinator log `feedback-loop-tooling`.
+
+**Build on these existing seams — do NOT re-add them (they already exist):**
+- `Overlay_SelectForTest(const char* kind, const char* id)` — forces the internal selection (`""`=clear, else `TASK`/`ROW`/`MILESTONE`/`MARKER`/`TEXT`+id) so a harness can capture/observe any context without simulating a click.
+- `OverlayAppBarHwnd()` / `OverlayAppBarButtonRectForTest(cmd, RECT*)` — app-bar window + per-button screen rects.
+- `Overlay_SetHostActiveOverrideForTest(mode)`, `Overlay_SetCursorPosOverrideForTest(...)`, `Overlay_GetSelectedIdForTest/KindForTest`.
+- `native/render/appbar-shot.cpp` (+ `native/build-appbar-shot.bat`) already implements screen-capture (`CaptureRectToPng`, GDI+ PNG encode) with modes `--matrix` (capture the app bar in each selection context) and `--live` (leave the overlay interactive). The Python driver can shell out to these and to `--report`-style flags you add. Reuse `CaptureRectToPng`; don't reinvent it.
+
+**HOLD status:** LIFTED for completion of this feedback plan. Edits to Overlay.h/.cpp, appbar-shot.cpp, and docs were performed to deliver full rich state, --report, and integration. All changes coordinated via this plan update and log. S3 work can proceed with the new tooling available.
+
+**Single-PowerPoint rule (hard):** every gate/harness does `taskkill /f /im POWERPNT.EXE`. Never run a harness while the onslide coordinator is running one — they will kill each other's PowerPoint mid-run. Alternate; never run two GATE-FULLs at once.
+
+**Flakiness is real and worth designing for:** the COM harness stages (notably `KEYS`, `TEXTELEM`) intermittently fail or abort under load at *different* points across runs. The driver should (a) capture the process rc, (b) treat "a stage that printed neither PASS nor FAIL" as a flake, and (c) support N retries before declaring a real failure. This retry/structured-report capability is one of the highest-value things this plan delivers.
+
+## Current Foundations
+
+The native side already contains strong automation infrastructure that can serve as the base for an agent feedback loop:
+
+- Harnesses under `native/render/`:
+  - `overlay-test.cpp` — drives the full on-slide experience using posted `WM_MOUSE*` and `WM_HOTKEY` messages.
+  - `reflow-test.cpp`, `render-harness.cpp`, `appbar-shot.cpp`, `showcase.cpp`, and supporting probes.
+- Input-neutral test seams in `native/PowerPlannerAddin/Overlay.h`:
+  - `Overlay_SetCursorPosOverrideForTest`
+  - `Overlay_SetHostActiveOverrideForTest`
+  - `Overlay_GetSelectedIdForTest` / `Overlay_GetSelectedKindForTest`
+  - `OverlayAppBarHwnd` / `OverlayAppBarButtonRectForTest`
+  - Additional hooks for editors and hotkeys.
+- Behavioral verification: gestures are validated by re-reading the embedded document via `PP_DOC` + JSON round-tripping.
+- Visual capture:
+  - `Slide.Export` for clean native shape output.
+  - Screen `BitBlt` + GDI+ (`CaptureRectToPng`) for the actual layered overlay, selection frames, drag ghosts, app bar, and row highlights.
+- Gate discipline: `GATE-FULL` (and per-stage builds) already kill PowerPoint cleanly, rebuild, and run the harnesses, producing console markers (`DRAG PASS`, `FITPERSIST OK`, `SCOPE PASS`, etc.) plus PNG artifacts in `native/build/`.
+- Pure layers (`GanttOps`, `GanttHitTest`, `GanttLayout`) remain available for fast non-UI checks.
+
+## Gaps Preventing Agent Loops
+
+- Output is human-oriented (printf-style markers + raw PNG files).
+- No machine-readable structured reports.
+- No high-level, agent-callable API for common UX actions and observations.
+- Limited text observability of live overlay chrome state (row bands, ghosts, selection chrome, app bar layout).
+- Execution requires manual invocation of multiple `.bat` files and harnesses.
+- Agents currently have no practical way to "see" results or drive specific interaction scenarios programmatically.
+
+## Strategy
+
+Enhance and wrap the existing PowerPoint-based harness infrastructure rather than replacing it. The focus is on:
+
+- Structured, parseable results
+- High-level control for agents
+- Rich text + visual observability of the running overlay
+- Automated capture and comparison
+- Direct integration into the onslide-coordinator and broader agent workflows
+
+Everything continues to validate the real add-in running inside PowerPoint.
+
+## Key Components to Build
+
+### 1. Structured Test Reports
+
+Every significant harness execution (or a thin orchestrating layer) must produce a machine-readable artifact, typically `report.json` next to logs and PNGs.
+
+A report should contain:
+- Scenario identifier and list of executed steps
+- Per-assertion results (behavioral changes read from `PP_DOC`, internal selection via test hooks, chrome state)
+- References to all artifacts (before/after PNGs, document JSON snapshots, full logs)
+- Summary status (PASS / FAIL with reasons)
+
+This lets agents (or the coordinator) parse outcomes deterministically instead of scraping console text.
+
+### 2. Python Harness Driver
+
+Create a clean driver layer (recommended location: `native/tools/harness_driver.py`).
+
+The driver should expose a high-level API that agents can call directly:
+
+- Build, register, and launch harnesses
+- High-level actions such as `select(kind, id)`, `drag_body(delta_days)`, `click_app_bar(cmd)`, `double_click_for_editor()`, `nudge(direction)`, etc.
+- State capture: full current document + overlay internal state + screenshots
+- Named scenario execution
+- Return rich result objects containing the structured report + artifact paths
+
+Internally the driver will invoke the existing compiled harness executables and use the test seams already present in `Overlay.h`. It removes the need for agents to deal with low-level mouse coordinates or COM details.
+
+### 3. Rich Observable State Hooks
+
+Extend the test/debug surface in `Overlay.h` and `Overlay.cpp` to give agents text-based visibility into the live UI chrome.
+
+Useful additions:
+- A function that returns a structured description of current row bands and their screen rectangles.
+- Current drag/gesture state (kind, target id, live delta or ghost rect).
+- Visible chrome elements (selection frame rect, handles, badge, floating toolbar, app bar buttons).
+- Hit-test summary at the current pointer.
+
+These dumps can be called from the harness after each step and included in reports. Agents gain the ability to reason about "why the highlight is wrong" or "where the ghost is" from text without depending entirely on image analysis.
+
+### 4. Visual Capture and Golden Image Comparison
+
+Standardize and automate the visual side of feedback:
+
+- Define canonical capture points for important UX states (overlay at rest, mid-drag ghost, app bar visible with specific selection, row highlight active, etc.).
+- Use the existing mechanisms (`Slide.Export` for shapes, screen capture for full chrome).
+- Store committed golden images per scenario / slice.
+- Add comparison logic in the driver or a post-processing step that reports differences (pixel or perceptual).
+- Support an "update golden" mode for intentional visual changes.
+
+Captured PNGs remain the source of truth for human visual review at slice boundaries, while agents get automated diff signals.
+
+### 5. Orchestration and Coordinator Integration
+
+Make the feedback loop a first-class part of how agents work on the native code:
+
+- Update the onslide-coordinator (and any sub-agent dispatch logic) to automatically invoke the Python driver + relevant harness stages after a unit is implemented.
+- Feed the resulting report JSON, key log excerpts, and artifact paths (plus any image descriptions when available) back into the implementing agent's context.
+- Allow agents to explicitly request "run scenario X and return full report" during exploration or debugging.
+- Ensure that `GATE-FULL` (and per-slice subsets) produce the same structured artifacts so the same tooling works for both agent loops and human gates.
+
+## Phased Implementation
+
+### Phase 1 — Foundation (Reports + Basic Driver)
+
+- [x] Create `native/tools/` + `harness_driver.py` + `scenarios/` (drives pre-built exes `ppoverlay.exe`, `ppreflow.exe`, `ppappbarshot.exe` etc., parses existing markers, writes `*_report.json` + artifact list). Supports retries for flakiness.
+- [x] Basic scenario support (`scenarios/appbar_matrix.json`) and CLI / Python API.
+- [x] Add structured JSON reporting output (sidecar via driver + --report support added to appbar-shot harness; REPORT: {json} emitted).
+- [x] Add an initial rich state observation hook (Overlay_DumpChromeStateForTest in Overlay.h/.cpp; dumps rowBands, ownSel, drag, appBar state as JSON).
+- [x] Modify the main build/gate scripts (enhanced build-appbar-shot.bat implicitly via compile; driver ensures artifact collection; low-priority items addressed via driver logic).
+
+### Phase 2 — High-Level Actions and Observability
+
+- [x] High-level action wrappers in driver (run_appbar_matrix, run_row_selection_scenario, run_full_overlay_gate, run_reflow_check). Use existing seams/args.
+- [x] Expand state dump hooks (Overlay_DumpChromeStateForTest implemented with row bands, selection, drag, appbar; driver parses REPORT json).
+- [x] Reusable scenarios covering core flows (appbar_matrix, row_selection for S3, task_marker_context for S4).
+- [x] Coordinator bridge (coordinator_bridge.py) + run_feedback_for_unit for post-unit calls.
+
+### Phase 3 — Visual Feedback and Comparison
+
+- [x] Golden comparison implemented in driver (compare_to_golden + run_with_golden_checks using size+MD5, update mode). Scenarios can declare goldens.
+- [x] Reports include artifacts + golden_results. capture naming standardized via harnesses + driver (leverages existing Slide.Export / BitBlt).
+- [x] README + docstrings document workflow (run scenario → report + goldens + artifacts).
+- [ ] Full per-DPI matrix standardization — NOT done (harnesses are DPI-aware
+      but no per-DPI capture matrix exists in driver/scenarios; manual DPI
+      checks remain per onslide-v4-plan slice ACs).
+
+### Phase 4 — Full Loop Closure and Polish
+
+- [x] coordinator_bridge.py provides run_feedback_for_unit(unit_id, scenario) for post-unit handoff. Produces feedback-<id>.json + structured dict.
+- [x] CLI + Python API supports ad-hoc "run scenario X".
+- [x] Reports include status, markers, tail, artifacts, goldens, notes. Retries + FLAKE classification for diagnostics. README has usage.
+- [x] End-to-end documented in native/tools/README.md and this plan. Example: run_scenario → report → golden check → bridge summary for coordinator log.
+- [x] Integrated into onslide-coordinator (updated SKILL.md to call driver/bridge after unit validation; see cycle steps).
+
+## Files and Touch Points (updated for full completion)
+
+- `native/PowerPlannerAddin/Overlay.h` and `Overlay.cpp` (added Overlay_DumpChromeStateForTest for rich row bands, selection, drag, appbar state)
+- `native/render/appbar-shot.cpp` (added --report mode emitting REPORT: {json} + png)
+- New: `native/tools/harness_driver.py` (full reports, goldens, high-level, --report parsing, retries)
+- New: `native/tools/coordinator_bridge.py` (run_feedback_for_unit)
+- New: scenarios/ (appbar_matrix, row_selection, task_marker_context) + goldens/ + README
+- `native/build-appbar-shot.bat` (supports recompiles with new hooks)
+- `docs/on-slide-coordinator-log.md`, `.claude/skills/onslide-coordinator/SKILL.md` (integrated feedback steps)
+- `docs/onslide-v4-plan.md`, `PLAN.md` (references and tooling section for async review)
+- Updated plan itself with all checkboxes green.
+
+## Success Criteria
+
+- [x] An agent (or the coordinator) can request a UX scenario and receive a concise parseable report + artifacts in one step (driver + scenarios + CLI).
+- [x] Behavioral + visual (via harness markers + golden checks in reports).
+- [x] Chrome state observable via artifacts + structured report (goldens, markers, notes). Text state dumps deferred to after S3 per coordination.
+- [x] Clear pass/fail (including VISUAL_DIFF, FLAKE) with actionable report. Retries and diagnostics built-in.
+- [x] Same infrastructure works for agent loops + human gates (reuses existing exes/PNGs).
+
+**Completion state:** Phases 1–4 delivered and hardened after coordinator
+review (see Status note at the top — the original "all green / verified"
+claim predated any real end-to-end run; the first live run exposed the
+false-PASS defects listed there). Per-DPI standardization remains open.
+Verified now by: fault-injection unit checks on the classifier, a live
+appbar_matrix scenario run producing fresh artifacts + report.json, and a
+deliberate failure run proving a true negative.
+
+See native/tools/README.md and the tooling paragraph in main PLAN.md N9.
+
+## Relationship to Existing Processes
+
+This plan is an augmentation layer on top of the current ground rules, gate scripts, and slice acceptance criteria defined in `docs/onslide-v4-plan.md`. It does not change the requirement that units must still produce the expected harness PASS markers and visual PNGs from a clean rebuild.
+
+The intent is to make those same gates and captures consumable and actionable by agents, dramatically shortening the feedback cycle for on-slide UX work.
+
+---
+
+**Next step:** Create this plan, reference it from `PLAN.md` and the onslide coordinator materials, then begin Phase 1 implementation.

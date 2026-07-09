@@ -96,6 +96,17 @@ HWND OverlayAppBarHwnd();
 // button without hard-coded coordinates. Never touches COM.
 bool OverlayAppBarButtonRectForTest(int cmd, RECT* outScreenRect);
 
+// Test hook: mark the app-bar model/geometry dirty so the next ShowAppBar (or an
+// immediate RenderAppBar if the bar is already shown) rebuilds/repaints after
+// Overlay_SelectForTest drives a new selection context. Never touches COM.
+void Overlay_InvalidateAppBarForTest();
+
+// Rich state dump for agent feedback loop: returns a JSON string (static buffer)
+// with current chrome state for reports: own selection, row bands (with rects),
+// drag/gesture state, app bar visibility, visible chrome elements, etc.
+// Never touches COM. Safe for harnesses to call after steps.
+const char* Overlay_DumpChromeStateForTest();
+
 // ---- floating card editor (double-click TaskBody/Milestone/Text) test hooks
 // The card is a real top-level window (WS_EX_TOOLWINDOW), registered under
 // this class name (mirrors Overlay.cpp's private kCardClass, kept in sync by
