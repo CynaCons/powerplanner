@@ -368,6 +368,12 @@ HtMenuOp MapTaskAppBarCommand(int cmdId) {
 	case HtCmd_NudgePlus1:
 		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = 1;
 		break;
+	case HtCmd_Link:
+		op.opKind = HtOpKind::EnterLinkMode; op.needsTaskId = true;
+		break;
+	case HtCmd_Unlink:
+		op.opKind = HtOpKind::Unlink; op.needsTaskId = true;
+		break;
 	default:
 		break;
 	}
@@ -413,6 +419,18 @@ HtMenuOp MapMarkerAppBarCommand(int cmdId) {
 		break;
 	case HtCmd_NudgePlus1:
 		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = 1;
+		break;
+	default:
+		break;
+	}
+	return op;
+}
+
+HtMenuOp MapBackgroundAppBarCommand(int cmdId) {
+	HtMenuOp op;
+	switch (cmdId) {
+	case HtCmd_InsertNote:
+		op.opKind = HtOpKind::InsertFreeNote;
 		break;
 	default:
 		break;

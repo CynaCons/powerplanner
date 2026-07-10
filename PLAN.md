@@ -557,11 +557,15 @@ paths, golden self-seeding, exit codes — coordinator log
       (AC3)**. Discovered defect filed: external undo (Ctrl+Z) bricks
       overlay chart tracking — see coordinator log `undo-recovery-spike`.
       s5-dep-ops also landed early in parallel (c6e7a7a, DEP OPS OK).
-- [ ] S4 Task & marker context complete — swatches/labels live, marker
-      management incl. the missing delete path (s4-task-context ·
-      s4-marker-mgmt)
-- [ ] S5 Dependencies + notes — link mode, unlink, note entry points
-      (s5-dep-ops · s5-link-mode)
+- [x] S4 Task & marker context complete — swatches/labels live, marker
+      management incl. the previously missing delete path (s4-task-context
+      7b0fba1 · s4-marker-mgmt 761d8d2). Gates green twice from clean
+      rebuilds 2026-07-10; **awaiting user visual review (AC3)**. Bonus
+      product fix: in-place reconcile now syncs fill/line colors (swatches
+      were inert on frame-preserving rebuilds).
+- [x] S5 Dependencies + notes — link mode, unlink, note entry points
+      (s5-dep-ops c6e7a7a · s5-link-mode, gates green twice 2026-07-10;
+      **awaiting user visual review**)
 - [ ] S6 Menus from the shared registry + final sweep (s6-menus · s6-final)
 
 **S1 visual-review findings (2026-07-05) — user-reported on the live showcase;

@@ -260,7 +260,7 @@ freshly inserted chart resemble the mockup.*
   (reject self/dup/missing; from/to may be task or milestone ids) +
   `RemoveDependenciesTouching(doc, id)`. Marker `DEP OPS OK`.
   - AC1 ⚙ `DEP OPS OK`; GATE-PURE exit 0.
-- [ ] **s5-link-mode** — B7.1/B7.2 exactly: Link button → link mode
+- [x] **s5-link-mode** — B7.1/B7.2 exactly: Link button → link mode
   (crosshair over bars, hint pill per tokens §6 above the app bar), click
   target ⇒ AddDependency + exit + one undo; Esc/background/selection-loss
   cancels; Unlink button. Note buttons live (task/milestone context anchored;

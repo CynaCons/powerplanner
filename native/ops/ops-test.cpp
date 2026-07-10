@@ -1496,6 +1496,25 @@ static bool RunTaskAppBarMapChecks() {
 			"map: task appbar +1d -> Nudge +1") && ok;
 	}
 	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_Link);
+		ok = Check(op.opKind == HtOpKind::EnterLinkMode && op.needsTaskId,
+			"map: task appbar Link -> EnterLinkMode") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_Unlink);
+		ok = Check(op.opKind == HtOpKind::Unlink && op.needsTaskId,
+			"map: task appbar Unlink -> Unlink") && ok;
+	}
+	{
+		HtMenuOp op = MapBackgroundAppBarCommand(HtCmd_InsertNote);
+		ok = Check(op.opKind == HtOpKind::InsertFreeNote,
+			"map: background appbar Note -> InsertFreeNote") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_ScaleWeek);
+		ok = Check(op.opKind == HtOpKind::None, "map: task appbar ScaleWeek -> None") && ok;
+	}
+	{
 		HtMenuOp op = MapMilestoneAppBarCommand(HtCmd_NudgeMinus1);
 		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId && op.nudgeDays == -1,
 			"map: milestone appbar -1d -> Nudge -1") && ok;
@@ -1524,10 +1543,6 @@ static bool RunTaskAppBarMapChecks() {
 		HtMenuOp op = MapMarkerAppBarCommand(HtCmd_NudgePlus1);
 		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId && op.nudgeDays == 1,
 			"map: marker appbar +1d -> Nudge +1") && ok;
-	}
-	{
-		HtMenuOp op = MapTaskAppBarCommand(HtCmd_ScaleWeek);
-		ok = Check(op.opKind == HtOpKind::None, "map: task appbar ScaleWeek -> None") && ok;
 	}
 	return ok;
 }

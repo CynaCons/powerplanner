@@ -226,6 +226,9 @@ enum class HtOpKind {
 	CycleLabelPlacement, // needsTaskId; cycles bar->rail->both->bar
 	AddNote,        // needsTaskId; anchored AddText at default offset
 	Edit,           // needsTaskId; open card editor for task/milestone
+	EnterLinkMode,  // needsTaskId; overlay enters link-pick mode (no doc mutation)
+	Unlink,         // needsTaskId; RemoveDependenciesTouching
+	InsertFreeNote, // free AddText at visible chart center (background context)
 };
 
 struct HtMenuOp {
@@ -263,6 +266,9 @@ HtMenuOp MapMilestoneAppBarCommand(int cmdId);
 // Map app-bar commands issued while a MARKER is selected (rename, nudge,
 // delete). Pure registry for ops-test.
 HtMenuOp MapMarkerAppBarCommand(int cmdId);
+
+// Map app-bar commands issued with no selection (INSERT group on background).
+HtMenuOp MapBackgroundAppBarCommand(int cmdId);
 
 // ---- pure zone -> cursor mapping --------------------------------------------
 // WM_SETCURSOR needs to pick a cursor shape from the hit zone under the

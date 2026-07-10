@@ -191,6 +191,13 @@ std::string g_suppressedId;
 std::string g_ownSelKind;
 std::string g_ownSelId;
 
+// ---- S5 link mode (B7.1) ----------------------------------------------------
+// Active while the user is picking a dependency target after pressing Link on
+// the app bar. g_linkFromId is the selected task/milestone id at entry.
+bool g_linkMode = false;
+std::string g_linkFromId;
+std::string g_linkFromKind;
+
 // Left-button gesture tracking (down -> up), used to distinguish a click
 // (select) from a drag and to own mouse capture for the duration of the
 // gesture.
@@ -275,6 +282,7 @@ struct RowBand {
 	int screenLeftGutter;
 	RECT screenRailRect;
 };
+const RowBand* RowBandAtScreenY(long screenY);
 
 std::vector<RowBand> g_rowBands;
 
@@ -474,6 +482,8 @@ void UpdateHotkeyRegistration();
 void UnregisterAllHotkeys(const wchar_t* caller = L"?");
 void HandleHotkeyDelete();
 void HandleHotkeyNudge(long deltaDays);
+void ClearLinkMode();
+void CommitLinkTarget(const std::string& targetId);
 
 std::string Narrow(const wchar_t* w) {
 	if (!w || !*w) return "";
@@ -552,6 +562,29 @@ std::string DefaultMarkerDateAtVisibleCenter() {
 	}
 }
 
+// Row + date for a free note at the visible chart center (background Note).
+void DefaultFreeNoteCellAtVisibleCenter(std::string& outRowId, std::string& outDateISO) {
+	outRowId.clear();
+	outDateISO = DefaultMarkerDateAtVisibleCenter();
+	const long centerY = (g_chartScreenRect.top + g_chartScreenRect.bottom) / 2;
+	if (const RowBand* band = RowBandAtScreenY(centerY)) {
+		outRowId = band->rowId;
+		return;
+	}
+	if (!g_rowBands.empty()) {
+		outRowId = g_rowBands[0].rowId;
+		return;
+	}
+	if (!g_app) return;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (json.empty()) return;
+		PpDocument doc = DocumentFromJson(json);
+		outRowId = FirstRowId(doc);
+	}
+	catch (...) {}
+}
+
 void DefaultTaskDates(const PpDocument& doc, const std::string& rowId, const std::string& selectedTaskId, std::string& start, std::string& end) {
 	if (const PpTask* selected = FindTask(doc, selectedTaskId)) {
 		start = selected->start;
@@ -592,8 +625,21 @@ void ClearOwnSelection() {
 	g_ownSelId.clear();
 }
 
+void ClearLinkMode() {
+	g_linkMode = false;
+	g_linkFromId.clear();
+	g_linkFromKind.clear();
+}
+
 void SetOwnSelection(const std::string& kind, const std::string& id) {
-	if (id.empty()) { ClearOwnSelection(); return; }
+	if (id.empty()) {
+		ClearOwnSelection();
+		ClearLinkMode();
+		return;
+	}
+	if (g_linkMode && (kind != g_linkFromKind || id != g_linkFromId)) {
+		ClearLinkMode();
+	}
 	g_ownSelKind = kind;
 	g_ownSelId = id;
 }
@@ -1896,6 +1942,14 @@ bool HandleSetCursor(HWND hwnd) {
 	::ScreenToClient(hwnd, &pt);
 
 	bool overChromeWidget = ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt);
+	if (g_linkMode && !overChromeWidget && ::PtInRect(&g_chartScreenRect, screenPt)) {
+		HtHit hit = HitTestClientPoint(pt);
+		if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
+			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone) {
+			::SetCursor(::LoadCursor(NULL, IDC_CROSS));
+			return true;
+		}
+	}
 	HtZone zone = HtZone::Outside;
 	if (!overChromeWidget) {
 		if (!::PtInRect(&g_chartScreenRect, screenPt)) return false; // truly outside: default cursor
@@ -2768,9 +2822,27 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 					dy >= -kDragThresholdPx && dy <= kDragThresholdPx);
 				if (isClick) {
 					HtHit hit = HitTestClientPoint(g_mouseDownPt);
-					ApplyClickSelection(hit);
-					SyncSelectionChromeFromOwnSelection();
-					RequestOverlayRepaint();
+					if (g_linkMode) {
+						if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
+							hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone) {
+							if (!hit.id.empty()) {
+								CommitLinkTarget(hit.id);
+							} else {
+								ClearLinkMode();
+								ApplyClickSelection(hit);
+								SyncSelectionChromeFromOwnSelection();
+							}
+						} else {
+							ClearLinkMode();
+							ApplyClickSelection(hit);
+							SyncSelectionChromeFromOwnSelection();
+						}
+						RequestOverlayRepaint();
+					} else {
+						ApplyClickSelection(hit);
+						SyncSelectionChromeFromOwnSelection();
+						RequestOverlayRepaint();
+					}
 				}
 			}
 		} else {
@@ -3334,6 +3406,28 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		g.DrawString(tip.c_str(), -1, &tipFont, RectF((REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH), &tipFmt, &tipText);
 	}
 
+	if (g_linkMode && g_appBarShown && g_appBarGeomValid) {
+		const wchar_t* hint = L"Link: click a target task \x00b7 Esc cancels";
+		Gdiplus::Font hintFont(L"Segoe UI", g_tooltipFontPx, FontStyleRegular, UnitPixel);
+		RectF hintBounds;
+		g.MeasureString(hint, -1, &hintFont, PointF(0, 0), &hintBounds);
+		int tipPad = g_tooltipPad;
+		int tipW = (int)hintBounds.Width + tipPad * 2;
+		int tipH = (int)hintBounds.Height + tipPad * 2;
+		int cx = (g_appBarLastRect.left + g_appBarLastRect.right) / 2 - g_windowOriginX;
+		int tipY = g_appBarLastRect.top - g_windowOriginY - tipH - Scale(8);
+		int tipX = cx - tipW / 2;
+		GraphicsPath hintPath;
+		AddRoundRect(hintPath, (REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH, 3.0f);
+		SolidBrush hintBg(GpToken(255, gt::ink));
+		g.FillPath(&hintBg, &hintPath);
+		StringFormat hintFmt;
+		hintFmt.SetAlignment(StringAlignmentCenter);
+		hintFmt.SetLineAlignment(StringAlignmentCenter);
+		SolidBrush hintText(GpToken(255, gt::surface));
+		g.DrawString(hint, -1, &hintFont, RectF((REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH), &hintFmt, &hintText);
+	}
+
 	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
 
 	RECT frame = g_frameRect;
@@ -3538,6 +3632,7 @@ void HideOverlay() {
 	g_buttonsValid = false;
 	ClearSelectionState();
 	ClearOwnSelection();
+	ClearLinkMode();
 	CloseCardEditor(); // chart/slide went away (or is hidden): no editor can stay meaningfully open
 	UnregisterAllHotkeys(L"HideOverlay"); // no selection left to Delete/Nudge; release any stolen keys
 
@@ -4183,6 +4278,17 @@ void HandleAppBarCommand(int cmd) {
 		return;
 	}
 
+	if (cmd == HtCmd_InsertNote && g_ownSelKind.empty() && g_app && !g_mutating) {
+		HtMenuOp op = MapBackgroundAppBarCommand(cmd);
+		if (op.opKind == HtOpKind::InsertFreeNote) {
+			HtHit hit;
+			HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
+			g_appBarValid = false;
+			RequestOverlayRepaint();
+		}
+		return;
+	}
+
 	if (g_ownSelKind == "ROW" && !g_ownSelId.empty()) {
 		HtMenuOp op = MapRowAppBarCommand(cmd);
 		if (op.opKind == HtOpKind::RenameRow) {
@@ -4222,6 +4328,14 @@ void HandleAppBarCommand(int cmd) {
 				}
 			}
 			OvLog(L"appbar Edit: no hit rect for selection");
+			return;
+		}
+		if (op.opKind == HtOpKind::EnterLinkMode) {
+			g_linkMode = true;
+			g_linkFromId = g_ownSelId;
+			g_linkFromKind = g_ownSelKind;
+			g_appBarValid = false;
+			RequestOverlayRepaint();
 			return;
 		}
 		if (op.opKind != HtOpKind::None) {
@@ -4346,6 +4460,39 @@ void HandleAppBarCommand(int cmd) {
 	HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
 	g_appBarValid = false;
 	RequestOverlayRepaint();
+}
+
+// Commit a dependency edge picked in link mode (B7.1). Clears link mode
+// before mutating; keeps the source selection on success or silent rejection.
+void CommitLinkTarget(const std::string& targetId) {
+	if (!g_linkMode || g_linkFromId.empty() || !g_app || g_mutating) return;
+	const std::string fromId = g_linkFromId;
+	const std::string fromKind = g_linkFromKind;
+	ClearLinkMode();
+	g_mutating = true;
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (json.empty()) { g_mutating = false; return; }
+		PpDocument doc = DocumentFromJson(json);
+		const std::string depId = AddDependency(doc, fromId, targetId);
+		if (!depId.empty()) {
+			RebuildChart(doc, fromId);
+			SetOwnSelection(fromKind, fromId);
+			RequestOverlayRepaint();
+		} else {
+			SetOwnSelection(fromKind, fromId);
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error during link commit");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error during link commit");
+	}
+	catch (...) {
+		OvLog(L"unknown error during link commit");
+	}
+	g_mutating = false;
 }
 
 // Single choke point for every user-gesture commit (drag, create, toolbar
@@ -4770,6 +4917,23 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			if (changed) { selectKind = noteKind; selectId = hit.id; }
 			break;
 		}
+		case HtOpKind::Unlink: {
+			const int removed = RemoveDependenciesTouching(doc, hit.id);
+			changed = removed > 0;
+			if (changed) {
+				selectId = hit.id;
+				selectKind = (hit.kind == HtItemKind::Milestone) ? "MILESTONE" : "TASK";
+			}
+			break;
+		}
+		case HtOpKind::InsertFreeNote: {
+			std::string rowId, dateISO;
+			DefaultFreeNoteCellAtVisibleCenter(rowId, dateISO);
+			selectId = AddText(doc, "Note", "", rowId, dateISO);
+			changed = !selectId.empty();
+			if (changed) selectKind = "TEXT";
+			break;
+		}
 		case HtOpKind::AddRow: {
 			// needsRowId => "Add Row Below" (afterRowId = hit.rowId); the
 			// background "Add Row" command has needsRowId == false and
@@ -5025,12 +5189,12 @@ void Tick() {
 		bool mouseStateChanged = leftButtonDown != g_lastLeftButtonDown;
 		g_lastLeftButtonDown = leftButtonDown;
 
-		// VK_ESCAPE cancels an in-progress capture gesture (drag or pending
-		// click) — it does NOT touch the internal selection itself. General
-		// Esc (deselecting a made selection) is a later unit. Latency is
-		// bounded by the 150ms tick period (by design — this is tick-polled,
-		// not event-driven).
-		if (g_captureActive && (::GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
+		// VK_ESCAPE cancels link mode first (B7.1), then an in-progress capture
+		// gesture (drag or pending click). Latency is bounded by the 150ms tick.
+		if (g_linkMode && (::GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
+			ClearLinkMode();
+			RequestOverlayRepaint();
+		} else if (g_captureActive && (::GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
 			g_captureActive = false;
 			CancelDragGesture();
 			if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
@@ -5283,6 +5447,7 @@ void OverlayStop() {
 	g_lastKind.clear();
 	ClearSelectionState();
 	ClearOwnSelection();
+	ClearLinkMode();
 	ClearHoverState();
 	g_buttonsValid = false;
 	g_rowBands.clear();
@@ -5326,6 +5491,13 @@ void Overlay_InvalidateAppBarForTest() {
 	g_appBarModelDirty = true;
 }
 
+bool Overlay_IsLinkModeForTest() { return g_linkMode; }
+
+void Overlay_CancelLinkModeForTest() {
+	ClearLinkMode();
+	RequestOverlayRepaint();
+}
+
 void Overlay_SelectForTest(const char* kind, const char* id) {
 	if (!kind || !*kind) { ClearOwnSelection(); Overlay_InvalidateAppBarForTest(); return; }
 	SetOwnSelection(kind, id ? id : "");
@@ -5354,6 +5526,8 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "{";
 	s += "\"ownSelKind\":\"" + g_ownSelKind + "\",";
 	s += "\"ownSelId\":\"" + g_ownSelId + "\",";
+	s += "\"linkMode\":" + std::string(g_linkMode ? "true" : "false") + ",";
+	s += "\"linkFromId\":\"" + g_linkFromId + "\",";
 	s += "\"rowBands\":[";
 	for (size_t i = 0; i < g_rowBands.size(); ++i) {
 		const auto& b = g_rowBands[i];

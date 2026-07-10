@@ -101,6 +101,10 @@ bool OverlayAppBarButtonRectForTest(int cmd, RECT* outScreenRect);
 // Overlay_SelectForTest drives a new selection context. Never touches COM.
 void Overlay_InvalidateAppBarForTest();
 
+// Test hooks for S5 link mode (B7.1). Never touches COM.
+bool Overlay_IsLinkModeForTest();
+void Overlay_CancelLinkModeForTest();
+
 // Rich state dump for agent feedback loop: returns a JSON string (static buffer)
 // with current chrome state for reports: own selection, row bands (with rects),
 // drag/gesture state, app bar visibility, visible chrome elements, etc.

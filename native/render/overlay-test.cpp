@@ -52,12 +52,14 @@
 //                       label cycle, milestone note) with verify+retry posts;
 //                       runs BEFORE ROWSEL (ROWSEL's undo probe bricks overlay
 //                       tracking) ⇒ `TASKCTX PASS`.
-//   Stage 16: ROWSEL   — rail row selection, row app-bar ops, delete hotkey
+//   Stage 16: DEP      — link mode (Link → target click → dep in PP_DOC +
+//                       connector shape), Esc cancel path, Unlink ⇒ `DEP PASS`.
+//   Stage 17: ROWSEL   — rail row selection, row app-bar ops, delete hotkey
 //                       cascade, and PP_ROWY band coverage for a row with no
 //                       ROW_LABEL shape; undo-entry verification runs LAST via
 //                       PP_DOC reads only (ExecuteMso Undo bricks overlay
 //                       chart tracking — see undo-recovery-spike) ⇒ `ROWSEL PASS`.
-//   Stage 17: MARKERMGMT — insert marker via app-bar INSERT group, select it,
+//   Stage 18: MARKERMGMT — insert marker via app-bar INSERT group, select it,
 //                       Delete hotkey removes it ⇒ `MARKERMGMT PASS`.
 //
 //   ppoverlay.exe <output.png>
@@ -265,6 +267,63 @@ static const PpMilestone* FindMilestoneInDoc(const PpDocument& doc, const char* 
 static const PpMarker* FindMarkerInDoc(const PpDocument& doc, const char* id) {
 	for (const auto& m : doc.markers) if (m.id == id) return &m;
 	return nullptr;
+}
+
+static bool DocHasDep(const PpDocument& doc, const char* from, const char* to,
+	const char* type = "finish-to-start") {
+	for (const auto& d : doc.deps) {
+		if (d.from == from && d.to == to && d.type == type) return true;
+	}
+	return false;
+}
+
+static size_t CountDepsTouching(const PpDocument& doc, const char* id) {
+	size_t n = 0;
+	for (const auto& d : doc.deps) {
+		if (d.from == id || d.to == id) ++n;
+	}
+	return n;
+}
+
+static bool ChartHasDepShape(PowerPoint::ShapePtr chartRoot, IDispatch* app,
+	const char* from, const char* to) {
+	if (!chartRoot || !app) return false;
+	std::string json = ReadGanttFromSlide(app);
+	PpDocument doc = DocumentFromJson(json);
+	std::string depId;
+	for (const auto& d : doc.deps) {
+		if (d.from == from && d.to == to) { depId = d.id; break; }
+	}
+	if (depId.empty()) return false;
+	std::wstring wid(depId.begin(), depId.end());
+	return FindChartChildByKindId(chartRoot, L"DEP", wid.c_str()) != nullptr;
+}
+
+static bool ClickOverlayTask(IDispatch* app, HWND ov, PowerPoint::ShapePtr chartRoot,
+	const wchar_t* taskId, const char* expectIdUtf8) {
+	PowerPoint::ShapePtr sh = FindChartChildByKindId(chartRoot, L"TASK", taskId);
+	if (!sh) return false;
+	POINT screenPt = {};
+	if (!ShapeScreenCenter(app, sh, &screenPt)) return false;
+	POINT clientPt = screenPt;
+	::ScreenToClient(ov, &clientPt);
+	SetOverlayCursorOverride(screenPt);
+	LPARAM lp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+	for (int attempt = 1; attempt <= 2; ++attempt) {
+		::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+		::PostMessageW(ov, WM_LBUTTONUP, 0, lp);
+		PumpFor(700);
+		if (Overlay_GetSelectedKindForTest() == OVERLAY_SELKIND_TASK_FOR_TEST
+			&& Overlay_GetSelectedIdForTest()
+			&& std::strcmp(Overlay_GetSelectedIdForTest(), expectIdUtf8) == 0) {
+			return true;
+		}
+		if (attempt == 1) {
+			wprintf(L"DEP diag: select %ls retry\n", taskId);
+			PumpFor(400);
+		}
+	}
+	return false;
 }
 
 // Detached watchdog: if anything hangs (modal PowerPoint dialog, COM stall),
@@ -2565,7 +2624,193 @@ int wmain(int argc, wchar_t** argv) {
 				if (!pass) rc = 1;
 			}
 
-			// ---- stage 16: ROWSEL -----------------------------------------------
+			// ---- stage 16: DEP --------------------------------------------------
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				const char* kFrom = "t1";
+				const char* kTo = "t2";
+				const char* kOther = "t3";
+				int failStep = 0;
+				try {
+					HWND ov = OverlayHwnd();
+					HWND ab = OverlayAppBarHwnd();
+					PowerPoint::ShapePtr chartRoot = RefetchChartRoot(app);
+					if (!ov || !ab || !chartRoot) {
+						failStep = 0;
+						wprintf(L"DEP FAIL preconditions (ov=%d ab=%d chart=%d)\n",
+							ov ? 1 : 0, ab ? 1 : 0, chartRoot ? 1 : 0);
+					} else {
+						auto PostAppBarClick = [&](int cmd) -> bool {
+							RECT r = {};
+							if (!OverlayAppBarButtonRectForTest(cmd, &r)) return false;
+							POINT pt = { (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+							::ScreenToClient(ab, &pt);
+							LPARAM lp = MAKELPARAM((short)pt.x, (short)pt.y);
+							::PostMessageW(ab, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+							::PostMessageW(ab, WM_LBUTTONUP, 0, lp);
+							return true;
+						};
+
+						bool step1 = ClickOverlayTask(app, ov, chartRoot, L"t1", kFrom);
+						if (!step1) {
+							failStep = 1;
+							wprintf(L"DEP FAIL step1 select t1\n");
+						}
+
+						bool step2 = false;
+						if (step1) {
+							Overlay_InvalidateAppBarForTest();
+							PumpFor(300);
+							for (int attempt = 1; attempt <= 2 && !step2; ++attempt) {
+								if (attempt > 1) wprintf(L"DEP diag: Link retry attempt %d\n", attempt);
+								if (!PostAppBarClick(HtCmd_Link)) {
+									failStep = 2;
+									wprintf(L"DEP FAIL step2 could not click Link\n");
+									break;
+								}
+								PumpFor(600);
+								step2 = Overlay_IsLinkModeForTest();
+							}
+							if (!step2 && failStep == 0) {
+								failStep = 2;
+								wprintf(L"DEP FAIL step2 link mode not active\n");
+							}
+						}
+
+						bool step3 = false;
+						if (step2) {
+							chartRoot = RefetchChartRoot(app);
+							PowerPoint::ShapePtr t2Shape = FindChartChildByKindId(chartRoot, L"TASK", L"t2");
+							if (!t2Shape) {
+								failStep = 3;
+								wprintf(L"DEP FAIL step3 t2 shape missing\n");
+							} else {
+								POINT screenPt = {};
+								if (!ShapeScreenCenter(app, t2Shape, &screenPt)) {
+									failStep = 3;
+									wprintf(L"DEP FAIL step3 t2 screen point\n");
+								} else {
+									POINT clientPt = screenPt;
+									::ScreenToClient(ov, &clientPt);
+									SetOverlayCursorOverride(screenPt);
+									LPARAM lp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+									for (int attempt = 1; attempt <= 2 && !step3; ++attempt) {
+										if (attempt > 1) wprintf(L"DEP diag: target click retry %d\n", attempt);
+										::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+										::PostMessageW(ov, WM_LBUTTONUP, 0, lp);
+										PumpFor(900);
+										chartRoot = RefetchChartRoot(app);
+										std::string docJson = ReadGanttFromSlide(app);
+										PpDocument doc = DocumentFromJson(docJson);
+										step3 = DocHasDep(doc, kFrom, kTo)
+											&& ChartHasDepShape(chartRoot, app, kFrom, kTo)
+											&& !Overlay_IsLinkModeForTest();
+									}
+									if (!step3) {
+										failStep = 3;
+										wprintf(L"DEP FAIL step3 dep t1->t2 (doc=%d shape=%d linkMode=%d)\n",
+											DocHasDep(DocumentFromJson(ReadGanttFromSlide(app)), kFrom, kTo) ? 1 : 0,
+											ChartHasDepShape(chartRoot, app, kFrom, kTo) ? 1 : 0,
+											Overlay_IsLinkModeForTest() ? 1 : 0);
+									}
+								}
+							}
+						}
+
+						bool step4 = false;
+						if (step3) {
+							size_t depsBefore = 0;
+							{
+								PpDocument doc = DocumentFromJson(ReadGanttFromSlide(app));
+								depsBefore = doc.deps.size();
+							}
+							bool reLink = false;
+							if (!ClickOverlayTask(app, ov, RefetchChartRoot(app), L"t1", kFrom)) {
+								failStep = 4;
+								wprintf(L"DEP FAIL step4 re-select t1\n");
+							} else {
+								Overlay_InvalidateAppBarForTest();
+								PumpFor(300);
+								reLink = PostAppBarClick(HtCmd_Link);
+								PumpFor(600);
+								if (!reLink || !Overlay_IsLinkModeForTest()) {
+									failStep = 4;
+									wprintf(L"DEP FAIL step4 re-enter link mode\n");
+								} else {
+									Overlay_CancelLinkModeForTest();
+									PumpFor(400);
+									chartRoot = RefetchChartRoot(app);
+									PowerPoint::ShapePtr t3Shape = FindChartChildByKindId(chartRoot, L"TASK", L"t3");
+									if (!t3Shape) {
+										failStep = 4;
+										wprintf(L"DEP FAIL step4 t3 shape missing\n");
+									} else {
+										POINT screenPt = {};
+										ShapeScreenCenter(app, t3Shape, &screenPt);
+										POINT clientPt = screenPt;
+										::ScreenToClient(ov, &clientPt);
+										SetOverlayCursorOverride(screenPt);
+										LPARAM lp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+										::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+										::PostMessageW(ov, WM_LBUTTONUP, 0, lp);
+										PumpFor(800);
+										PpDocument docAfter = DocumentFromJson(ReadGanttFromSlide(app));
+										step4 = docAfter.deps.size() == depsBefore
+											&& !Overlay_IsLinkModeForTest();
+										if (!step4) {
+											failStep = 4;
+											wprintf(L"DEP FAIL step4 cancel path (deps %zu expected %zu linkMode=%d)\n",
+												docAfter.deps.size(), depsBefore, Overlay_IsLinkModeForTest() ? 1 : 0);
+										}
+									}
+								}
+							}
+						}
+
+						bool step5 = false;
+						if (step4) {
+							if (!ClickOverlayTask(app, ov, RefetchChartRoot(app), L"t1", kFrom)) {
+								failStep = 5;
+								wprintf(L"DEP FAIL step5 select t1 for unlink\n");
+							} else {
+								Overlay_InvalidateAppBarForTest();
+								PumpFor(300);
+								for (int attempt = 1; attempt <= 2 && !step5; ++attempt) {
+									if (attempt > 1) wprintf(L"DEP diag: Unlink retry %d\n", attempt);
+									if (!PostAppBarClick(HtCmd_Unlink)) {
+										failStep = 5;
+										wprintf(L"DEP FAIL step5 could not click Unlink\n");
+										break;
+									}
+									PumpFor(900);
+									chartRoot = RefetchChartRoot(app);
+									PpDocument doc = DocumentFromJson(ReadGanttFromSlide(app));
+									step5 = CountDepsTouching(doc, kFrom) == 0;
+								}
+								if (!step5 && failStep == 0) {
+									failStep = 5;
+									wprintf(L"DEP FAIL step5 unlink (touching=%zu)\n",
+										CountDepsTouching(DocumentFromJson(ReadGanttFromSlide(app)), kFrom));
+								}
+							}
+						}
+
+						pass = step1 && step2 && step3 && step4 && step5;
+						if (!pass && failStep == 0) failStep = 1;
+						if (!pass) {
+							const char* dump = Overlay_DumpChromeStateForTest();
+							wprintf(L"DEP FAIL step%d chrome: %hs\n", failStep, dump ? dump : "(null)");
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"DEP FAIL COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"DEP PASS\n" : L"DEP FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 17: ROWSEL -----------------------------------------------
 			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;
