@@ -838,3 +838,83 @@ visual review PENDING at the user's convenience (continuing to S4 per the
 user's run-to-completion directive; review artifacts: ab-row.png app-bar ROW
 context, visual-s1.png, feedback-s3-row-selection.json from the bridge).
 Dispatching next: s4-task-context.
+
+### Self-review checkpoint #2 (after feedback-loop-tooling, s3-row-selection, s5-dep-ops)
+
+Reviewer verdicts folded into the s4-task-context spec (_spec-s4-task-context.md):
+- HIGH dangling-deps: DeleteById milestone branch + row cascade never remove
+  deps touching milestones (c6e7a7a made milestones dep endpoints) -> pure-ops
+  fix + tests ships INSIDE s4, must precede s5-link-mode.
+- HIGH stage topology: ROWSEL terminal undo probe bricks the overlay; ALL new
+  stages (TASKCTX/MARKERMGMT/DEP) must insert BEFORE ROWSEL. Pinned in spec.
+- MED retry masking: driver gains retry_diags counting `diag:` lines so
+  retry-reliant passes are visible to the bridge (in s4 spec).
+- MED dead Grid button in every context -> wired in s4 (CycleGrid global
+  branch); dead ternary Overlay.cpp:4138 fixed in s4.
+- MED RebaseRowYJson Y-stretch heuristic breaks if shapes extend below the
+  last lane (free TEXT dragged low; S5 connectors) -> NOTE FOR s5-link-mode
+  SPEC: connectors must not extend the group bbox below the last row lane, or
+  the rebase needs a smarter content-height source.
+- Verified clean: no cumulative PP_ROWY drift (regenerated per commit); scale/
+  labels work with ROW selected; undo-recovery-spike is parallel, not a
+  blocker, BUT s5-link-mode's one-undo assert needs the single terminal slot
+  (or a dedicated terminal UNDO stage covering one op per context).
+Bridge run: feedback-s3-row-selection.json PASS, 3rd consecutive all-green
+suite. Dispatched: s4-task-context (cursor).
+
+### s4-task-context — DONE (7b0fba1)
+
+Gate green from clean rebuild: GATE-PURE 14 markers (new TASKCTX MAP OK,
+DEP OPS OK merged) + conformance; ppoverlay 16 stages green TWICE (TASKCTX
+inserted before ROWSEL per review HIGH-2); ppreflow green. PRODUCT FIX the
+read-back AC caught: in-place reconcile never synced fill/line colors -
+swatch changes left stale bars on frame-preserving rebuilds; SyncShapeStyle
+now mirrors emitter writes. Review HIGH-1 dangling-deps fix landed (milestone
++ row-cascade delete now strip touching deps). Grid button wired (was dead).
+Driver gains retry_diags. Watchdog 720s. OPERATIONAL NOTE: environment-level
+process kills (job-object teardown of background shells) corrupted two run-2
+attempts mid-suite - fixed by launching harness exes via WMI Win32_Process
+Create (orphaned from the job); pattern recorded for all future long gates.
+Dispatched: s4-marker-mgmt (cursor).
+
+### N9 V4 — PROGRAMMATIC COMPLETION (s6-final, 2026-07-10)
+
+All 14 units across 6 slices delivered and gated. Commit ledger:
+- S1: e3693dd s1-theme-tokens · 149df5f s1-visual-gate · 885bf01
+  s1-rail-labels · becd2b6 s1-hier-axis (user-reviewed 2026-07-05)
+- S2: 418bc42 s2-appbar-model · fc1b556 s2-appbar-window · 277221d
+  s2-appbar-fix
+- Tooling: 0784a7c feedback-loop-tooling (grok iteration, coordinator-
+  hardened) · 509ac1b S3 bookkeeping
+- S3: 2ac535c s3-row-ops · 017ea75 s3-row-selection
+- S5 (early): c6e7a7a s5-dep-ops (parallel worktree)
+- S4: 7b0fba1 s4-task-context · 761d8d2 s4-marker-mgmt
+- S5: ca4b9bb s5-link-mode
+- S6: fa71bdd s6-menus · s6-final (this commit)
+
+Final suite from CLEAN rebuild (AC1): 14 ops markers (OPS HARNESS · DPI
+HELPER · MENU MAP V4 · CURSOR MAP · MARKER OPS · TEXT OPS · THEME TOKENS ·
+LABEL OPS · GRID OPS · APPBAR MODEL · ROW OPS · ROW APPBAR MAP · TASKCTX MAP
+· DEP OPS all OK) + conformance 1/1 + ppoverlay 18 stages ALL PASS (ALPHA
+CAPTURE SUPPRESS OWNSEL DRAG DRAGROW CREATE INPLACE KEYS EDITOR SCOPE
+MARKERDRAG TEXTELEM APPBAR TASKCTX DEP ROWSEL MARKERMGMT) + INPUT NEUTRAL OK
++ ppreflow (FIT · FITPERSIST · REFLOW · SHAPE PROPS · VISUAL S1 OK · VISUAL
+S6 OK).
+
+Product fixes discovered by the gates along the way: S1 row-highlight defect
+(PP_ROWY model-derived bands), B2.1 rail-name click selection, reconcile
+fill/line color sync (swatches were inert in-place), dangling deps on
+milestone/row delete, dead Grid button, zombie CHART_ROOT re-acquire after
+external undo, milestone-only rows losing their lane.
+
+OPEN (user decisions / later units): AC2 user visual pass S2-S6 (mockup
+comparison, DPI 100/150%, slideshow spot check); undo-recovery-spike
+(mitigated by zombie-skip - overlay now recovers - transient gap remains);
+N7 small follow-ups; N6 installer; suppression true-prevention spike (S1
+finding, unscheduled).
+
+Loop stats: 8 committed units this session, 4 coordinator fix-loop themes
+(coordinate spaces, COM object lifetimes, message delivery, C++ decl order),
+2 environment pathologies neutralized (job-object kills -> WMI-orphaned
+gates; cursor RPC timeout -> detached quiescence polling). The mockup is now
+the implementation.

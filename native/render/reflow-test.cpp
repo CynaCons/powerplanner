@@ -275,16 +275,24 @@ int wmain(int argc, wchar_t** argv) {
 			wchar_t exePath[MAX_PATH]; ::GetModuleFileNameW(NULL, exePath, MAX_PATH);
 			std::wstring dir(exePath);
 			size_t slash = dir.find_last_of(L"\\/");
-			std::wstring pngPath = (slash == std::wstring::npos ? L"" : dir.substr(0, slash + 1)) + L"visual-s1.png";
-			::DeleteFileW(pngPath.c_str());
-			PowerPoint::_SlidePtr sv = app->GetActiveWindow()->GetView()->GetSlide();
-			sv->Export(_bstr_t(pngPath.c_str()), _bstr_t(L"PNG"), 1280, 720);
-			DWORD attr = ::GetFileAttributesW(pngPath.c_str());
-			if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
-				wprintf(L"VISUAL S1 OK -> %s\n", pngPath.c_str());
-			} else {
-				wprintf(L"VISUAL FAIL\n");
-				rc = 1;
+			std::wstring base = (slash == std::wstring::npos ? L"" : dir.substr(0, slash + 1));
+			// s6-final exports the SAME slide under both slice names: S1 keeps
+			// the regression-floor marker; S6 is the final-sweep artifact the
+			// user reviews against the mockup.
+			const wchar_t* names[] = { L"visual-s1.png", L"visual-s6.png" };
+			const wchar_t* markers[] = { L"VISUAL S1 OK", L"VISUAL S6 OK" };
+			for (int vi = 0; vi < 2; ++vi) {
+				std::wstring pngPath = base + names[vi];
+				::DeleteFileW(pngPath.c_str());
+				PowerPoint::_SlidePtr sv = app->GetActiveWindow()->GetView()->GetSlide();
+				sv->Export(_bstr_t(pngPath.c_str()), _bstr_t(L"PNG"), 1280, 720);
+				DWORD attr = ::GetFileAttributesW(pngPath.c_str());
+				if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+					wprintf(L"%s -> %s\n", markers[vi], pngPath.c_str());
+				} else {
+					wprintf(L"VISUAL FAIL\n");
+					rc = 1;
+				}
 			}
 		}
 

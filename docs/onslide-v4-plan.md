@@ -289,7 +289,7 @@ today without any new work — your gate is the NEW marker.*
     "Delete row" / `HtCmd_DeleteRow`) so a registry-wide regression cannot
     self-validate.
   - AC2 ⚙ GATE-FULL floor green (menus are covered purely; no new stage).
-- [ ] **s6-final** — Full-suite validation from clean rebuild; export
+- [x] **s6-final** — Full-suite validation from clean rebuild; export
   `visual-s6.png`; update `PLAN.md` N9 checkboxes; write a completion summary
   in `docs/on-slide-coordinator-log.md` listing every commit hash.
   - AC1 ⚙ GATE-FULL exit 0 with the complete marker set: floor + `THEME

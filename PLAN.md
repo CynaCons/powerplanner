@@ -566,7 +566,14 @@ paths, golden self-seeding, exit codes — coordinator log
 - [x] S5 Dependencies + notes — link mode, unlink, note entry points
       (s5-dep-ops c6e7a7a · s5-link-mode, gates green twice 2026-07-10;
       **awaiting user visual review**)
-- [ ] S6 Menus from the shared registry + final sweep (s6-menus · s6-final)
+- [x] S6 Menus from the shared registry + final sweep (s6-menus fa71bdd ·
+      s6-final). **N9 V4 PROGRAMMATIC COMPLETION 2026-07-10**: full suite
+      from clean rebuild — 14 ops markers (incl MENU MAP V4 OK) +
+      conformance 1/1 + 18 harness stages (APPBAR ROWSEL TASKCTX MARKERMGMT
+      DEP added) + INPUT NEUTRAL OK + FIT/FITPERSIST/REFLOW/SHAPE PROPS +
+      VISUAL S1/S6 OK. **Remaining: user visual pass (AC2 — mockup
+      comparison, DPI 100/150%, slideshow spot check) at all slice
+      boundaries S2–S6.**
 
 **S1 visual-review findings (2026-07-05) — user-reported on the live showcase;
 root-caused in `Overlay.cpp`, tracked for the slices noted:**
