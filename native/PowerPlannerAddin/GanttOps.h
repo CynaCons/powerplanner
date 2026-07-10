@@ -97,4 +97,19 @@ bool SetTextLabel(PpDocument& doc, const std::string& id, const std::string& lab
 bool MoveText(PpDocument& doc, const std::string& id, float dx, float dy,
 	const std::string& rowId = "", const std::string& dateISO = "");
 
+// --- S5 dependency operations (pure) ---
+// Adds a dependency edge between two EXISTING task or milestone ids. `type`
+// is one of finish-to-start | start-to-start | finish-to-finish |
+// start-to-finish (empty string is accepted and normalized to
+// "finish-to-start"). Rejections (return ""): from == to; either endpoint is
+// not an existing task/milestone id; a dep with the same from AND to already
+// exists (one edge per pair, regardless of type); any other type string.
+// On success generates a unique id ("dep<N>") and returns it, mirroring
+// AddMarker/AddText's id-return convention.
+std::string AddDependency(PpDocument& doc, const std::string& from, const std::string& to,
+	const std::string& type = "finish-to-start");
+// Erases every dependency whose from OR to equals id. Returns the number of
+// dependencies removed (0 when none touch the id).
+int RemoveDependenciesTouching(PpDocument& doc, const std::string& id);
+
 int OpsSelfTest();

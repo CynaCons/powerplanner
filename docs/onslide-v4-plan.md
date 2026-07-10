@@ -256,7 +256,7 @@ freshly inserted chart resemble the mockup.*
 ### S5 — Dependencies + note entry points
 *Spec: R6 (entry points), R7.*
 
-- [ ] **s5-dep-ops** — Pure ops `AddDependency(doc, from, to, type="finish-to-start")`
+- [x] **s5-dep-ops** — Pure ops `AddDependency(doc, from, to, type="finish-to-start")`
   (reject self/dup/missing; from/to may be task or milestone ids) +
   `RemoveDependenciesTouching(doc, id)`. Marker `DEP OPS OK`.
   - AC1 ⚙ `DEP OPS OK`; GATE-PURE exit 0.

@@ -1304,6 +1304,106 @@ static bool RunRowOpsChecks() {
 	return ok;
 }
 
+// S5 s5-dep-ops: pure dependency operations (AddDependency with
+// self/dup/missing-endpoint/bad-type rejection, RemoveDependenciesTouching).
+// Print 'DEP OPS OK' when these pass.
+static PpDocument DepOpsDoc() {
+	PpDocument d;
+	d.rows.push_back(PpRow{"r1", "Row 1", "", false});
+	d.tasks.push_back(PpTask{"t1", "Task 1", "2026-01-01", "2026-01-05", "r1", "", 0});
+	d.tasks.push_back(PpTask{"t2", "Task 2", "2026-01-06", "2026-01-10", "r1", "", 0});
+	d.tasks.push_back(PpTask{"t3", "Task 3", "2026-01-11", "2026-01-15", "r1", "", 0});
+	d.milestones.push_back(PpMilestone{"m1", "MS 1", "2026-01-20", "r1", ""});
+	return d;
+}
+static bool DepPresent(const PpDocument& d, const std::string& id,
+	const std::string& from, const std::string& to, const std::string& type) {
+	for (const auto& dep : d.deps) {
+		if (dep.id == id) return dep.from == from && dep.to == to && dep.type == type;
+	}
+	return false;
+}
+
+static bool RunDepOpsChecks() {
+	bool ok = true;
+
+	// --- AddDependency: task -> task, type defaulted ---
+	{
+		PpDocument d = DepOpsDoc();
+		std::string id = AddDependency(d, "t1", "t2");
+		ok = Check(!id.empty(), "AddDependency task->task returns a fresh id") && ok;
+		ok = Check(d.deps.size() == 1 && DepPresent(d, id, "t1", "t2", "finish-to-start"), "AddDependency defaults type to finish-to-start and appends the dep") && ok;
+
+		// Empty type string normalizes to the default too.
+		std::string id2 = AddDependency(d, "t2", "t3", "");
+		ok = Check(!id2.empty() && DepPresent(d, id2, "t2", "t3", "finish-to-start"), "AddDependency normalizes empty type to finish-to-start") && ok;
+	}
+
+	// --- AddDependency: task -> milestone (and explicit non-default type) ---
+	{
+		PpDocument d = DepOpsDoc();
+		std::string id = AddDependency(d, "t1", "m1", "start-to-start");
+		ok = Check(!id.empty() && DepPresent(d, id, "t1", "m1", "start-to-start"), "AddDependency accepts a milestone endpoint and an explicit type") && ok;
+	}
+
+	// --- AddDependency: reject self ---
+	{
+		PpDocument d = DepOpsDoc();
+		ok = Check(AddDependency(d, "t1", "t1").empty() && d.deps.empty(), "AddDependency rejects a self edge") && ok;
+	}
+
+	// --- AddDependency: reject duplicate (from, to) pair even with another type ---
+	{
+		PpDocument d = DepOpsDoc();
+		ok = Check(!AddDependency(d, "t1", "t2").empty(), "AddDependency first edge of a pair succeeds") && ok;
+		ok = Check(AddDependency(d, "t1", "t2", "finish-to-finish").empty(), "AddDependency rejects a duplicate pair even with a different type") && ok;
+		ok = Check(d.deps.size() == 1, "AddDependency duplicate rejection leaves deps unchanged") && ok;
+		// The reverse direction is a DIFFERENT pair and stays allowed.
+		ok = Check(!AddDependency(d, "t2", "t1").empty(), "AddDependency allows the reverse-direction pair") && ok;
+	}
+
+	// --- AddDependency: reject missing endpoints (both directions) ---
+	{
+		PpDocument d = DepOpsDoc();
+		ok = Check(AddDependency(d, "missing", "t2").empty(), "AddDependency rejects a missing FROM endpoint") && ok;
+		ok = Check(AddDependency(d, "t1", "missing").empty(), "AddDependency rejects a missing TO endpoint") && ok;
+		// A row id is not a valid endpoint kind either.
+		ok = Check(AddDependency(d, "r1", "t2").empty(), "AddDependency rejects a row id as an endpoint") && ok;
+		ok = Check(d.deps.empty(), "AddDependency endpoint rejections leave deps unchanged") && ok;
+	}
+
+	// --- AddDependency: reject a bad type string ---
+	{
+		PpDocument d = DepOpsDoc();
+		ok = Check(AddDependency(d, "t1", "t2", "nonsense").empty() && d.deps.empty(), "AddDependency rejects an unknown type string") && ok;
+	}
+
+	// --- AddDependency: generated ids unique against existing dep ids ---
+	{
+		PpDocument d = DepOpsDoc();
+		d.deps.push_back(PpDependency{"dep1", "t1", "t2", "finish-to-start"});
+		std::string id = AddDependency(d, "t2", "t3");
+		ok = Check(!id.empty() && id != "dep1", "AddDependency generates an id unique against existing dep ids") && ok;
+	}
+
+	// --- RemoveDependenciesTouching ---
+	{
+		PpDocument d = DepOpsDoc();
+		std::string a = AddDependency(d, "t1", "t2");           // touches t2
+		std::string b = AddDependency(d, "t2", "t3");           // touches t2
+		std::string c = AddDependency(d, "t3", "m1");           // does NOT touch t2
+		ok = Check(!a.empty() && !b.empty() && !c.empty() && d.deps.size() == 3, "RemoveDependenciesTouching setup adds three deps") && ok;
+
+		ok = Check(RemoveDependenciesTouching(d, "t2") == 2, "RemoveDependenciesTouching returns the removed count") && ok;
+		ok = Check(d.deps.size() == 1 && d.deps[0].id == c, "RemoveDependenciesTouching keeps untouched deps") && ok;
+
+		ok = Check(RemoveDependenciesTouching(d, "t2") == 0, "RemoveDependenciesTouching returns 0 when nothing touches the id") && ok;
+		ok = Check(d.deps.size() == 1, "RemoveDependenciesTouching no-op leaves deps unchanged") && ok;
+	}
+
+	return ok;
+}
+
 static bool RunRowAppBarMapChecks() {
 	bool ok = true;
 	{
@@ -1451,6 +1551,9 @@ int main() {
 	bool rowAppBarMapOk = RunRowAppBarMapChecks();
 	ok = rowAppBarMapOk && ok;
 
+	bool depOpsOk = RunDepOpsChecks();
+	ok = depOpsOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -1489,6 +1592,9 @@ int main() {
 	}
 	if (rowAppBarMapOk) {
 		std::printf("ROW APPBAR MAP OK\n");
+	}
+	if (depOpsOk) {
+		std::printf("DEP OPS OK\n");
 	}
 	return 0;
 }

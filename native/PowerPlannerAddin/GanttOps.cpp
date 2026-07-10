@@ -28,6 +28,14 @@ bool RowExists(const PpDocument& doc, const std::string& rowId) {
 	return false;
 }
 
+// True if id names an existing task OR milestone — the only entity kinds a
+// dependency edge may connect.
+bool TaskOrMilestoneExists(const PpDocument& doc, const std::string& id) {
+	for (const auto& task : doc.tasks) if (task.id == id) return true;
+	for (const auto& ms : doc.milestones) if (ms.id == id) return true;
+	return false;
+}
+
 // True if any row in doc.rows is a child of rowId (groupId == rowId). Used by
 // IndentRow to enforce the 2-level nesting max (a row that already has
 // children cannot itself become a child).
@@ -113,7 +121,7 @@ bool DeleteById(PpDocument& doc, const std::string& id) {
 	for (const auto& task : doc.tasks) {
 		if (task.id == id) {
 			RemoveIf(doc.tasks, [&](const PpTask& t) { return t.id == id; });
-			RemoveIf(doc.deps, [&](const PpDependency& d) { return d.from == id || d.to == id; });
+			RemoveDependenciesTouching(doc, id);
 			RemoveIf(doc.texts, [&](const PpText& t) { return t.anchorId == id; });
 			return true;
 		}
@@ -345,6 +353,33 @@ bool MoveText(PpDocument& doc, const std::string& id, float dx, float dy,
 		}
 	}
 	return false;
+}
+
+// --- S5 dependency operations (pure) ---
+
+std::string AddDependency(PpDocument& doc, const std::string& from, const std::string& to,
+	const std::string& type) {
+	if (from == to) return ""; // self-edge
+	if (!TaskOrMilestoneExists(doc, from) || !TaskOrMilestoneExists(doc, to)) return "";
+	for (const auto& dep : doc.deps) {
+		if (dep.from == from && dep.to == to) return ""; // one edge per (from, to) pair
+	}
+	std::string t = type.empty() ? "finish-to-start" : type;
+	if (t != "finish-to-start" && t != "start-to-start" && t != "finish-to-finish" && t != "start-to-finish") return "";
+
+	PpDependency dep;
+	dep.id = NextId(doc, "dep");
+	dep.from = from;
+	dep.to = to;
+	dep.type = t;
+	doc.deps.push_back(dep);
+	return dep.id;
+}
+
+int RemoveDependenciesTouching(PpDocument& doc, const std::string& id) {
+	const auto oldSize = doc.deps.size();
+	RemoveIf(doc.deps, [&](const PpDependency& d) { return d.from == id || d.to == id; });
+	return (int)(oldSize - doc.deps.size());
 }
 
 bool NudgeTask(PpDocument& doc, const std::string& taskId, long deltaDays) {
