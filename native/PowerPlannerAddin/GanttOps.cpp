@@ -96,13 +96,20 @@ bool DeleteById(PpDocument& doc, const std::string& id) {
 			for (const auto& task : doc.tasks) {
 				if (task.rowId == id) deletedTaskIds.push_back(task.id);
 			}
+			std::vector<std::string> deletedMilestoneIds;
+			for (const auto& ms : doc.milestones) {
+				if (ms.rowId == id) deletedMilestoneIds.push_back(ms.id);
+			}
 
 			RemoveIf(doc.rows, [&](const PpRow& r) { return r.id == id; });
 			RemoveIf(doc.tasks, [&](const PpTask& t) { return t.rowId == id; });
 			RemoveIf(doc.milestones, [&](const PpMilestone& m) { return m.rowId == id; });
 			RemoveIf(doc.deps, [&](const PpDependency& d) {
-				return std::find(deletedTaskIds.begin(), deletedTaskIds.end(), d.from) != deletedTaskIds.end()
-					|| std::find(deletedTaskIds.begin(), deletedTaskIds.end(), d.to) != deletedTaskIds.end();
+				if (std::find(deletedTaskIds.begin(), deletedTaskIds.end(), d.from) != deletedTaskIds.end()
+					|| std::find(deletedTaskIds.begin(), deletedTaskIds.end(), d.to) != deletedTaskIds.end())
+					return true;
+				return std::find(deletedMilestoneIds.begin(), deletedMilestoneIds.end(), d.from) != deletedMilestoneIds.end()
+					|| std::find(deletedMilestoneIds.begin(), deletedMilestoneIds.end(), d.to) != deletedMilestoneIds.end();
 			});
 			RemoveIf(doc.brackets, [&](PpBracket& b) {
 				b.rowIds.erase(std::remove(b.rowIds.begin(), b.rowIds.end(), id), b.rowIds.end());
@@ -128,6 +135,7 @@ bool DeleteById(PpDocument& doc, const std::string& id) {
 	}
 
 	if (RemoveIf(doc.milestones, [&](const PpMilestone& m) { return m.id == id; })) {
+		RemoveDependenciesTouching(doc, id);
 		RemoveIf(doc.texts, [&](const PpText& t) { return t.anchorId == id; });
 		return true;
 	}

@@ -222,6 +222,10 @@ enum class HtOpKind {
 	OutdentRow,     // needsRowId
 	RenameRow,      // needsRowId
 	AddTaskAtPoint, // needsRowId; anchor day comes from the click point
+	SetTaskColor,   // needsTaskId; color set (swatch hex)
+	CycleLabelPlacement, // needsTaskId; cycles bar->rail->both->bar
+	AddNote,        // needsTaskId; anchored AddText at default offset
+	Edit,           // needsTaskId; open card editor for task/milestone
 };
 
 struct HtMenuOp {
@@ -231,6 +235,7 @@ struct HtMenuOp {
 	long nudgeDays = 0;
 	int percentDelta = 0;
 	const char* scale = ""; // "day" | "week" | "month" when opKind == SetScale
+	const char* color = ""; // "#RRGGBB" when opKind == SetTaskColor
 };
 
 // Map a chosen menu command back to the operation it represents, validating
@@ -245,6 +250,15 @@ HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind = HtItemKind::Ta
 // Pure registry for ops-test; Overlay.cpp's HandleAppBarCommand dispatches on
 // the returned opKind.
 HtMenuOp MapRowAppBarCommand(int cmdId);
+
+// Map app-bar commands issued while a TASK is selected (swatches, label cycle,
+// note, edit, delete, nudge). Pure registry for ops-test; Overlay.cpp dispatches
+// on the returned opKind.
+HtMenuOp MapTaskAppBarCommand(int cmdId);
+
+// Map app-bar commands issued while a MILESTONE is selected (nudge, note, edit,
+// delete, rename). Pure registry for ops-test.
+HtMenuOp MapMilestoneAppBarCommand(int cmdId);
 
 // ---- pure zone -> cursor mapping --------------------------------------------
 // WM_SETCURSOR needs to pick a cursor shape from the hit zone under the

@@ -48,7 +48,11 @@
 //                       re-reading PP_DOC.
 //   Stage 14: APPBAR   — scale segment clicks mutate doc.scale via the live
 //                       bottom app-bar (posted clicks to the app-bar hwnd).
-//   Stage 15: ROWSEL   — rail row selection, row app-bar ops, delete hotkey
+//   Stage 15: TASKCTX  — task/milestone app-bar commands (swatch, nudge,
+//                       label cycle, milestone note) with verify+retry posts;
+//                       runs BEFORE ROWSEL (ROWSEL's undo probe bricks overlay
+//                       tracking) ⇒ `TASKCTX PASS`.
+//   Stage 16: ROWSEL   — rail row selection, row app-bar ops, delete hotkey
 //                       cascade, and PP_ROWY band coverage for a row with no
 //                       ROW_LABEL shape; undo-entry verification runs LAST via
 //                       PP_DOC reads only (ExecuteMso Undo bricks overlay
@@ -62,6 +66,9 @@
 #include "../PowerPlannerAddin/GanttOps.h"
 #include "../PowerPlannerAddin/Overlay.h"
 #include "../PowerPlannerAddin/GanttHitTest.h"
+#include "../PowerPlannerAddin/GanttTheme.h"
+#include "../PowerPlannerAddin/GanttAppBar.h"
+#include "../PowerPlannerAddin/Scene.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes.
 #ifndef min
 #define min(a, b) (((a) < (b)) ? (a) : (b))
@@ -73,6 +80,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 #pragma comment(lib, "gdiplus.lib")
@@ -194,14 +202,72 @@ static std::string NarrowFn(const wchar_t* w) {
 	return s;
 }
 
+static PowerPoint::ShapePtr RefetchChartRoot(IDispatch* app) {
+	if (!app) return nullptr;
+	try {
+		PowerPoint::_ApplicationPtr pApp(app);
+		PowerPoint::_SlidePtr slide = pApp->GetActiveWindow()->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+		long n = shapes->GetCount();
+		for (long i = 1; i <= n; ++i) {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (k.length() && std::wstring((const wchar_t*)k) == L"CHART_ROOT") {
+				try { (void)sh->GetLeft(); return sh; }
+				catch (const _com_error&) { continue; }
+			}
+		}
+	} catch (const _com_error&) {}
+	return nullptr;
+}
+
+static PowerPoint::ShapePtr FindChartChildByKindId(PowerPoint::ShapePtr chartRoot,
+	const wchar_t* kind, const wchar_t* id) {
+	if (!chartRoot || !kind || !id) return nullptr;
+	PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+	long gn = grp->GetCount();
+	for (long j = 1; j <= gn; ++j) {
+		PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+		_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+		_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+		if (ck.length() && cid.length()
+			&& std::wstring((const wchar_t*)ck) == kind
+			&& std::wstring((const wchar_t*)cid) == id) {
+			return child;
+		}
+	}
+	return nullptr;
+}
+
+static bool ShapeScreenCenter(IDispatch* app, PowerPoint::ShapePtr sh, POINT* outScreen) {
+	if (!app || !sh || !outScreen) return false;
+	PowerPoint::_ApplicationPtr pApp(app);
+	PowerPoint::DocumentWindowPtr win = pApp->GetActiveWindow();
+	float left = sh->GetLeft(), top = sh->GetTop();
+	float w = sh->GetWidth(), h = sh->GetHeight();
+	outScreen->x = win->PointsToScreenPixelsX(left + w / 2.0f);
+	outScreen->y = win->PointsToScreenPixelsY(top + h / 2.0f);
+	return true;
+}
+
+static const PpTask* FindTaskInDoc(const PpDocument& doc, const char* id) {
+	for (const auto& t : doc.tasks) if (t.id == id) return &t;
+	return nullptr;
+}
+
+static const PpMilestone* FindMilestoneInDoc(const PpDocument& doc, const char* id) {
+	for (const auto& m : doc.milestones) if (m.id == id) return &m;
+	return nullptr;
+}
+
 // Detached watchdog: if anything hangs (modal PowerPoint dialog, COM stall),
 // kill the harness after 300s instead of leaking POWERPNT forever. Budget
-// raised from 120s for S3: the suite is now 15 COM-heavy stages (APPBAR +
-// ROWSEL added) and a single commit's reconcile can take several seconds
+// raised from 120s for S3: the suite is now 16 COM-heavy stages (APPBAR +
+// TASKCTX + ROWSEL added) and a single commit's reconcile can take several
 // under load, so full runs legitimately exceed the old budget.
 static DWORD WINAPI WatchdogProc(LPVOID) {
-	::Sleep(480000);
-	wprintf(L"WATCHDOG: 480s timeout, exiting\n");
+	::Sleep(720000);
+	wprintf(L"WATCHDOG: 720s timeout, exiting\n");
 	::ExitProcess(3);
 	return 0;
 }
@@ -2214,7 +2280,285 @@ int wmain(int argc, wchar_t** argv) {
 				if (!pass) rc = 1;
 			}
 
-			// ---- stage 15: ROWSEL -----------------------------------------------
+			// ---- stage 15: TASKCTX ----------------------------------------------
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				const char* kTaskId = "t1";
+				const char* kMsId = "m1";
+				int failStep = 0;
+				try {
+					HWND ov = OverlayHwnd();
+					HWND ab = OverlayAppBarHwnd();
+					PowerPoint::ShapePtr chartRoot = RefetchChartRoot(app);
+					if (!ov || !ab || !chartRoot) {
+						failStep = 0;
+						wprintf(L"TASKCTX FAIL preconditions (ov=%d ab=%d chart=%d)\n",
+							ov ? 1 : 0, ab ? 1 : 0, chartRoot ? 1 : 0);
+					} else {
+						auto PostAppBarClick = [&](int cmd) -> bool {
+							RECT r = {};
+							if (!OverlayAppBarButtonRectForTest(cmd, &r)) return false;
+							POINT pt = { (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+							POINT client = pt;
+							::ScreenToClient(ab, &client);
+							LPARAM lp = MAKELPARAM((short)client.x, (short)client.y);
+							::PostMessageW(ab, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+							::PostMessageW(ab, WM_LBUTTONUP, 0, lp);
+							return true;
+						};
+
+						// Step 1: select task t1 via bar click.
+						bool step1 = false;
+						PowerPoint::ShapePtr t1Shape = FindChartChildByKindId(chartRoot, L"TASK", L"t1");
+						if (!t1Shape) {
+							failStep = 1;
+							wprintf(L"TASKCTX FAIL step1 t1 shape missing\n");
+						} else {
+							POINT screenPt = {};
+							if (!ShapeScreenCenter(app, t1Shape, &screenPt)) {
+								failStep = 1;
+								wprintf(L"TASKCTX FAIL step1 screen point\n");
+							} else {
+								POINT clientPt = screenPt;
+								::ScreenToClient(ov, &clientPt);
+								SetOverlayCursorOverride(screenPt);
+								LPARAM lp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+								::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+								::PostMessageW(ov, WM_LBUTTONUP, 0, lp);
+								PumpFor(700);
+								Overlay_InvalidateAppBarForTest();
+								PumpFor(300);
+								step1 = (Overlay_GetSelectedKindForTest() == OVERLAY_SELKIND_TASK_FOR_TEST)
+									&& Overlay_GetSelectedIdForTest()
+									&& std::strcmp(Overlay_GetSelectedIdForTest(), kTaskId) == 0;
+								if (!step1) {
+									failStep = 1;
+									wprintf(L"TASKCTX FAIL step1 select t1 (kind=%d id='%hs')\n",
+										Overlay_GetSelectedKindForTest(),
+										Overlay_GetSelectedIdForTest() ? Overlay_GetSelectedIdForTest() : "(null)");
+								}
+							}
+						}
+
+						// Step 2: swatch3 -> color #7A4FA3 + bar fill blend read-back.
+						bool step2 = false;
+						if (step1) {
+							const long expFill = (long)Bgr(gt::BlendOnWhite(0x7A4FA3, 0.40f));
+							for (int attempt = 1; attempt <= 2 && !step2; ++attempt) {
+								if (attempt > 1) wprintf(L"TASKCTX diag: swatch3 retry attempt %d\n", attempt);
+								if (!PostAppBarClick(HtCmd_Swatch3)) {
+									failStep = 2;
+									wprintf(L"TASKCTX FAIL step2 could not click swatch3\n");
+									break;
+								}
+								PumpFor(800);
+								chartRoot = RefetchChartRoot(app);
+								std::string docJson = ReadGanttFromSlide(app);
+								PpDocument doc = DocumentFromJson(docJson);
+								const PpTask* t = FindTaskInDoc(doc, kTaskId);
+								bool colorOk = t && AppBarColorEquals(t->color, "#7A4FA3");
+								long taskFill = -1;
+								if (chartRoot) {
+									PowerPoint::ShapePtr t1After = FindChartChildByKindId(chartRoot, L"TASK", L"t1");
+									if (t1After) taskFill = (long)t1After->GetFill()->GetForeColor()->GetPpRGB();
+								}
+								step2 = colorOk && taskFill == expFill;
+								if (!step2 && attempt == 2) {
+									failStep = 2;
+									wprintf(L"TASKCTX FAIL step2 swatch (colorOk=%d fill=0x%06lX exp=0x%06lX)\n",
+										colorOk ? 1 : 0, taskFill, expFill);
+								}
+							}
+						}
+
+						// Step 3: +1d nudge shifts t1 dates by one day.
+						bool step3 = false;
+						if (step2) {
+							std::string docJson0 = ReadGanttFromSlide(app);
+							PpDocument doc0 = DocumentFromJson(docJson0);
+							const PpTask* t0 = FindTaskInDoc(doc0, kTaskId);
+							long start0 = t0 ? DateToDays(t0->start) : 0;
+							long end0 = t0 ? DateToDays(t0->end) : 0;
+							for (int attempt = 1; attempt <= 2 && !step3; ++attempt) {
+								if (attempt > 1) wprintf(L"TASKCTX diag: +1d retry attempt %d\n", attempt);
+								if (!PostAppBarClick(HtCmd_NudgePlus1)) {
+									failStep = 3;
+									wprintf(L"TASKCTX FAIL step3 could not click +1d\n");
+									break;
+								}
+								PumpFor(800);
+								chartRoot = RefetchChartRoot(app);
+								std::string docJson = ReadGanttFromSlide(app);
+								PpDocument doc = DocumentFromJson(docJson);
+								const PpTask* t = FindTaskInDoc(doc, kTaskId);
+								step3 = t && DateToDays(t->start) == start0 + 1 && DateToDays(t->end) == end0 + 1;
+								if (!step3 && attempt == 2) {
+									failStep = 3;
+									wprintf(L"TASKCTX FAIL step3 nudge (got %hs..%hs)\n",
+										t ? t->start.c_str() : "?", t ? t->end.c_str() : "?");
+								}
+							}
+						}
+
+						// Step 4: Label cycle bar->rail; rail dot/label present.
+						bool step4 = false;
+						if (step3) {
+							for (int attempt = 1; attempt <= 2 && !step4; ++attempt) {
+								if (attempt > 1) wprintf(L"TASKCTX diag: Label retry attempt %d\n", attempt);
+								if (!PostAppBarClick(HtCmd_CycleLabelPlacement)) {
+									failStep = 4;
+									wprintf(L"TASKCTX FAIL step4 could not click Label\n");
+									break;
+								}
+								PumpFor(800);
+								chartRoot = RefetchChartRoot(app);
+								std::string docJson = ReadGanttFromSlide(app);
+								PpDocument doc = DocumentFromJson(docJson);
+								const PpTask* t = FindTaskInDoc(doc, kTaskId);
+								bool placementOk = t && t->labelPlacement == "rail";
+								bool hasRailDot = false, hasRailLbl = false;
+								if (chartRoot) {
+									PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+									long gn = grp->GetCount();
+									for (long j = 1; j <= gn; ++j) {
+										PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+										_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+										_bstr_t cid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+										if (!ck.length() || !cid.length()) continue;
+										std::wstring ks = (const wchar_t*)ck;
+										std::wstring is = (const wchar_t*)cid;
+										if (is != L"t1") continue;
+										if (ks == L"RAIL_DOT") hasRailDot = true;
+										if (ks == L"RAIL_TASKLBL") hasRailLbl = true;
+									}
+								}
+								step4 = placementOk && hasRailDot && hasRailLbl;
+								if (!step4 && attempt == 2) {
+									failStep = 4;
+									wprintf(L"TASKCTX FAIL step4 label (placement=%d railDot=%d railLbl=%d)\n",
+										placementOk ? 1 : 0, hasRailDot ? 1 : 0, hasRailLbl ? 1 : 0);
+								}
+							}
+						}
+
+						// Step 5: select m1, -1d nudge.
+						bool step5 = false;
+						if (step4) {
+							chartRoot = RefetchChartRoot(app);
+							PowerPoint::ShapePtr m1Shape = chartRoot
+								? FindChartChildByKindId(chartRoot, L"MILESTONE", L"m1") : nullptr;
+							if (!m1Shape) {
+								failStep = 5;
+								wprintf(L"TASKCTX FAIL step5 m1 shape missing\n");
+							} else {
+								POINT screenPt = {};
+								ShapeScreenCenter(app, m1Shape, &screenPt);
+								POINT clientPt = screenPt;
+								::ScreenToClient(ov, &clientPt);
+								SetOverlayCursorOverride(screenPt);
+								LPARAM lp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+								::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+								::PostMessageW(ov, WM_LBUTTONUP, 0, lp);
+								PumpFor(700);
+								Overlay_InvalidateAppBarForTest();
+								PumpFor(300);
+								// The preceding Label commit can shift layout (rail flip
+								// moves bars/milestones left), so the first click may land
+								// on stale coordinates and clear selection. Verify the
+								// selection took; re-click with FRESH coordinates if not
+								// (standing rule).
+								for (int sa = 1; sa <= 3; ++sa) {
+									const char* selNow = Overlay_GetSelectedIdForTest();
+									if (selNow && std::string(selNow) == "m1") break;
+									wprintf(L"TASKCTX diag: milestone select retry %d\n", sa);
+									PowerPoint::ShapePtr rootNow = RefetchChartRoot(app);
+									PowerPoint::ShapePtr msNow = rootNow ? FindChartChildByKindId(rootNow, L"MILESTONE", L"m1") : nullptr;
+									if (!msNow) { PumpFor(600); continue; }
+									POINT sp2 = {};
+									if (!ShapeScreenCenter(app, msNow, &sp2)) { PumpFor(600); continue; }
+									POINT cp2 = sp2;
+									::ScreenToClient(ov, &cp2);
+									SetOverlayCursorOverride(sp2);
+									LPARAM lp2 = MAKELPARAM((short)cp2.x, (short)cp2.y);
+									::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp2);
+									::PostMessageW(ov, WM_LBUTTONUP, 0, lp2);
+									PumpFor(700);
+									Overlay_InvalidateAppBarForTest();
+									PumpFor(300);
+								}
+								std::string docJson0 = ReadGanttFromSlide(app);
+								PpDocument doc0 = DocumentFromJson(docJson0);
+								const PpMilestone* m0 = FindMilestoneInDoc(doc0, kMsId);
+								long date0 = m0 ? DateToDays(m0->date) : 0;
+								for (int attempt = 1; attempt <= 2 && !step5; ++attempt) {
+									if (attempt > 1) wprintf(L"TASKCTX diag: milestone -1d retry attempt %d\n", attempt);
+									if (!PostAppBarClick(HtCmd_NudgeMinus1)) {
+										failStep = 5;
+										wprintf(L"TASKCTX FAIL step5 could not click -1d\n");
+										break;
+									}
+									PumpFor(800);
+									chartRoot = RefetchChartRoot(app);
+									std::string docJson = ReadGanttFromSlide(app);
+									PpDocument doc = DocumentFromJson(docJson);
+									const PpMilestone* m = FindMilestoneInDoc(doc, kMsId);
+									step5 = m && DateToDays(m->date) == date0 - 1;
+									if (!step5 && attempt == 2) {
+										failStep = 5;
+										wprintf(L"TASKCTX FAIL step5 milestone nudge (got %hs)\n",
+											m ? m->date.c_str() : "?");
+									}
+								}
+							}
+						}
+
+						// Step 6: Note adds anchored text to m1.
+						bool step6 = false;
+						if (step5) {
+							std::string docJson0 = ReadGanttFromSlide(app);
+							PpDocument doc0 = DocumentFromJson(docJson0);
+							size_t textsBefore = doc0.texts.size();
+							for (int attempt = 1; attempt <= 2 && !step6; ++attempt) {
+								if (attempt > 1) wprintf(L"TASKCTX diag: Note retry attempt %d\n", attempt);
+								if (!PostAppBarClick(HtCmd_AddNote)) {
+									failStep = 6;
+									wprintf(L"TASKCTX FAIL step6 could not click Note\n");
+									break;
+								}
+								PumpFor(800);
+								chartRoot = RefetchChartRoot(app);
+								std::string docJson = ReadGanttFromSlide(app);
+								PpDocument doc = DocumentFromJson(docJson);
+								bool grew = doc.texts.size() == textsBefore + 1;
+								bool anchored = false;
+								for (const auto& tx : doc.texts) {
+									if (tx.anchorId == kMsId) { anchored = true; break; }
+								}
+								step6 = grew && anchored;
+								if (!step6 && attempt == 2) {
+									failStep = 6;
+									wprintf(L"TASKCTX FAIL step6 note (size %zu->%zu anchored=%d)\n",
+										textsBefore, doc.texts.size(), anchored ? 1 : 0);
+								}
+							}
+						}
+
+						pass = step1 && step2 && step3 && step4 && step5 && step6;
+						if (!pass && failStep == 0) failStep = 1;
+						if (!pass) {
+							const char* dump = Overlay_DumpChromeStateForTest();
+							wprintf(L"TASKCTX FAIL step%d chrome: %hs\n", failStep, dump ? dump : "(null)");
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"TASKCTX FAIL COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"TASKCTX PASS\n" : L"TASKCTX FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 16: ROWSEL -----------------------------------------------
 			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
 				bool pass = false;

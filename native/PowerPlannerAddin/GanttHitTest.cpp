@@ -2,6 +2,7 @@
 // See GanttHitTest.h for the contract. No Windows headers here on purpose —
 // this file is compiled into the PowerPoint-free ops harness.
 #include "GanttHitTest.h"
+#include "GanttAppBar.h"
 
 namespace {
 
@@ -331,6 +332,66 @@ HtMenuOp MapRowAppBarCommand(int cmdId) {
 		break;
 	case HtCmd_Rename:
 		op.opKind = HtOpKind::RenameRow; op.needsRowId = true;
+		break;
+	default:
+		break;
+	}
+	return op;
+}
+
+HtMenuOp MapTaskAppBarCommand(int cmdId) {
+	HtMenuOp op;
+	switch (cmdId) {
+	case HtCmd_Swatch1: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[0]; break;
+	case HtCmd_Swatch2: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[1]; break;
+	case HtCmd_Swatch3: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[2]; break;
+	case HtCmd_Swatch4: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[3]; break;
+	case HtCmd_Swatch5: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[4]; break;
+	case HtCmd_Swatch6: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[5]; break;
+	case HtCmd_Swatch7: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[6]; break;
+	case HtCmd_Swatch8: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[7]; break;
+	case HtCmd_CycleLabelPlacement:
+		op.opKind = HtOpKind::CycleLabelPlacement; op.needsTaskId = true;
+		break;
+	case HtCmd_AddNote:
+		op.opKind = HtOpKind::AddNote; op.needsTaskId = true;
+		break;
+	case HtCmd_Edit:
+		op.opKind = HtOpKind::Edit; op.needsTaskId = true;
+		break;
+	case HtCmd_Delete:
+		op.opKind = HtOpKind::Delete; op.needsTaskId = true;
+		break;
+	case HtCmd_NudgeMinus1:
+		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = -1;
+		break;
+	case HtCmd_NudgePlus1:
+		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = 1;
+		break;
+	default:
+		break;
+	}
+	return op;
+}
+
+HtMenuOp MapMilestoneAppBarCommand(int cmdId) {
+	HtMenuOp op;
+	switch (cmdId) {
+	case HtCmd_Edit:
+	case HtCmd_Rename:
+		op.opKind = HtOpKind::Edit; op.needsTaskId = true;
+		break;
+	case HtCmd_AddNote:
+		op.opKind = HtOpKind::AddNote; op.needsTaskId = true;
+		break;
+	case HtCmd_Delete:
+		op.opKind = HtOpKind::Delete; op.needsTaskId = true;
+		break;
+	case HtCmd_NudgeMinus1:
+		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = -1;
+		break;
+	case HtCmd_NudgePlus1:
+		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = 1;
 		break;
 	default:
 		break;

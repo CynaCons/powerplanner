@@ -71,6 +71,8 @@ class HarnessReport:
     notes: str = ""
     golden_comparisons: List[Dict[str, Any]] = field(default_factory=list)
     harness_report: Optional[Dict[str, Any]] = None
+    retry_diags: int = 0
+    retry_diag_lines: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -90,6 +92,11 @@ def _parse_markers(stdout: str) -> List[str]:
         if line and re.search(r"\b(PASS|OK)\b", line):
             markers.append(line)
     return markers
+
+
+def _parse_retry_diags(stdout: str, cap: int = 20) -> tuple[int, List[str]]:
+    lines = [ln for ln in (stdout or "").splitlines() if re.search(r"\bdiag:", ln)]
+    return len(lines), lines[:cap]
 
 
 def _classify_status(
@@ -197,6 +204,7 @@ def run_harness(
 
     duration = time.time() - start
     artifacts = _find_recent_artifacts(start)
+    retry_count, retry_lines = _parse_retry_diags(last_out)
     report = HarnessReport(
         exe=exe_stem,
         args=args,
@@ -208,6 +216,8 @@ def run_harness(
         status=status,
         timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         harness_report=report_json,
+        retry_diags=retry_count,
+        retry_diag_lines=retry_lines,
     )
 
     report_path = BUILD_DIR / f"{exe_stem}_report.json"

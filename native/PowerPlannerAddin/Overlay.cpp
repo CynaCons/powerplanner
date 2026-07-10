@@ -4126,6 +4126,33 @@ void HandleAppBarCommand(int cmd) {
 		}
 	}
 
+	if ((g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE") && !g_ownSelId.empty()) {
+		HtMenuOp op = (g_ownSelKind == "TASK") ? MapTaskAppBarCommand(cmd) : MapMilestoneAppBarCommand(cmd);
+		if (op.opKind == HtOpKind::Edit) {
+			HtItemKind wantItemKind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone : HtItemKind::Task;
+			for (const auto& item : g_hitSnapshot.items) {
+				if (item.kind == wantItemKind && item.id == g_ownSelId) {
+					RECT screenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+					try { OpenCardEditor(g_ownSelKind, g_ownSelId, screenRect); } catch (...) { OvLog(L"appbar Edit failed"); }
+					g_appBarValid = false;
+					RequestOverlayRepaint();
+					return;
+				}
+			}
+			OvLog(L"appbar Edit: no hit rect for selection");
+			return;
+		}
+		if (op.opKind != HtOpKind::None) {
+			HtHit hit;
+			hit.id = g_ownSelId;
+			hit.kind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone : HtItemKind::Task;
+			HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
+			g_appBarValid = false;
+			RequestOverlayRepaint();
+			return;
+		}
+	}
+
 	if (cmd == HtCmd_ToggleRailLabels && g_app && !g_mutating) {
 		g_mutating = true;
 		try {
@@ -4135,8 +4162,7 @@ void HandleAppBarCommand(int cmd) {
 				const std::string keepKind = g_ownSelKind;
 				const std::string keepId = g_ownSelId;
 				if (SetRailLabelsGlobal(doc, !doc.railLabels)) {
-					std::string reselect = (keepKind == "ROW") ? keepId : keepId;
-					RebuildChart(doc, reselect);
+					RebuildChart(doc, keepId);
 					if (!keepId.empty() && !keepKind.empty()) {
 						SetOwnSelection(keepKind, keepId);
 					}
@@ -4151,6 +4177,42 @@ void HandleAppBarCommand(int cmd) {
 		}
 		catch (...) {
 			OvLog(L"unknown error toggling rail labels");
+		}
+		g_mutating = false;
+		g_appBarValid = false;
+		RequestOverlayRepaint();
+		return;
+	}
+
+	if (cmd == HtCmd_CycleGrid && g_app && !g_mutating) {
+		g_mutating = true;
+		try {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) {
+				PpDocument doc = DocumentFromJson(json);
+				const std::string keepKind = g_ownSelKind;
+				const std::string keepId = g_ownSelId;
+				const std::string cur = doc.gridDensity.empty() ? "auto" : doc.gridDensity;
+				const char* next = "auto";
+				if (cur == "auto") next = "week";
+				else if (cur == "week") next = "month";
+				else if (cur == "month") next = "none";
+				if (SetGridDensity(doc, next)) {
+					RebuildChart(doc, keepId);
+					if (!keepId.empty() && !keepKind.empty()) {
+						SetOwnSelection(keepKind, keepId);
+					}
+				}
+			}
+		}
+		catch (const _com_error&) {
+			OvLog(L"COM error cycling grid density");
+		}
+		catch (const std::exception&) {
+			OvLog(L"document error cycling grid density");
+		}
+		catch (...) {
+			OvLog(L"unknown error cycling grid density");
 		}
 		g_mutating = false;
 		g_appBarValid = false;
@@ -4567,6 +4629,29 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			changed = SetScale(doc, op.scale);
 			break;
 		}
+		case HtOpKind::SetTaskColor: {
+			changed = SetTaskColor(doc, hit.id, op.color ? op.color : "");
+			if (changed) { selectId = hit.id; selectKind = "TASK"; }
+			break;
+		}
+		case HtOpKind::CycleLabelPlacement: {
+			if (const PpTask* task = FindTask(doc, hit.id)) {
+				std::string next = "rail";
+				if (task->labelPlacement.empty() || task->labelPlacement == "bar") next = "rail";
+				else if (task->labelPlacement == "rail") next = "both";
+				else next = "bar";
+				changed = SetLabelPlacement(doc, hit.id, next);
+				if (changed) { selectId = hit.id; selectKind = "TASK"; }
+			}
+			break;
+		}
+		case HtOpKind::AddNote: {
+			const std::string noteKind = (hit.kind == HtItemKind::Milestone) ? "MILESTONE" : "TASK";
+			selectId = AddText(doc, "Note", hit.id, "", "");
+			changed = !selectId.empty();
+			if (changed) { selectKind = noteKind; selectId = hit.id; }
+			break;
+		}
 		case HtOpKind::AddRow: {
 			// needsRowId => "Add Row Below" (afterRowId = hit.rowId); the
 			// background "Add Row" command has needsRowId == false and
@@ -4646,6 +4731,8 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			RebuildChart(doc, selectId);
 			if (!selectId.empty() && !selectKind.empty()) {
 				SetOwnSelection(selectKind, selectId);
+			} else if (op.opKind == HtOpKind::Delete || op.opKind == HtOpKind::DeleteRow) {
+				ClearOwnSelection();
 			} else if (selectKind == "ROW" && !hit.rowId.empty() && op.opKind != HtOpKind::DeleteRow) {
 				SetOwnSelection("ROW", hit.rowId);
 			}

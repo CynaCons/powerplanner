@@ -236,7 +236,7 @@ freshly inserted chart resemble the mockup.*
 ### S4 — Task & marker context complete
 *Spec: R4 (B4.1, B4.2), R5. Closes the marker-delete gap.*
 
-- [ ] **s4-task-context** — Wire remaining task-context commands through the
+- [x] **s4-task-context** — Wire remaining task-context commands through the
   registry: swatches (`SetTaskColor` — visible on bar AND rail dot), −1d/+1d,
   `Label: bar/rail` cycle (`SetLabelPlacement`), global Labels toggle
   (`SetRailLabelsGlobal`), Note (anchored `AddText` at default offset), Edit

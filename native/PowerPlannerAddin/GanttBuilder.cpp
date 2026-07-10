@@ -193,6 +193,40 @@ std::vector<MatchKey> BuildMatchKeys(const std::vector<std::pair<std::string, st
 	return out;
 }
 
+// Mirror PptRenderer.cpp's fill/line writes so in-place reconcile keeps shape
+// colors in sync with the scene (e.g. task swatch changes via app-bar).
+void SyncShapeStyle(PowerPoint::ShapePtr ch, const Prim& prim) {
+	const Style& s = prim.style;
+	if (prim.kind == PrimKind::Line || prim.kind == PrimKind::Connector) {
+		PowerPoint::LineFormatPtr lf = ch->GetLine();
+		if ((long)lf->GetForeColor()->GetPpRGB() != (long)s.lineBgr)
+			lf->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.lineBgr);
+		if (lf->GetWeight() != s.lineWeight)
+			lf->PutWeight(s.lineWeight);
+		return;
+	}
+	PowerPoint::FillFormatPtr fill = ch->GetFill();
+	if (s.fill) {
+		if (fill->GetVisible() != Office::msoTrue)
+			fill->PutVisible(Office::msoTrue);
+		if ((long)fill->GetForeColor()->GetPpRGB() != (long)s.fillBgr)
+			fill->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.fillBgr);
+	} else if (fill->GetVisible() != Office::msoFalse) {
+		fill->PutVisible(Office::msoFalse);
+	}
+	PowerPoint::LineFormatPtr line = ch->GetLine();
+	if (s.line) {
+		if (line->GetVisible() != Office::msoTrue)
+			line->PutVisible(Office::msoTrue);
+		if ((long)line->GetForeColor()->GetPpRGB() != (long)s.lineBgr)
+			line->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.lineBgr);
+		if (line->GetWeight() != s.lineWeight)
+			line->PutWeight(s.lineWeight);
+	} else if (line->GetVisible() != Office::msoFalse) {
+		line->PutVisible(Office::msoFalse);
+	}
+}
+
 // Push one Prim's geometry (+ text, for non-line shapes) onto an EXISTING
 // shape. Used by both the pure move/resize path and the survivor shapes in
 // the structural (ungroup/regroup) path — geometry sync is identical either
@@ -204,12 +238,14 @@ void SyncShapeGeometryAndText(PowerPoint::ShapePtr ch, const Prim& prim) {
 		float w = std::fabs(prim.x2 - prim.x), h = std::fabs(prim.y2 - prim.y);
 		ch->PutWidth(w > 0.0f ? w : 0.01f);
 		ch->PutHeight(h > 0.0f ? h : 0.01f);
+		SyncShapeStyle(ch, prim);
 		return;
 	}
 	ch->PutLeft(prim.x);
 	ch->PutTop(prim.y);
 	ch->PutWidth(prim.w > 0.0f ? prim.w : 0.01f);
 	ch->PutHeight(prim.h > 0.0f ? prim.h : 0.01f);
+	SyncShapeStyle(ch, prim);
 	// Every AddShape/AddTextbox shape has a TextFrame; always reconcile text
 	// (including clearing it if the prim's text became empty, e.g. a task
 	// bar shrinking below the label-fit threshold).

@@ -8,6 +8,7 @@
 #include "../PowerPlannerAddin/GanttScene.h"
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 static bool Check(bool cond, const char* msg) {
@@ -1401,6 +1402,24 @@ static bool RunDepOpsChecks() {
 		ok = Check(d.deps.size() == 1, "RemoveDependenciesTouching no-op leaves deps unchanged") && ok;
 	}
 
+	// --- DeleteById: milestone removal clears deps touching the milestone ---
+	{
+		PpDocument d = DepOpsDoc();
+		std::string depId = AddDependency(d, "t1", "m1");
+		ok = Check(!depId.empty() && d.deps.size() == 1, "DeleteById milestone setup: dep t1->m1") && ok;
+		ok = Check(DeleteById(d, "m1") && d.milestones.empty(), "DeleteById removes milestone m1") && ok;
+		ok = Check(d.deps.empty(), "DeleteById milestone branch removes deps touching the milestone") && ok;
+	}
+
+	// --- DeleteById: row cascade removes deps touching the row's milestones ---
+	{
+		PpDocument d = DepOpsDoc();
+		std::string depId = AddDependency(d, "t1", "m1");
+		ok = Check(!depId.empty(), "DeleteById row-cascade setup: dep t1->m1") && ok;
+		ok = Check(DeleteById(d, "r1") && d.rows.empty() && d.milestones.empty(), "DeleteById row cascade removes row + milestones") && ok;
+		ok = Check(d.deps.empty(), "DeleteById row cascade removes deps touching row milestones") && ok;
+	}
+
 	return ok;
 }
 
@@ -1433,6 +1452,67 @@ static bool RunRowAppBarMapChecks() {
 	{
 		HtMenuOp op = MapRowAppBarCommand(HtCmd_ScaleWeek);
 		ok = Check(op.opKind == HtOpKind::None, "map: row appbar ScaleWeek -> None") && ok;
+	}
+	return ok;
+}
+
+static bool RunTaskAppBarMapChecks() {
+	bool ok = true;
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_Swatch3);
+		ok = Check(op.opKind == HtOpKind::SetTaskColor && op.needsTaskId
+			&& op.color && std::strcmp(op.color, "#7A4FA3") == 0,
+			"map: task appbar Swatch3 -> SetTaskColor #7A4FA3") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_Swatch1);
+		ok = Check(op.opKind == HtOpKind::SetTaskColor && op.color
+			&& std::strcmp(op.color, "#4355E0") == 0,
+			"map: task appbar Swatch1 -> SetTaskColor #4355E0") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_CycleLabelPlacement);
+		ok = Check(op.opKind == HtOpKind::CycleLabelPlacement && op.needsTaskId,
+			"map: task appbar Label -> CycleLabelPlacement") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_AddNote);
+		ok = Check(op.opKind == HtOpKind::AddNote && op.needsTaskId,
+			"map: task appbar Note -> AddNote") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_Edit);
+		ok = Check(op.opKind == HtOpKind::Edit && op.needsTaskId,
+			"map: task appbar Edit -> Edit") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_Delete);
+		ok = Check(op.opKind == HtOpKind::Delete && op.needsTaskId,
+			"map: task appbar Delete -> Delete") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_NudgePlus1);
+		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId && op.nudgeDays == 1,
+			"map: task appbar +1d -> Nudge +1") && ok;
+	}
+	{
+		HtMenuOp op = MapMilestoneAppBarCommand(HtCmd_NudgeMinus1);
+		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId && op.nudgeDays == -1,
+			"map: milestone appbar -1d -> Nudge -1") && ok;
+	}
+	{
+		HtMenuOp op = MapMilestoneAppBarCommand(HtCmd_AddNote);
+		ok = Check(op.opKind == HtOpKind::AddNote && op.needsTaskId,
+			"map: milestone appbar Note -> AddNote") && ok;
+	}
+	{
+		HtMenuOp op = MapMilestoneAppBarCommand(HtCmd_Rename);
+		ok = Check(op.opKind == HtOpKind::Edit && op.needsTaskId,
+			"map: milestone appbar Rename -> Edit") && ok;
+	}
+	{
+		HtMenuOp op = MapTaskAppBarCommand(HtCmd_ScaleWeek);
+		ok = Check(op.opKind == HtOpKind::None, "map: task appbar ScaleWeek -> None") && ok;
 	}
 	return ok;
 }
@@ -1551,6 +1631,9 @@ int main() {
 	bool rowAppBarMapOk = RunRowAppBarMapChecks();
 	ok = rowAppBarMapOk && ok;
 
+	bool taskAppBarMapOk = RunTaskAppBarMapChecks();
+	ok = taskAppBarMapOk && ok;
+
 	bool depOpsOk = RunDepOpsChecks();
 	ok = depOpsOk && ok;
 
@@ -1592,6 +1675,9 @@ int main() {
 	}
 	if (rowAppBarMapOk) {
 		std::printf("ROW APPBAR MAP OK\n");
+	}
+	if (taskAppBarMapOk) {
+		std::printf("TASKCTX MAP OK\n");
 	}
 	if (depOpsOk) {
 		std::printf("DEP OPS OK\n");
