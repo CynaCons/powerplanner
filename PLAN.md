@@ -550,10 +550,13 @@ paths, golden self-seeding, exit codes — coordinator log
       **awaiting user visual review (AC4: live PP at 100%/150% DPI, no focus
       steal)**. Built coordinator→Cursor(composer-2.5): I specced/gated, Cursor
       implemented.
-- [ ] S3 Rows are objects — ops + selection/reorder/indent UX: s3-row-ops
-      committed (2ac535c, ROW OPS OK); s3-row-selection remaining (absorbs the
-      S1 row-highlight defect fix; post-unit feedback via the row_selection
-      scenario + bridge).
+- [x] S3 Rows are objects — ops + selection/reorder/indent UX: s3-row-ops
+      (2ac535c, ROW OPS OK) + s3-row-selection (017ea75, ROWSEL PASS; fixes
+      the S1 row-highlight defect via PP_ROWY model-derived bands). Gates
+      green from clean rebuild 2026-07-10; **awaiting user visual review
+      (AC3)**. Discovered defect filed: external undo (Ctrl+Z) bricks
+      overlay chart tracking — see coordinator log `undo-recovery-spike`.
+      s5-dep-ops also landed early in parallel (c6e7a7a, DEP OPS OK).
 - [ ] S4 Task & marker context complete — swatches/labels live, marker
       management incl. the missing delete path (s4-task-context ·
       s4-marker-mgmt)

@@ -738,3 +738,103 @@ coordinator re-verifies empirically (fault injection + live scenario rerun)
 before commit. STANDING RULE (new): tooling that reports on gates is itself
 gate-checked - a reporting layer ships only with a demonstrated true-negative
 (a run that FAILS when it should).
+
+### s3-row-selection — in progress (attempt 1 + fix loop, 2026-07-09)
+
+Dispatched to cursor composer-2.5 off the frozen coordinator spec
+(native/build/_spec-s3-row-selection.md): PP_ROWY model-derived row geometry
+(new chart tag; PP_PROJ untouched), rail hit zones w/ HtSnapshot rail extent,
+MapRowAppBarCommand pure registry (+ HtOpKind row ops), rail highlight per
+tokens (primarySoft + 2.5px primary inset), ROW delete-hotkey scope, + chip,
+rename via ROW_LABEL edit region, ROWSEL stage w/ in-stage undo assert
+(ExecuteMso "Undo" via Office::_CommandBarsPtr).
+
+PowerSpawn cursor RPC timed out at its hardcoded 300s but the agent kept
+working DETACHED and delivered 737 insertions across 8 files (report lost;
+coordinator assessed the diff cold). Coordinator repairs (mechanical): two
+declaration-order errors (WriteChartRootTags fwd decl in GanttBuilder.cpp,
+GpToken fwd decl in Overlay.cpp), one type fix (Office::_CommandBarsPtr +
+SUCCEEDED(ExecuteMso), raw_interfaces_only), IDispatch->_ApplicationPtr wrap
+in RowRailScreenPoint. GATE-PURE then green incl NEW non-vacuous markers
+ROW APPBAR MAP OK + rail-extent hit assert.
+
+GATE-FULL attempt: DRAGROW FAIL deterministic (both runs) — root cause:
+BuildRowYJson wrote natural SLIDE-ABSOLUTE coords while Overlay/harness map
+them BBOX-RELATIVE; bands displaced ~axis-height, drop resolved to source
+row. Fix loop (cursor, 90s): RebaseRowYJson at WriteChartRootTags time
+against the group's live natural bbox; naturalW/H = actual bbox;
+ScaleRowYJson identity preserved. Re-gating from clean rebuild now.
+
+### s5-dep-ops — implemented in isolated worktree, HELD for post-s3 apply
+
+Claude worktree agent, first attempt green: AddDependency (self/dup-pair/
+missing-endpoint/bad-type rejection, dep<N> ids, task+milestone endpoints) +
+RemoveDependenciesTouching(count) + DeleteById task-branch refactor
+(behavior-identical); DEP OPS OK + all 11 prior markers + conformance 1/1 in
+the worktree. Diff held at scratchpad s5-dep-ops.diff; will re-gate on main
+after s3 lands (ops-test.cpp textual conflict expected — trivial).
+
+Tooling notes for the record: grok CLI agentic spawns HANG (near-idle procs,
+no writes, threads unreaped past subprocess timeout) — killed; powerspawn
+needs shell=False + process-tree kill + exposed timeout for cursor tool.
+Cursor pattern for big units this session: dispatch -> RPC times out ->
+agent finishes detached -> coordinator polls tree quiescence -> assesses
+diff cold -> gates. Works, but loses the agent report.
+
+### s3-row-selection validation — KEYS/APPBAR regression hunt (2026-07-09, 8 diag cycles)
+
+After the DRAGROW rebase fix, KEYS FAILED deterministically (t4 survived the
+Delete hotkey). Instrumented diagnosis (permanent OvLog diagnostics added to
+Overlay.cpp: silent-branch logs in HandleHotkeyDelete, WM_HOTKEY wp at
+WndProc entry, hotkey register/unregister transitions WITH CALLER TAGS,
+hide-reason logs on every Tick HideOverlay path):
+
+FINDING (empirical law for this codebase): a successfully-posted WM_HOTKEY
+can be LOST without ever reaching the WndProc when the PRECEDING commit's
+dispatch overruns the harness pump — the nudge commit (RebuildChart under
+COM load, worsened by the registered add-in's second overlay instance
+polling the same PowerPoint) ran ~7.5s inside ONE DispatchMessage, PumpFor's
+deadline expired inside it, and the subsequently-posted Delete never
+dispatched (post returns success; no queue-full error; mechanism is an
+OS-level modal/queue subtlety we bounded rather than fully named).
+
+HARDENINGS APPLIED (behavioral asserts unchanged; retries combat only
+message/geometry staleness):
+- KEYS: Delete is double-posted with a 400ms settle between (a second Delete
+  is provably harmless: after a successful first, selection is cleared and
+  the guard logs+ignores it). KEYS now PASSES.
+- APPBAR: scale clicks get one settle+fresh-rect retry per step (the bar can
+  be mid-relayout when the button rect is read — active chip moved, bar
+  re-measured after the prior commit; observed as W-click landing on the M
+  chip).
+- overlay-test watchdog raised 120s -> 300s: the suite is now 15 COM-heavy
+  stages (APPBAR + ROWSEL added) and legitimately exceeds the old budget —
+  watchdog exits mid-suite (exit 3) were masquerading as stage failures.
+
+NEW STANDING RULE: every harness stage that posts a state-changing message
+must verify the state change and retry the post once before declaring FAIL
+(pattern now in KEYS + APPBAR; use it for all new stages incl ROWSEL's
+follow-ups).
+
+### s3-row-selection — DONE (017ea75) · s5-dep-ops — DONE (c6e7a7a)
+
+s3-row-selection gate green from clean rebuild after a long validation
+campaign (~14 diagnostic/fix cycles, all evidence above and in the commit):
+GATE-PURE 12 markers + conformance; ppoverlay TWICE exit 0 (15 stages incl
+ROWSEL PASS + INPUT NEUTRAL OK); ppreflow FIT/FITPERSIST/REFLOW/SHAPE
+PROPS/VISUAL S1 OK. Coordinator fixes folded during validation: PP_ROWY
+bbox rebase (DRAGROW regression), B2.1 rail-name click selects ROW,
+FindChartRoot zombie-skip, milestone-only rows get a lane (max(1,rowSlots)),
+WM_HOTKEY delivery law + double-post/drain patterns, watchdog 480s,
+BuildRowBands std::exception catch, permanent OvLog diagnostics. Product
+defect DISCOVERED + filed (undo-recovery-spike): external undo (Ctrl+Z)
+bricks overlay chart tracking via zombie CHART_ROOT shapes - real user
+impact, needs its own spike (kill-criterion set). s5-dep-ops implemented in
+an isolated worktree in parallel, merged + re-gated on main (DEP OPS OK, 13
+markers).
+
+S3 SLICE COMPLETE (s3-row-ops 2ac535c + s3-row-selection 017ea75). AC3 user
+visual review PENDING at the user's convenience (continuing to S4 per the
+user's run-to-completion directive; review artifacts: ab-row.png app-bar ROW
+context, visual-s1.png, feedback-s3-row-selection.json from the bridge).
+Dispatching next: s4-task-context.
