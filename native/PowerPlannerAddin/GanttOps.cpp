@@ -89,6 +89,16 @@ std::string AddTask(PpDocument& doc, const std::string& rowId, const std::string
 	return task.id;
 }
 
+std::string AddMilestone(PpDocument& doc, const std::string& rowId, const std::string& label, const std::string& dateISO) {
+	PpMilestone ms;
+	ms.id = NextId(doc, "ms-");
+	ms.rowId = rowId;
+	ms.label = label;
+	ms.date = dateISO;
+	doc.milestones.push_back(ms);
+	return ms.id;
+}
+
 bool DeleteById(PpDocument& doc, const std::string& id) {
 	for (const auto& row : doc.rows) {
 		if (row.id == id) {

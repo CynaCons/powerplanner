@@ -4846,7 +4846,8 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 		}
 		case HtOpKind::DeleteRow: {
 			selectId.clear();
-			changed = DeleteRow(doc, hit.rowId);
+			const std::string rowId = !hit.rowId.empty() ? hit.rowId : hit.id;
+			changed = DeleteRow(doc, rowId);
 			break;
 		}
 		case HtOpKind::Nudge: {
@@ -5004,6 +5005,120 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			}
 			break;
 		}
+		case HtOpKind::AddMilestoneAtPoint: {
+			float pxPerDay = ComputeEmptyCellPxPerDay();
+			if (pxPerDay > 0.0f) {
+				bool haveRef = false;
+				long refDay = 0;
+				long refScreenX = 0;
+				for (const auto& item : g_hitSnapshot.items) {
+					if (item.kind != HtItemKind::Task) continue;
+					const PpTask* task = FindTask(doc, item.id);
+					if (!task) continue;
+					refDay = DateToDays(task->start);
+					refScreenX = item.rect.left;
+					haveRef = true;
+					break;
+				}
+				if (haveRef) {
+					long screenX = clientPt.x + g_windowOriginX;
+					long anchorDay = refDay + (long)::lround((double)(screenX - refScreenX) / (double)pxPerDay);
+					selectId = AddMilestone(doc, hit.rowId, "New milestone", DaysToDate(anchorDay));
+					changed = !selectId.empty();
+					selectKind = "MILESTONE";
+				}
+			}
+			break;
+		}
+		case HtOpKind::AddNoteAtPoint: {
+			float pxPerDay = ComputeEmptyCellPxPerDay();
+			if (pxPerDay > 0.0f) {
+				bool haveRef = false;
+				long refDay = 0;
+				long refScreenX = 0;
+				for (const auto& item : g_hitSnapshot.items) {
+					if (item.kind != HtItemKind::Task) continue;
+					const PpTask* task = FindTask(doc, item.id);
+					if (!task) continue;
+					refDay = DateToDays(task->start);
+					refScreenX = item.rect.left;
+					haveRef = true;
+					break;
+				}
+				if (haveRef) {
+					long screenX = clientPt.x + g_windowOriginX;
+					long anchorDay = refDay + (long)::lround((double)(screenX - refScreenX) / (double)pxPerDay);
+					selectId = AddText(doc, "Note", "", hit.rowId, DaysToDate(anchorDay));
+					changed = !selectId.empty();
+					if (changed) selectKind = "TEXT";
+				}
+			}
+			break;
+		}
+		case HtOpKind::InsertTaskBackground: {
+			std::string rowId;
+			std::string dateISO;
+			DefaultFreeNoteCellAtVisibleCenter(rowId, dateISO);
+			if (rowId.empty()) rowId = FirstRowId(doc);
+			if (rowId.empty()) rowId = AddRow(doc, "New Row", "");
+			if (!rowId.empty()) {
+				std::string start, end;
+				DefaultTaskDates(doc, rowId, "", start, end);
+				selectId = AddTask(doc, rowId, "New Task", start, end);
+				changed = !selectId.empty();
+				if (changed) selectKind = "TASK";
+			}
+			break;
+		}
+		case HtOpKind::InsertMilestoneBackground: {
+			std::string rowId;
+			std::string dateISO;
+			DefaultFreeNoteCellAtVisibleCenter(rowId, dateISO);
+			if (rowId.empty()) rowId = FirstRowId(doc);
+			if (rowId.empty()) rowId = AddRow(doc, "New Row", "");
+			if (!rowId.empty()) {
+				selectId = AddMilestone(doc, rowId, "New Milestone", dateISO);
+				changed = !selectId.empty();
+				if (changed) selectKind = "MILESTONE";
+			}
+			break;
+		}
+		case HtOpKind::InsertMarkerBackground: {
+			const std::string dateISO = DefaultMarkerDateAtVisibleCenter();
+			selectId = AddMarker(doc, "custom", "Marker", dateISO);
+			changed = !selectId.empty();
+			if (changed) selectKind = "MARKER";
+			break;
+		}
+		case HtOpKind::SetGridDensity: {
+			const std::string keepKind = g_ownSelKind;
+			const std::string keepId = g_ownSelId;
+			if (op.gridDensity && std::string(op.gridDensity) == "__cycle__") {
+				const std::string cur = doc.gridDensity.empty() ? "auto" : doc.gridDensity;
+				const char* next = "auto";
+				if (cur == "auto") next = "week";
+				else if (cur == "week") next = "month";
+				else if (cur == "month") next = "none";
+				changed = SetGridDensity(doc, next);
+			} else if (op.gridDensity) {
+				changed = SetGridDensity(doc, op.gridDensity);
+			}
+			if (changed && !keepId.empty() && !keepKind.empty()) {
+				selectId = keepId;
+				selectKind = keepKind;
+			}
+			break;
+		}
+		case HtOpKind::ToggleRailLabels: {
+			const std::string keepKind = g_ownSelKind;
+			const std::string keepId = g_ownSelId;
+			changed = SetRailLabelsGlobal(doc, !doc.railLabels);
+			if (changed && !keepId.empty() && !keepKind.empty()) {
+				selectId = keepId;
+				selectKind = keepKind;
+			}
+			break;
+		}
 		case HtOpKind::None:
 		default:
 			break;
@@ -5053,7 +5168,30 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 	if (hit.zone == HtZone::Outside) return;
 	bool hasRowId = !hit.rowId.empty();
-	std::vector<HtMenuItem> items = BuildMenuForZone(hit.zone, hit.kind, hasRowId);
+	if (hit.zone == HtZone::Label && hit.kind == HtItemKind::RowLabel) {
+		hasRowId = !hit.id.empty();
+	}
+
+	PpDocument doc;
+	std::string hitId;
+	try {
+		if (g_app) {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) doc = DocumentFromJson(json);
+		}
+	}
+	catch (...) {}
+
+	if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL || hit.zone == HtZone::TaskEdgeR
+		|| hit.zone == HtZone::Milestone || hit.zone == HtZone::Marker || hit.zone == HtZone::Text) {
+		hitId = hit.id;
+	} else if (hit.zone == HtZone::Label && hit.kind == HtItemKind::RowLabel) {
+		hitId = hit.id;
+	} else if (hasRowId) {
+		hitId = hit.rowId;
+	}
+
+	std::vector<HtMenuItem> items = BuildMenuForZone(hit.zone, hit.kind, hasRowId, doc, hitId);
 	if (items.empty()) return;
 
 	// Under the ops/harness smoke check, skip showing the actual modal popup
@@ -5075,7 +5213,7 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 	};
 
 	for (const auto& item : items) {
-		bool inSubmenu = item.submenu && item.submenu[0] != '\0';
+		bool inSubmenu = !item.submenu.empty();
 		// The "Change Scale" HEADER entry (HtCmd_None, submenu=="") only
 		// exists in BuildMenuForZone's list to carry separatorBefore for the
 		// header itself; submenuFor() below appends the actual MF_POPUP
@@ -5085,13 +5223,15 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 			if (item.separatorBefore) ::AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
 			continue;
 		}
+		UINT flags = MF_STRING;
+		if (!item.enabled) flags |= MF_GRAYED;
 		if (inSubmenu) {
 			HMENU sub = submenuFor(item.submenu);
-			::AppendMenuW(sub, MF_STRING, (UINT_PTR)item.cmdId, Widen(item.label).c_str());
+			::AppendMenuW(sub, flags, (UINT_PTR)item.cmdId, Widen(item.label).c_str());
 			continue;
 		}
 		if (item.separatorBefore) ::AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-		::AppendMenuW(menu, MF_STRING, (UINT_PTR)item.cmdId, Widen(item.label).c_str());
+		::AppendMenuW(menu, flags, (UINT_PTR)item.cmdId, Widen(item.label).c_str());
 	}
 
 	POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
@@ -5105,8 +5245,41 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 	::DestroyMenu(menu); // destroys owned submenus recursively
 
 	if (cmd > 0) {
-		HtMenuOp op = MapMenuCommand(hit.zone, cmd, hit.kind, hasRowId);
+		HtMenuOp op = MapMenuCommand(hit.zone, cmd, hit.kind, hasRowId, doc, hitId);
 		try {
+			if (op.opKind == HtOpKind::Edit) {
+				HtItemKind wantItemKind = HtItemKind::Task;
+				std::string selKind = "TASK";
+				if (hit.zone == HtZone::Milestone) { wantItemKind = HtItemKind::Milestone; selKind = "MILESTONE"; }
+				else if (hit.zone == HtZone::Marker) { wantItemKind = HtItemKind::Marker; selKind = "MARKER"; }
+				else if (hit.zone == HtZone::Text) { wantItemKind = HtItemKind::Text; selKind = "TEXT"; }
+				for (const auto& item : g_hitSnapshot.items) {
+					if (item.kind == wantItemKind && item.id == hit.id) {
+						RECT screenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+						OpenCardEditor(selKind, hit.id, screenRect);
+						break;
+					}
+				}
+				return;
+			}
+			if (op.opKind == HtOpKind::RenameRow) {
+				const std::string rowId = !hit.rowId.empty() ? hit.rowId : hit.id;
+				for (const auto& region : g_editRegions) {
+					if (region.kind == "ROW_LABEL" && region.id == rowId) {
+						OpenInlineEditor(region);
+						break;
+					}
+				}
+				return;
+			}
+			if (op.opKind == HtOpKind::EnterLinkMode) {
+				g_linkMode = true;
+				g_linkFromId = hit.id;
+				g_linkFromKind = (hit.kind == HtItemKind::Milestone) ? "MILESTONE" : "TASK";
+				g_appBarValid = false;
+				RequestOverlayRepaint();
+				return;
+			}
 			HandleContextMenuCommand(op, hit, clientPt);
 		} catch (...) {
 			OvLog(L"context menu command execution failed");

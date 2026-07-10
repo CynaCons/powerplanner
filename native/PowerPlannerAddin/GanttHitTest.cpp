@@ -2,7 +2,7 @@
 // See GanttHitTest.h for the contract. No Windows headers here on purpose —
 // this file is compiled into the PowerPoint-free ops harness.
 #include "GanttHitTest.h"
-#include "GanttAppBar.h"
+#include "GanttCommandRegistry.h"
 
 namespace {
 
@@ -102,6 +102,7 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 			hit.zone = HtZone::Label;
 			hit.kind = it.kind;
 			hit.id = it.id;
+			if (it.kind == HtItemKind::RowLabel) hit.rowId = it.id;
 			return hit;
 		}
 	}
@@ -159,101 +160,17 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 	return hit;
 }
 
-// ---- pure right-click context menu model -----------------------------------
+// ---- pure shared command registry ------------------------------------------
 
-namespace {
-
-void AddScaleSubmenu(std::vector<HtMenuItem>& items, bool separatorBeforeHeader) {
-	// The "Change Scale" top-level entry itself carries no command (its role
-	// is purely to host the D/W/M submenu); Win32's AppendMenuW for a submenu
-	// takes a menu handle, not a cmdId, so HtCmd_None here is correct and
-	// MapMenuCommand never accepts it.
-	items.push_back({ HtCmd_None, "Change Scale", separatorBeforeHeader, "" });
-	items.push_back({ HtCmd_ScaleDay,     "Day",     false, "Change Scale" });
-	items.push_back({ HtCmd_ScaleWeek,    "Week",    false, "Change Scale" });
-	items.push_back({ HtCmd_ScaleMonth,   "Month",   false, "Change Scale" });
-	items.push_back({ HtCmd_ScaleQuarter, "Quarter", false, "Change Scale" });
-	items.push_back({ HtCmd_ScaleYear,    "Year",    false, "Change Scale" });
-}
-
-} // namespace
-
-std::vector<HtMenuItem> BuildMenuForZone(HtZone zone, HtItemKind kind, bool hasRowId) {
-	std::vector<HtMenuItem> items;
-
-	switch (zone) {
-	case HtZone::TaskBody:
-	case HtZone::TaskEdgeL:
-	case HtZone::TaskEdgeR:
-		items.push_back({ HtCmd_AddTaskSameRow, "Add Task", false, "" });
-		items.push_back({ HtCmd_Delete, "Delete", false, "" });
-		items.push_back({ HtCmd_NudgeMinus1, "Nudge -1 day", true, "" });
-		items.push_back({ HtCmd_NudgePlus1, "Nudge +1 day", false, "" });
-		items.push_back({ HtCmd_PercentMinus10, "Percent -10%", true, "" });
-		items.push_back({ HtCmd_PercentPlus10, "Percent +10%", false, "" });
-		AddScaleSubmenu(items, /*separatorBeforeHeader=*/true);
-		return items;
-
-	case HtZone::Milestone:
-		items.push_back({ HtCmd_AddTaskSameRow, "Add Task", false, "" });
-		items.push_back({ HtCmd_Delete, "Delete", false, "" });
-		items.push_back({ HtCmd_NudgeMinus1, "Nudge -1 day", true, "" });
-		items.push_back({ HtCmd_NudgePlus1, "Nudge +1 day", false, "" });
-		// No Percent items: milestones have no percent-complete.
-		AddScaleSubmenu(items, /*separatorBeforeHeader=*/true);
-		return items;
-
-	case HtZone::RowBand:
-		if (!hasRowId) {
-			// Chart background (RowBand hit with an empty rowId).
-			items.push_back({ HtCmd_AddRow, "Add Row", false, "" });
-			AddScaleSubmenu(items, /*separatorBeforeHeader=*/true);
-			return items;
-		}
-		items.push_back({ HtCmd_AddTaskThisRow, "Add Task", false, "" });
-		items.push_back({ HtCmd_AddRowBelow, "Add Row Below", false, "" });
-		items.push_back({ HtCmd_DeleteRow, "Delete Row", false, "" });
-		return items;
-
-	case HtZone::Label:
-		if (kind == HtItemKind::RowLabel) {
-			items.push_back({ HtCmd_AddTaskThisRow, "Add Task", false, "" });
-			items.push_back({ HtCmd_AddRowBelow, "Add Row Below", false, "" });
-			items.push_back({ HtCmd_DeleteRow, "Delete Row", false, "" });
-			return items;
-		}
-		// Label(TITLE) and any other Label kind: same as chart background.
-		items.push_back({ HtCmd_AddRow, "Add Row", false, "" });
-		AddScaleSubmenu(items, /*separatorBeforeHeader=*/true);
-		return items;
-
-	case HtZone::EmptyCell:
-		items.push_back({ HtCmd_EmptyCellAddTaskHere, "Add Task Here", false, "" });
-		return items;
-
-	case HtZone::Outside:
-	default:
-		return items; // no menu
-	}
-}
-
-HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind, bool hasRowId) {
+HtMenuOp MapRegistryCommand(int cmdId) {
 	HtMenuOp op;
-	if (cmdId == HtCmd_None) return op;
-
-	// Validate against the SAME item table BuildMenuForZone would produce for
-	// this exact (zone,kind,hasRowId), so the two functions can never drift
-	// apart — an invalid combo (e.g. HtCmd_PercentMinus10 on a Milestone, or
-	// HtCmd_AddTaskThisRow on RowBand background) simply won't be found here.
-	bool offered = false;
-	for (const auto& item : BuildMenuForZone(zone, kind, hasRowId)) {
-		if (item.cmdId == cmdId) { offered = true; break; }
-	}
-	if (!offered) return op;
-
 	switch (cmdId) {
 	case HtCmd_AddTaskSameRow:
+	case HtCmd_AddTaskThisRow:
 		op.opKind = HtOpKind::AddTask; op.needsRowId = true;
+		break;
+	case HtCmd_InsertTask:
+		op.opKind = HtOpKind::InsertTaskBackground;
 		break;
 	case HtCmd_Delete:
 		op.opKind = HtOpKind::Delete; op.needsTaskId = true;
@@ -285,35 +202,14 @@ HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind, bool hasRowId) 
 	case HtCmd_ScaleYear:
 		op.opKind = HtOpKind::SetScale; op.scale = "year";
 		break;
-	case HtCmd_AddTaskThisRow:
-		op.opKind = HtOpKind::AddTask; op.needsRowId = true;
-		break;
 	case HtCmd_AddRowBelow:
 		op.opKind = HtOpKind::AddRow; op.needsRowId = true;
-		break;
-	case HtCmd_DeleteRow:
-		op.opKind = HtOpKind::DeleteRow; op.needsRowId = true;
-		break;
-	case HtCmd_EmptyCellAddTaskHere:
-		op.opKind = HtOpKind::AddTaskAtPoint; op.needsRowId = true;
 		break;
 	case HtCmd_AddRow:
 		op.opKind = HtOpKind::AddRow; op.needsRowId = false;
 		break;
-	default:
-		break;
-	}
-	return op;
-}
-
-HtMenuOp MapRowAppBarCommand(int cmdId) {
-	HtMenuOp op;
-	switch (cmdId) {
 	case HtCmd_AddRowAbove:
 		op.opKind = HtOpKind::AddRowAbove; op.needsRowId = true;
-		break;
-	case HtCmd_AddRowBelow:
-		op.opKind = HtOpKind::AddRow; op.needsRowId = true;
 		break;
 	case HtCmd_MoveRowUp:
 		op.opKind = HtOpKind::MoveRowUp; op.needsRowId = true;
@@ -333,15 +229,15 @@ HtMenuOp MapRowAppBarCommand(int cmdId) {
 	case HtCmd_Rename:
 		op.opKind = HtOpKind::RenameRow; op.needsRowId = true;
 		break;
-	default:
+	case HtCmd_EmptyCellAddTaskHere:
+		op.opKind = HtOpKind::AddTaskAtPoint; op.needsRowId = true;
 		break;
-	}
-	return op;
-}
-
-HtMenuOp MapTaskAppBarCommand(int cmdId) {
-	HtMenuOp op;
-	switch (cmdId) {
+	case HtCmd_EmptyCellAddMilestoneHere:
+		op.opKind = HtOpKind::AddMilestoneAtPoint; op.needsRowId = true;
+		break;
+	case HtCmd_EmptyCellAddNoteHere:
+		op.opKind = HtOpKind::AddNoteAtPoint; op.needsRowId = true;
+		break;
 	case HtCmd_Swatch1: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[0]; break;
 	case HtCmd_Swatch2: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[1]; break;
 	case HtCmd_Swatch3: op.opKind = HtOpKind::SetTaskColor; op.needsTaskId = true; op.color = kAppBarSwatches[2]; break;
@@ -359,81 +255,235 @@ HtMenuOp MapTaskAppBarCommand(int cmdId) {
 	case HtCmd_Edit:
 		op.opKind = HtOpKind::Edit; op.needsTaskId = true;
 		break;
-	case HtCmd_Delete:
-		op.opKind = HtOpKind::Delete; op.needsTaskId = true;
-		break;
-	case HtCmd_NudgeMinus1:
-		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = -1;
-		break;
-	case HtCmd_NudgePlus1:
-		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = 1;
-		break;
 	case HtCmd_Link:
 		op.opKind = HtOpKind::EnterLinkMode; op.needsTaskId = true;
 		break;
 	case HtCmd_Unlink:
 		op.opKind = HtOpKind::Unlink; op.needsTaskId = true;
 		break;
+	case HtCmd_InsertNote:
+		op.opKind = HtOpKind::InsertFreeNote;
+		break;
+	case HtCmd_InsertMilestone:
+		op.opKind = HtOpKind::InsertMilestoneBackground;
+		break;
+	case HtCmd_InsertMarker:
+		op.opKind = HtOpKind::InsertMarkerBackground;
+		break;
+	case HtCmd_ToggleRailLabels:
+		op.opKind = HtOpKind::ToggleRailLabels;
+		break;
+	case HtCmd_CycleGrid:
+		op.opKind = HtOpKind::SetGridDensity; op.gridDensity = "__cycle__";
+		break;
+	case HtCmd_GridAuto:
+		op.opKind = HtOpKind::SetGridDensity; op.gridDensity = "auto";
+		break;
+	case HtCmd_GridWeek:
+		op.opKind = HtOpKind::SetGridDensity; op.gridDensity = "week";
+		break;
+	case HtCmd_GridMonth:
+		op.opKind = HtOpKind::SetGridDensity; op.gridDensity = "month";
+		break;
+	case HtCmd_GridNone:
+		op.opKind = HtOpKind::SetGridDensity; op.gridDensity = "none";
+		break;
+	case HtCmd_ReanchorNote:
+		op.opKind = HtOpKind::ReanchorNote; op.needsTaskId = true;
+		break;
 	default:
 		break;
+	}
+	return op;
+}
+
+namespace {
+
+bool RegistryRowAppBarCmd(int cmdId) {
+	switch (cmdId) {
+	case HtCmd_Rename:
+	case HtCmd_AddRowAbove:
+	case HtCmd_AddRowBelow:
+	case HtCmd_MoveRowUp:
+	case HtCmd_MoveRowDown:
+	case HtCmd_IndentRow:
+	case HtCmd_OutdentRow:
+	case HtCmd_DeleteRow:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool RegistryTaskAppBarCmd(int cmdId) {
+	switch (cmdId) {
+	case HtCmd_Edit:
+	case HtCmd_Swatch1: case HtCmd_Swatch2: case HtCmd_Swatch3: case HtCmd_Swatch4:
+	case HtCmd_Swatch5: case HtCmd_Swatch6: case HtCmd_Swatch7: case HtCmd_Swatch8:
+	case HtCmd_NudgeMinus1:
+	case HtCmd_NudgePlus1:
+	case HtCmd_CycleLabelPlacement:
+	case HtCmd_Link:
+	case HtCmd_Unlink:
+	case HtCmd_AddNote:
+	case HtCmd_Delete:
+	case HtCmd_AddRowAbove:
+	case HtCmd_AddRowBelow:
+	case HtCmd_MoveRowUp:
+	case HtCmd_MoveRowDown:
+	case HtCmd_IndentRow:
+	case HtCmd_OutdentRow:
+	case HtCmd_DeleteRow:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool RegistryMilestoneAppBarCmd(int cmdId) {
+	switch (cmdId) {
+	case HtCmd_Edit:
+	case HtCmd_Rename:
+	case HtCmd_NudgeMinus1:
+	case HtCmd_NudgePlus1:
+	case HtCmd_AddNote:
+	case HtCmd_Delete:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool RegistryMarkerAppBarCmd(int cmdId) {
+	switch (cmdId) {
+	case HtCmd_Rename:
+	case HtCmd_NudgeMinus1:
+	case HtCmd_NudgePlus1:
+	case HtCmd_Delete:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool RegistryNoteAppBarCmd(int cmdId) {
+	switch (cmdId) {
+	case HtCmd_Edit:
+	case HtCmd_ReanchorNote:
+	case HtCmd_Delete:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool RegistryBackgroundAppBarCmd(int cmdId) {
+	switch (cmdId) {
+	case HtCmd_AddRow:
+	case HtCmd_InsertTask:
+	case HtCmd_InsertMilestone:
+	case HtCmd_InsertMarker:
+	case HtCmd_InsertNote:
+		return true;
+	default:
+		return false;
+	}
+}
+
+} // namespace
+
+HtMenuOp MapRowAppBarCommand(int cmdId) {
+	if (!RegistryRowAppBarCmd(cmdId)) return {};
+	return MapRegistryCommand(cmdId);
+}
+
+HtMenuOp MapTaskAppBarCommand(int cmdId) {
+	if (!RegistryTaskAppBarCmd(cmdId)) return {};
+	HtMenuOp op = MapRegistryCommand(cmdId);
+	if (cmdId == HtCmd_Rename) {
+		op.opKind = HtOpKind::Edit;
+		op.needsTaskId = true;
 	}
 	return op;
 }
 
 HtMenuOp MapMilestoneAppBarCommand(int cmdId) {
-	HtMenuOp op;
-	switch (cmdId) {
-	case HtCmd_Edit:
-	case HtCmd_Rename:
-		op.opKind = HtOpKind::Edit; op.needsTaskId = true;
-		break;
-	case HtCmd_AddNote:
-		op.opKind = HtOpKind::AddNote; op.needsTaskId = true;
-		break;
-	case HtCmd_Delete:
-		op.opKind = HtOpKind::Delete; op.needsTaskId = true;
-		break;
-	case HtCmd_NudgeMinus1:
-		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = -1;
-		break;
-	case HtCmd_NudgePlus1:
-		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = 1;
-		break;
-	default:
-		break;
+	if (!RegistryMilestoneAppBarCmd(cmdId)) return {};
+	HtMenuOp op = MapRegistryCommand(cmdId);
+	if (cmdId == HtCmd_Edit || cmdId == HtCmd_Rename) {
+		op.opKind = HtOpKind::Edit;
+		op.needsTaskId = true;
 	}
 	return op;
 }
 
 HtMenuOp MapMarkerAppBarCommand(int cmdId) {
-	HtMenuOp op;
-	switch (cmdId) {
-	case HtCmd_Rename:
-		op.opKind = HtOpKind::Edit; op.needsTaskId = true;
-		break;
-	case HtCmd_Delete:
-		op.opKind = HtOpKind::Delete; op.needsTaskId = true;
-		break;
-	case HtCmd_NudgeMinus1:
-		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = -1;
-		break;
-	case HtCmd_NudgePlus1:
-		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = 1;
-		break;
-	default:
-		break;
+	if (!RegistryMarkerAppBarCmd(cmdId)) return {};
+	HtMenuOp op = MapRegistryCommand(cmdId);
+	if (cmdId == HtCmd_Rename) {
+		op.opKind = HtOpKind::Edit;
+		op.needsTaskId = true;
 	}
 	return op;
 }
 
+HtMenuOp MapNoteAppBarCommand(int cmdId) {
+	if (!RegistryNoteAppBarCmd(cmdId)) return {};
+	return MapRegistryCommand(cmdId);
+}
+
 HtMenuOp MapBackgroundAppBarCommand(int cmdId) {
-	HtMenuOp op;
-	switch (cmdId) {
-	case HtCmd_InsertNote:
-		op.opKind = HtOpKind::InsertFreeNote;
-		break;
-	default:
-		break;
+	if (!RegistryBackgroundAppBarCmd(cmdId)) return {};
+	return MapRegistryCommand(cmdId);
+}
+
+// ---- pure right-click context menu model -----------------------------------
+
+std::vector<HtMenuItem> BuildMenuForZone(HtZone zone, HtItemKind kind, bool hasRowId,
+	const PpDocument& doc, const std::string& hitId) {
+	if (zone == HtZone::Outside) return {};
+
+	if (zone == HtZone::EmptyCell) {
+		return BuildEmptyCellMenuItems();
+	}
+
+	AppBarSel sel = HtZoneToAppBarSel(zone, kind, hasRowId);
+	if (sel == AppBarSel::None && zone != HtZone::RowBand && zone != HtZone::Label) {
+		return {};
+	}
+
+	const std::string selId = hitId;
+	AppBarModel model = BuildAppBar(sel, doc, selId);
+	return AppBarModelToMenuItems(model);
+}
+
+HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind, bool hasRowId,
+	const PpDocument& doc, const std::string& hitId) {
+	HtMenuOp none;
+	if (cmdId == HtCmd_None) return none;
+
+	bool offered = false;
+	for (const auto& item : BuildMenuForZone(zone, kind, hasRowId, doc, hitId)) {
+		if (item.cmdId == cmdId) { offered = true; break; }
+	}
+	if (!offered) return none;
+
+	HtMenuOp op = MapRegistryCommand(cmdId);
+	// Marker Rename is Edit in the marker app-bar context.
+	if (zone == HtZone::Marker && cmdId == HtCmd_Rename) {
+		op.opKind = HtOpKind::Edit;
+		op.needsTaskId = true;
+	}
+	// Note context uses Edit for the edit button (not RenameRow).
+	if (zone == HtZone::Text && cmdId == HtCmd_Edit) {
+		op.opKind = HtOpKind::Edit;
+		op.needsTaskId = true;
+	}
+	if ((zone == HtZone::RowBand || (zone == HtZone::Label && kind == HtItemKind::RowLabel))
+		&& hasRowId && cmdId == HtCmd_Rename) {
+		op.opKind = HtOpKind::RenameRow;
+		op.needsRowId = true;
+		op.needsTaskId = false;
 	}
 	return op;
 }

@@ -6,6 +6,8 @@
 // dependencies so it can be unit-tested in the PowerPoint-free ops harness.
 #pragma once
 
+#include "GanttModel.h"
+
 #include <string>
 #include <vector>
 
@@ -137,6 +139,8 @@ enum HtMenuCmd {
 	HtCmd_AddRowBelow,
 	HtCmd_DeleteRow,
 	HtCmd_EmptyCellAddTaskHere,
+	HtCmd_EmptyCellAddMilestoneHere,
+	HtCmd_EmptyCellAddNoteHere,
 	HtCmd_AddRow,
 	// --- S2 app-bar command ids (one shared id space; menus + app bar) ---
 	HtCmd_InsertTask,
@@ -164,6 +168,10 @@ enum HtMenuCmd {
 	HtCmd_OutdentRow,
 	HtCmd_ToggleRailLabels,
 	HtCmd_CycleGrid,
+	HtCmd_GridAuto,
+	HtCmd_GridWeek,
+	HtCmd_GridMonth,
+	HtCmd_GridNone,
 	HtCmd_ReanchorNote,
 };
 
@@ -173,31 +181,23 @@ enum HtMenuCmd {
 // this item (skipped if it would be the very first item/entry of its menu).
 struct HtMenuItem {
 	int cmdId = HtCmd_None;
-	const char* label = "";
+	std::string label;
 	bool separatorBefore = false;
-	const char* submenu = ""; // empty = top-level item; non-empty = submenu label
+	std::string submenu; // empty = top-level item; non-empty = submenu label
+	bool enabled = true;
 };
 
-// Build the ordered list of menu items for a right-click at this zone. Empty
-// vector means "no menu" (e.g. Outside the chart but not over any chrome).
-// Mirrors the zone->items table in the on-slide-ux-plan overlay-context-menu
-// task:
-//   TaskBody/Milestone           -> Add Task (same row), Delete, Nudge -1/+1
-//                                   day, (tasks only) Percent -10/+10, Change
-//                                   Scale (D/W/M)
-//   RowBand(rowId set)/Label(ROW_LABEL) -> Add Task (this row), Add Row Below,
-//                                   Delete Row
-//   EmptyCell                    -> Add Task Here
-//   RowBand(empty id, i.e. chart background) / Label(TITLE) / Outside-but-
-//   in-chart                     -> Add Row, Change Scale (D/W/M)
+// Build the ordered list of menu items for a right-click at this zone. Items
+// are derived from the same shared command registry as the app bar (see
+// GanttCommandRegistry.h / BuildAppBar). `doc` and `hitId` supply enabled
+// states and context-specific labels (e.g. Label: bar/rail); pass an empty
+// doc / hitId when only structure is needed.
 //
 // `kind` disambiguates HtZone::Label (ROW_LABEL vs TITLE); ignored elsewhere.
 // `hasRowId` disambiguates HtZone::RowBand (a row's gutter, rowId set) from
-// the chart-background case (rowId empty) — both share the same HtZone value
-// (see GanttHitTestPoint), so the caller passes hit.rowId.empty() through
-// here rather than this function re-deriving it. Ignored for every other
-// zone (all of which have their menu fully determined by zone+kind alone).
-std::vector<HtMenuItem> BuildMenuForZone(HtZone zone, HtItemKind kind = HtItemKind::Task, bool hasRowId = true);
+// the chart-background case (rowId empty).
+std::vector<HtMenuItem> BuildMenuForZone(HtZone zone, HtItemKind kind, bool hasRowId,
+	const PpDocument& doc, const std::string& hitId = "");
 
 // Description of the operation a chosen (zone, cmdId) pair maps to. The
 // overlay's WM_COMMAND-equivalent handler switches on opKind and reads
@@ -229,6 +229,14 @@ enum class HtOpKind {
 	EnterLinkMode,  // needsTaskId; overlay enters link-pick mode (no doc mutation)
 	Unlink,         // needsTaskId; RemoveDependenciesTouching
 	InsertFreeNote, // free AddText at visible chart center (background context)
+	AddMilestoneAtPoint, // needsRowId; anchor day from click point (empty cell)
+	AddNoteAtPoint,      // needsRowId; anchor day from click point (empty cell)
+	InsertTaskBackground,       // add task at visible center / first row
+	InsertMilestoneBackground,  // add milestone at visible center / first row
+	InsertMarkerBackground,     // add custom marker at visible center
+	SetGridDensity,      // gridDensity set (or "__cycle__" sentinel for CycleGrid)
+	ToggleRailLabels,    // flip doc.railLabels
+	ReanchorNote,        // needsTaskId (text id)
 };
 
 struct HtMenuOp {
@@ -237,8 +245,9 @@ struct HtMenuOp {
 	bool needsTaskId = false;
 	long nudgeDays = 0;
 	int percentDelta = 0;
-	const char* scale = ""; // "day" | "week" | "month" when opKind == SetScale
+	const char* scale = ""; // "day" | "week" | ... when opKind == SetScale
 	const char* color = ""; // "#RRGGBB" when opKind == SetTaskColor
+	const char* gridDensity = ""; // when opKind == SetGridDensity
 };
 
 // Map a chosen menu command back to the operation it represents, validating
@@ -247,7 +256,11 @@ struct HtMenuOp {
 // any combination BuildMenuForZone would not produce — e.g. asking for
 // HtCmd_PercentMinus10 on a Milestone zone (milestones have no percent), or
 // HtCmd_AddTaskThisRow on RowBand background (hasRowId=false).
-HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind = HtItemKind::Task, bool hasRowId = true);
+HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind, bool hasRowId,
+	const PpDocument& doc = PpDocument{}, const std::string& hitId = "");
+
+// ONE shared (cmdId)->op registry used by app-bar dispatch and context menus.
+HtMenuOp MapRegistryCommand(int cmdId);
 
 // Map an app-bar command issued while a ROW is selected (R8 row group + Rename).
 // Pure registry for ops-test; Overlay.cpp's HandleAppBarCommand dispatches on
@@ -266,6 +279,9 @@ HtMenuOp MapMilestoneAppBarCommand(int cmdId);
 // Map app-bar commands issued while a MARKER is selected (rename, nudge,
 // delete). Pure registry for ops-test.
 HtMenuOp MapMarkerAppBarCommand(int cmdId);
+
+// Map app-bar commands issued while a NOTE (text) is selected.
+HtMenuOp MapNoteAppBarCommand(int cmdId);
 
 // Map app-bar commands issued with no selection (INSERT group on background).
 HtMenuOp MapBackgroundAppBarCommand(int cmdId);

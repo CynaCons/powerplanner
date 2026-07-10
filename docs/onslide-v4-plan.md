@@ -275,7 +275,7 @@ freshly inserted chart resemble the mockup.*
 *Spec: B8.3. The V3 vacuous-gate lesson applies: the old `MENU MAP OK` prints
 today without any new work — your gate is the NEW marker.*
 
-- [ ] **s6-menus** — Rebuild `BuildMenuForZone`/`MapMenuCommand` to derive
+- [x] **s6-menus** — Rebuild `BuildMenuForZone`/`MapMenuCommand` to derive
   from the shared registry: task/row/marker/text/milestone zones mirror their
   app-bar contexts; empty cell adds "Add task here / Add milestone here
   (`AddMilestone` op: CREATE if missing, mirroring AddTask) / Add note here";

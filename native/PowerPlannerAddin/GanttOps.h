@@ -34,6 +34,9 @@ bool OutdentRow(PpDocument& doc, const std::string& rowId);
 bool DeleteRow(PpDocument& doc, const std::string& rowId);
 
 std::string AddTask(PpDocument& doc, const std::string& rowId, const std::string& label, const std::string& startISO, const std::string& endISO);
+// Adds a milestone on rowId at dateISO. Generates a unique id ("ms<N>") and
+// returns it, mirroring AddTask's id-return convention.
+std::string AddMilestone(PpDocument& doc, const std::string& rowId, const std::string& label, const std::string& dateISO);
 bool DeleteById(PpDocument& doc, const std::string& id);
 bool MoveTaskToRow(PpDocument& doc, const std::string& taskId, const std::string& newRowId);
 bool SetTaskPercent(PpDocument& doc, const std::string& taskId, int pct);

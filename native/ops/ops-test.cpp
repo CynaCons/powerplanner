@@ -4,6 +4,7 @@
 #include "../PowerPlannerAddin/GanttOps.h"
 #include "../PowerPlannerAddin/GanttHitTest.h"
 #include "../PowerPlannerAddin/GanttAppBar.h"
+#include "../PowerPlannerAddin/GanttCommandRegistry.h"
 #include "../PowerPlannerAddin/GanttTheme.h"
 #include "../PowerPlannerAddin/GanttScene.h"
 
@@ -224,176 +225,189 @@ static bool RunDpiHelperChecks() {
 	return ok;
 }
 
-// Right-click context menu model checks: BuildMenuForZone's zone->items table
-// and MapMenuCommand's (zone,cmdId)->op mapping, including invalid combos.
-// Print 'MENU MAP OK' when these pass (after OPS HARNESS OK / DPI HELPER OK).
-static bool MenuHasCmd(const std::vector<HtMenuItem>& items, int cmdId) {
-	for (const auto& it : items) if (it.cmdId == cmdId) return true;
-	return false;
+static const HtMenuItem* MenuFindCmd(const std::vector<HtMenuItem>& items, int cmdId) {
+	for (const auto& it : items) if (it.cmdId == cmdId) return &it;
+	return nullptr;
 }
 
-static bool RunMenuModelChecks() {
+static const HtMenuItem* MenuFindInSubmenu(const std::vector<HtMenuItem>& items,
+	const char* submenu, int cmdId) {
+	for (const auto& it : items) {
+		if (it.submenu == submenu && it.cmdId == cmdId) return &it;
+	}
+	return nullptr;
+}
+
+static bool MenuItemsMatchRegistry(const std::vector<HtMenuItem>& menu,
+	const std::vector<HtMenuItem>& expected, const char* msg) {
+	if (menu.size() != expected.size()) return Check(false, msg);
+	for (size_t i = 0; i < menu.size(); ++i) {
+		if (menu[i].cmdId != expected[i].cmdId
+			|| menu[i].label != expected[i].label
+			|| menu[i].submenu != expected[i].submenu
+			|| menu[i].enabled != expected[i].enabled) {
+			return Check(false, msg);
+		}
+	}
+	return Check(true, msg);
+}
+
+static PpDocument MenuSampleDoc() {
+	PpDocument doc;
+	doc.rows.push_back(PpRow{"r1", "Row 1", "", false});
+	doc.rows.push_back(PpRow{"r2", "Row 2", "", false});
+	doc.tasks.push_back(PpTask{"t1", "Task 1", "2026-01-01", "2026-01-08", "r1", "#4355E0", 0});
+	doc.tasks.push_back(PpTask{"t2", "Task 2", "2026-01-10", "2026-01-15", "r2", "", 50});
+	doc.milestones.push_back(PpMilestone{"m1", "MS", "2026-01-12", "r1", ""});
+	doc.markers.push_back(PpMarker{"mk1", "custom", "Marker", "2026-01-20", ""});
+	doc.texts.push_back(PpText{"n1", "Note", "", "r1", "2026-01-05", "", 0, 0});
+	doc.deps.push_back(PpDependency{"dep1", "t1", "t2", "finish-to-start"});
+	return doc;
+}
+
+// V4 right-click menu model: every zone mirrors the shared app-bar registry;
+// MapMenuCommand validates against the built menu then MapRegistryCommand.
+// Print 'MENU MAP V4 OK' when these pass.
+static bool RunMenuModelV4Checks() {
 	bool ok = true;
+	PpDocument doc = MenuSampleDoc();
 
-	// ---- TaskBody / TaskEdgeL / TaskEdgeR: identical menus (edges are still
-	// "the task"). Add Task, Delete, Nudge -1/+1, Percent -10/+10, Change Scale D/W/M.
+	auto expectFromAppBar = [&](AppBarSel sel, const std::string& selId) {
+		return AppBarModelToMenuItems(BuildAppBar(sel, doc, selId));
+	};
+
+	// ---- TaskBody / edges: mirror task app-bar context.
 	for (HtZone z : { HtZone::TaskBody, HtZone::TaskEdgeL, HtZone::TaskEdgeR }) {
-		auto items = BuildMenuForZone(z);
-		ok = Check(MenuHasCmd(items, HtCmd_AddTaskSameRow), "task zone menu has Add Task") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_Delete), "task zone menu has Delete") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_NudgeMinus1), "task zone menu has Nudge -1") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_NudgePlus1), "task zone menu has Nudge +1") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_PercentMinus10), "task zone menu has Percent -10") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_PercentPlus10), "task zone menu has Percent +10") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_ScaleDay) && MenuHasCmd(items, HtCmd_ScaleWeek) && MenuHasCmd(items, HtCmd_ScaleMonth)
-			&& MenuHasCmd(items, HtCmd_ScaleQuarter) && MenuHasCmd(items, HtCmd_ScaleYear),
-			"task zone menu has Change Scale D/W/M/Q/Y") && ok;
-		// Scale submenu items must actually be tagged as living under "Change Scale".
-		for (const auto& it : items) {
-			if (it.cmdId == HtCmd_ScaleDay || it.cmdId == HtCmd_ScaleWeek || it.cmdId == HtCmd_ScaleMonth
-				|| it.cmdId == HtCmd_ScaleQuarter || it.cmdId == HtCmd_ScaleYear) {
-				ok = Check(std::string(it.submenu) == "Change Scale", "scale items are under the Change Scale submenu") && ok;
-			}
-		}
-		// New Quarter/Year commands map to the right scale.
-		{
-			HtMenuOp opq = MapMenuCommand(HtZone::TaskBody, HtCmd_ScaleQuarter);
-			ok = Check(opq.opKind == HtOpKind::SetScale && std::string(opq.scale) == "quarter", "map: ScaleQuarter -> SetScale(quarter)") && ok;
-			HtMenuOp opy = MapMenuCommand(HtZone::TaskBody, HtCmd_ScaleYear);
-			ok = Check(opy.opKind == HtOpKind::SetScale && std::string(opy.scale) == "year", "map: ScaleYear -> SetScale(year)") && ok;
-		}
+		auto menu = BuildMenuForZone(z, HtItemKind::Task, true, doc, "t1");
+		auto expected = expectFromAppBar(AppBarSel::Task, "t1");
+		ok = MenuItemsMatchRegistry(menu, expected, "task zone menu mirrors task app-bar registry") && ok;
 	}
 
-	// ---- Milestone: same as task zones but NO Percent items (no percent-complete).
+	// Anti-tautology pins: hardcoded labels+ids independent of registry builders.
 	{
-		auto items = BuildMenuForZone(HtZone::Milestone);
-		ok = Check(MenuHasCmd(items, HtCmd_AddTaskSameRow), "milestone menu has Add Task") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_Delete), "milestone menu has Delete") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_NudgeMinus1) && MenuHasCmd(items, HtCmd_NudgePlus1), "milestone menu has Nudge -1/+1") && ok;
-		ok = Check(!MenuHasCmd(items, HtCmd_PercentMinus10) && !MenuHasCmd(items, HtCmd_PercentPlus10), "milestone menu has NO Percent items") && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_ScaleDay) && MenuHasCmd(items, HtCmd_ScaleWeek) && MenuHasCmd(items, HtCmd_ScaleMonth),
-			"milestone menu has Change Scale D/W/M") && ok;
+		auto items = BuildMenuForZone(HtZone::TaskBody, HtItemKind::Task, true, doc, "t1");
+		const HtMenuItem* edit = MenuFindCmd(items, HtCmd_Edit);
+		ok = Check(edit && edit->label == "Edit", "pin: task zone Edit/HtCmd_Edit") && ok;
+		const HtMenuItem* del = MenuFindCmd(items, HtCmd_Delete);
+		ok = Check(del && del->label == "Delete", "pin: task zone Delete/HtCmd_Delete") && ok;
+		const HtMenuItem* link = MenuFindCmd(items, HtCmd_Link);
+		ok = Check(link && link->label == "Link", "pin: task zone Link/HtCmd_Link") && ok;
+		PpDocument noDepDoc = MenuSampleDoc();
+		noDepDoc.deps.clear();
+		items = BuildMenuForZone(HtZone::TaskBody, HtItemKind::Task, true, noDepDoc, "t1");
+		const HtMenuItem* unlink = MenuFindCmd(items, HtCmd_Unlink);
+		ok = Check(unlink && !unlink->enabled, "pin: task zone Unlink disabled without deps") && ok;
+		items = BuildMenuForZone(HtZone::TaskBody, HtItemKind::Task, true, doc, "t1");
+		unlink = MenuFindCmd(items, HtCmd_Unlink);
+		ok = Check(unlink && unlink->enabled, "pin: task zone Unlink enabled when deps touch task") && ok;
 	}
 
-	// ---- RowBand with a row id (a row's gutter) / Label(ROW_LABEL): Add Task
-	// (this row), Add Row Below, Delete Row. No Percent/Nudge/Scale here.
+	// ---- Milestone / Marker / Text zones.
+	{
+		auto menu = BuildMenuForZone(HtZone::Milestone, HtItemKind::Milestone, true, doc, "m1");
+		ok = MenuItemsMatchRegistry(menu, expectFromAppBar(AppBarSel::Milestone, "m1"),
+			"milestone menu mirrors milestone app-bar registry") && ok;
+	}
+	{
+		auto menu = BuildMenuForZone(HtZone::Marker, HtItemKind::Marker, true, doc, "mk1");
+		ok = MenuItemsMatchRegistry(menu, expectFromAppBar(AppBarSel::Marker, "mk1"),
+			"marker menu mirrors marker app-bar registry") && ok;
+	}
+	{
+		auto menu = BuildMenuForZone(HtZone::Text, HtItemKind::Text, true, doc, "n1");
+		ok = MenuItemsMatchRegistry(menu, expectFromAppBar(AppBarSel::Note, "n1"),
+			"text menu mirrors note app-bar registry") && ok;
+	}
+
+	// ---- Row gutter / row label.
 	for (int variant = 0; variant < 2; ++variant) {
-		std::vector<HtMenuItem> items = (variant == 0)
-			? BuildMenuForZone(HtZone::RowBand, HtItemKind::Task, /*hasRowId=*/true)
-			: BuildMenuForZone(HtZone::Label, HtItemKind::RowLabel);
+		std::vector<HtMenuItem> menu = (variant == 0)
+			? BuildMenuForZone(HtZone::RowBand, HtItemKind::Task, true, doc, "r1")
+			: BuildMenuForZone(HtZone::Label, HtItemKind::RowLabel, true, doc, "r1");
+		auto expected = expectFromAppBar(AppBarSel::Row, "r1");
 		const char* label = (variant == 0) ? "RowBand(rowId)" : "Label(ROW_LABEL)";
-		ok = Check(MenuHasCmd(items, HtCmd_AddTaskThisRow), (std::string(label) + " menu has Add Task").c_str()) && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_AddRowBelow), (std::string(label) + " menu has Add Row Below").c_str()) && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_DeleteRow), (std::string(label) + " menu has Delete Row").c_str()) && ok;
-		ok = Check(!MenuHasCmd(items, HtCmd_AddRow), (std::string(label) + " menu has no background Add Row").c_str()) && ok;
+		ok = MenuItemsMatchRegistry(menu, expected, (std::string(label) + " menu mirrors row app-bar").c_str()) && ok;
+		const HtMenuItem* delRow = MenuFindCmd(menu, HtCmd_DeleteRow);
+		ok = Check(delRow && delRow->label == "Delete",
+			(std::string(label) + " menu has Delete row command").c_str()) && ok;
 	}
 
-	// ---- EmptyCell: Add Task Here, nothing else.
+	// ---- Empty cell: add task / milestone / note here.
 	{
-		auto items = BuildMenuForZone(HtZone::EmptyCell);
-		ok = Check(items.size() == 1 && items[0].cmdId == HtCmd_EmptyCellAddTaskHere, "EmptyCell menu is exactly [Add Task Here]") && ok;
+		auto menu = BuildMenuForZone(HtZone::EmptyCell, HtItemKind::Task, true, doc, "r1");
+		auto expected = BuildEmptyCellMenuItems();
+		ok = MenuItemsMatchRegistry(menu, expected, "EmptyCell menu is add task/milestone/note here") && ok;
 	}
 
-	// ---- Background (RowBand with empty rowId) / Label(TITLE) / Outside-in-
-	// chart (modeled as RowBand background too, per the spec table): Add Row,
-	// Change Scale D/W/M. No row-specific or task-specific items.
+	// ---- Background: Insert + Scale + Grid submenus (+ Labels).
 	for (int variant = 0; variant < 2; ++variant) {
-		std::vector<HtMenuItem> items = (variant == 0)
-			? BuildMenuForZone(HtZone::RowBand, HtItemKind::Task, /*hasRowId=*/false)
-			: BuildMenuForZone(HtZone::Label, HtItemKind::Title);
+		std::vector<HtMenuItem> menu = (variant == 0)
+			? BuildMenuForZone(HtZone::RowBand, HtItemKind::Task, false, doc)
+			: BuildMenuForZone(HtZone::Label, HtItemKind::Title, false, doc);
+		auto expected = expectFromAppBar(AppBarSel::None, "");
 		const char* label = (variant == 0) ? "RowBand(background)" : "Label(TITLE)";
-		ok = Check(MenuHasCmd(items, HtCmd_AddRow), (std::string(label) + " menu has Add Row").c_str()) && ok;
-		ok = Check(MenuHasCmd(items, HtCmd_ScaleDay) && MenuHasCmd(items, HtCmd_ScaleWeek) && MenuHasCmd(items, HtCmd_ScaleMonth),
-			(std::string(label) + " menu has Change Scale D/W/M").c_str()) && ok;
-		ok = Check(!MenuHasCmd(items, HtCmd_AddTaskThisRow) && !MenuHasCmd(items, HtCmd_DeleteRow),
-			(std::string(label) + " menu has no row-specific items").c_str()) && ok;
+		ok = MenuItemsMatchRegistry(menu, expected, (std::string(label) + " menu mirrors background app-bar").c_str()) && ok;
 	}
 
-	// ---- Outside: no menu at all.
+	// Anti-tautology pins for background zone.
 	{
-		auto items = BuildMenuForZone(HtZone::Outside);
-		ok = Check(items.empty(), "Outside zone has no menu") && ok;
+		auto items = BuildMenuForZone(HtZone::RowBand, HtItemKind::Task, false, doc);
+		const HtMenuItem* row = MenuFindInSubmenu(items, "Insert", HtCmd_AddRow);
+		ok = Check(row && row->label == "Row", "pin: background Insert/Row/HtCmd_AddRow") && ok;
+		const HtMenuItem* week = MenuFindInSubmenu(items, "Change Scale", HtCmd_ScaleWeek);
+		ok = Check(week && week->label == "Week", "pin: background Scale/Week/HtCmd_ScaleWeek") && ok;
+		const HtMenuItem* gridAuto = MenuFindInSubmenu(items, "Grid", HtCmd_GridAuto);
+		ok = Check(gridAuto && gridAuto->label == "Auto", "pin: background Grid/Auto/HtCmd_GridAuto") && ok;
 	}
 
-	// ---- MapMenuCommand: valid (zone,cmdId) pairs map to the right op.
-	{
-		HtMenuOp op = MapMenuCommand(HtZone::TaskBody, HtCmd_AddTaskSameRow);
-		ok = Check(op.opKind == HtOpKind::AddTask && op.needsRowId, "map: TaskBody+AddTaskSameRow -> AddTask(needsRowId)") && ok;
+	// ---- Outside: no menu.
+	ok = Check(BuildMenuForZone(HtZone::Outside, HtItemKind::Task, false, doc).empty(),
+		"Outside zone has no menu") && ok;
 
-		op = MapMenuCommand(HtZone::TaskBody, HtCmd_Delete);
-		ok = Check(op.opKind == HtOpKind::Delete && op.needsTaskId, "map: TaskBody+Delete -> Delete(needsTaskId)") && ok;
-
-		op = MapMenuCommand(HtZone::TaskBody, HtCmd_NudgeMinus1);
-		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId && op.nudgeDays == -1, "map: TaskBody+NudgeMinus1 -> Nudge(-1)") && ok;
-
-		op = MapMenuCommand(HtZone::TaskEdgeR, HtCmd_NudgePlus1);
-		ok = Check(op.opKind == HtOpKind::Nudge && op.nudgeDays == 1, "map: TaskEdgeR+NudgePlus1 -> Nudge(+1)") && ok;
-
-		op = MapMenuCommand(HtZone::TaskBody, HtCmd_PercentMinus10);
-		ok = Check(op.opKind == HtOpKind::Percent && op.needsTaskId && op.percentDelta == -10, "map: TaskBody+PercentMinus10 -> Percent(-10)") && ok;
-
-		op = MapMenuCommand(HtZone::TaskBody, HtCmd_PercentPlus10);
-		ok = Check(op.opKind == HtOpKind::Percent && op.percentDelta == 10, "map: TaskBody+PercentPlus10 -> Percent(+10)") && ok;
-
-		op = MapMenuCommand(HtZone::TaskBody, HtCmd_ScaleWeek);
-		ok = Check(op.opKind == HtOpKind::SetScale && std::string(op.scale) == "week", "map: TaskBody+ScaleWeek -> SetScale(week)") && ok;
-
-		op = MapMenuCommand(HtZone::Milestone, HtCmd_NudgeMinus1);
-		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId, "map: Milestone+NudgeMinus1 -> Nudge (id is the milestone id)") && ok;
-
-		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddTaskThisRow, HtItemKind::Task, /*hasRowId=*/true);
-		ok = Check(op.opKind == HtOpKind::AddTask && op.needsRowId, "map: RowBand(rowId)+AddTaskThisRow -> AddTask(needsRowId)") && ok;
-
-		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddRowBelow, HtItemKind::Task, /*hasRowId=*/true);
-		ok = Check(op.opKind == HtOpKind::AddRow && op.needsRowId, "map: RowBand(rowId)+AddRowBelow -> AddRow(needsRowId)") && ok;
-
-		op = MapMenuCommand(HtZone::RowBand, HtCmd_DeleteRow, HtItemKind::Task, /*hasRowId=*/true);
-		ok = Check(op.opKind == HtOpKind::DeleteRow && op.needsRowId, "map: RowBand(rowId)+DeleteRow -> DeleteRow(needsRowId)") && ok;
-
-		op = MapMenuCommand(HtZone::Label, HtCmd_AddTaskThisRow, HtItemKind::RowLabel);
-		ok = Check(op.opKind == HtOpKind::AddTask, "map: Label(ROW_LABEL)+AddTaskThisRow -> AddTask") && ok;
-
-		op = MapMenuCommand(HtZone::EmptyCell, HtCmd_EmptyCellAddTaskHere);
-		ok = Check(op.opKind == HtOpKind::AddTaskAtPoint && op.needsRowId, "map: EmptyCell+AddTaskHere -> AddTaskAtPoint(needsRowId)") && ok;
-
-		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddRow, HtItemKind::Task, /*hasRowId=*/false);
-		ok = Check(op.opKind == HtOpKind::AddRow && !op.needsRowId, "map: RowBand(background)+AddRow -> AddRow(no row needed)") && ok;
-
-		op = MapMenuCommand(HtZone::Label, HtCmd_ScaleMonth, HtItemKind::Title);
-		ok = Check(op.opKind == HtOpKind::SetScale && std::string(op.scale) == "month", "map: Label(TITLE)+ScaleMonth -> SetScale(month)") && ok;
+	// ---- MapMenuCommand: every offered cmd maps to a live registry op (not None).
+	for (const auto& item : BuildMenuForZone(HtZone::TaskBody, HtItemKind::Task, true, doc, "t1")) {
+		if (item.cmdId == HtCmd_None) continue;
+		HtMenuOp op = MapMenuCommand(HtZone::TaskBody, item.cmdId, HtItemKind::Task, true, doc, "t1");
+		ok = Check(op.opKind != HtOpKind::None,
+			"map: every task-menu cmd maps to a registry op") && ok;
+	}
+	for (const auto& item : BuildEmptyCellMenuItems()) {
+		HtMenuOp op = MapMenuCommand(HtZone::EmptyCell, item.cmdId, HtItemKind::Task, true, doc, "r1");
+		ok = Check(op.opKind != HtOpKind::None,
+			"map: every EmptyCell cmd maps to a registry op") && ok;
 	}
 
-	// ---- MapMenuCommand: invalid combos map to HtOpKind::None.
+	// ---- MapMenuCommand: representative op semantics.
 	{
-		HtMenuOp op = MapMenuCommand(HtZone::Milestone, HtCmd_PercentMinus10);
-		ok = Check(op.opKind == HtOpKind::None, "map: Milestone+PercentMinus10 (no percent) -> None") && ok;
+		HtMenuOp op = MapMenuCommand(HtZone::TaskBody, HtCmd_Swatch3, HtItemKind::Task, true, doc, "t1");
+		ok = Check(op.opKind == HtOpKind::SetTaskColor && op.needsTaskId
+			&& op.color && std::strcmp(op.color, "#7A4FA3") == 0,
+			"map: TaskBody+Swatch3 -> SetTaskColor #7A4FA3") && ok;
 
-		op = MapMenuCommand(HtZone::Milestone, HtCmd_PercentPlus10);
-		ok = Check(op.opKind == HtOpKind::None, "map: Milestone+PercentPlus10 (no percent) -> None") && ok;
+		op = MapMenuCommand(HtZone::EmptyCell, HtCmd_EmptyCellAddMilestoneHere, HtItemKind::Task, true, doc, "r1");
+		ok = Check(op.opKind == HtOpKind::AddMilestoneAtPoint && op.needsRowId,
+			"map: EmptyCell+AddMilestoneHere -> AddMilestoneAtPoint") && ok;
 
-		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddTaskThisRow, HtItemKind::Task, /*hasRowId=*/false);
-		ok = Check(op.opKind == HtOpKind::None, "map: RowBand(background)+AddTaskThisRow -> None (no row under background)") && ok;
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_AddRow, HtItemKind::Task, false, doc);
+		ok = Check(op.opKind == HtOpKind::AddRow && !op.needsRowId,
+			"map: background+AddRow -> AddRow") && ok;
 
-		op = MapMenuCommand(HtZone::RowBand, HtCmd_DeleteRow, HtItemKind::Task, /*hasRowId=*/false);
-		ok = Check(op.opKind == HtOpKind::None, "map: RowBand(background)+DeleteRow -> None") && ok;
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_GridMonth, HtItemKind::Task, false, doc);
+		ok = Check(op.opKind == HtOpKind::SetGridDensity
+			&& op.gridDensity && std::string(op.gridDensity) == "month",
+			"map: background+GridMonth -> SetGridDensity(month)") && ok;
 
-		op = MapMenuCommand(HtZone::EmptyCell, HtCmd_Delete);
-		ok = Check(op.opKind == HtOpKind::None, "map: EmptyCell+Delete -> None (EmptyCell only offers Add Task Here)") && ok;
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_DeleteRow, HtItemKind::Task, true, doc, "r1");
+		ok = Check(op.opKind == HtOpKind::DeleteRow && op.needsRowId,
+			"map: RowBand+DeleteRow -> DeleteRow") && ok;
+	}
 
-		op = MapMenuCommand(HtZone::Outside, HtCmd_AddRow);
-		ok = Check(op.opKind == HtOpKind::None, "map: Outside+AddRow -> None (Outside has no menu)") && ok;
-
-		op = MapMenuCommand(HtZone::TaskBody, HtCmd_AddRow);
-		ok = Check(op.opKind == HtOpKind::None, "map: TaskBody+AddRow -> None (AddRow is a background-only command)") && ok;
-
-		op = MapMenuCommand(HtZone::TaskBody, HtCmd_DeleteRow);
-		ok = Check(op.opKind == HtOpKind::None, "map: TaskBody+DeleteRow -> None (DeleteRow is a row-oriented command)") && ok;
-
-		op = MapMenuCommand(HtZone::TaskBody, HtCmd_None);
-		ok = Check(op.opKind == HtOpKind::None, "map: cmdId None -> None (menu dismissed)") && ok;
-
-		op = MapMenuCommand(HtZone::Label, HtCmd_AddRow, HtItemKind::RowLabel);
-		ok = Check(op.opKind == HtOpKind::None, "map: Label(ROW_LABEL)+AddRow -> None (background-only command)") && ok;
+	// ---- MapMenuCommand: invalid combos -> None.
+	{
+		HtMenuOp op = MapMenuCommand(HtZone::TaskBody, HtCmd_AddRow, HtItemKind::Task, true, doc, "t1");
+		ok = Check(op.opKind == HtOpKind::None, "map: TaskBody+AddRow -> None") && ok;
+		op = MapMenuCommand(HtZone::Outside, HtCmd_Delete, HtItemKind::Task, false, doc);
+		ok = Check(op.opKind == HtOpKind::None, "map: Outside+Delete -> None") && ok;
 	}
 
 	return ok;
@@ -1565,7 +1579,7 @@ int main() {
 	ok = RunHitTestChecks() && ok;
 	bool dpiOk = RunDpiHelperChecks();
 	ok = dpiOk && ok;
-	bool menuOk = RunMenuModelChecks();
+	bool menuOk = RunMenuModelV4Checks();
 	ok = menuOk && ok;
 	bool cursorOk = RunCursorMapChecks();
 	ok = cursorOk && ok;
@@ -1677,7 +1691,7 @@ int main() {
 		std::printf("DPI HELPER OK\n");
 	}
 	if (menuOk) {
-		std::printf("MENU MAP OK\n");
+		std::printf("MENU MAP V4 OK\n");
 	}
 	if (cursorOk) {
 		std::printf("CURSOR MAP OK\n");
