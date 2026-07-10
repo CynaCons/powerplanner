@@ -16,17 +16,31 @@ It ships as a **single-file portable HTML app** — no install, no account, no s
 
 ![PowerPlanner web app](docs/media/web-app.png)
 
-### PowerPoint add-in (native)
+### PowerPoint add-in (native, on-slide editor)
 
-A native C++ COM add-in (think-cell style) that emits the chart as **real, editable PowerPoint shapes** — not an image — with a clean Material look:
+A native C++ COM add-in (think-cell style) that emits the chart as **real, editable PowerPoint shapes** — not an image — and turns the slide itself into the editor: an input-capturing overlay with its own selection model, drag gestures, scoped keyboard shortcuts, context menus, and a docked contextual **app bar**.
 
-![Native Material Gantt in PowerPoint](docs/media/native-material.png)
+The V4 look — rail label column, hierarchical two-band date header, Material bars with blended tracks, milestones, brackets, dependency elbows, today/deadline markers:
 
-On-slide contextual overlay (selection frame, handles, and a badge) tracking the selection over the live slide:
+![Native on-slide Gantt, V4 look](docs/media/native-v4-chart.png)
 
-![Native on-slide overlay](docs/media/native-overlay.png)
+The app bar follows your selection. Select a **task** and you get color swatches, ±1d nudges, label placement, linking, and notes (shown here over the live slide):
 
-Live linkage — drag a bar, hit **Reflow**, and the move is read back into dates with dependencies/summary reflowed and the embedded data kept in sync:
+![App bar — task selected, over the live slide](docs/media/native-v4-task-context.png)
+
+Select a **row** by clicking its name in the rail — add above/below, reorder, indent/outdent, rename, delete (with full cascade):
+
+![App bar — row selected](docs/media/native-v4-appbar-row.png)
+
+Select a **milestone** — nudge its date, rename, note, delete:
+
+![App bar — milestone selected](docs/media/native-v4-appbar-milestone.png)
+
+With **nothing selected**, the bar offers inserts (task / milestone / marker / note), the time scale, labels, and grid density:
+
+![App bar — no selection](docs/media/native-v4-appbar-none.png)
+
+Every gesture and command is one undo entry, every command also lives in the right-click menus (derived from the same command registry as the app bar), and dragging a bar reflows dates with dependencies and the embedded data kept in sync:
 
 ![Native reflow](docs/media/native-reflow.png)
 
