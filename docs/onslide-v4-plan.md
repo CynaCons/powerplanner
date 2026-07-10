@@ -245,7 +245,7 @@ freshly inserted chart resemble the mockup.*
     task.color == `#7A4FA3` in PP_DOC AND bar fill reads back as its blend;
     click `+1d` ⇒ dates +1; click Label ⇒ placement flipped; ⇒ `TASKCTX PASS`.
   - AC2 ⚙ GATE-FULL floor green.
-- [ ] **s4-marker-mgmt** — Markers become full selection citizens: MARKER in
+- [x] **s4-marker-mgmt** — Markers become full selection citizens: MARKER in
   `HandleHotkeyDelete` + Delete-scope registration, app-bar marker context
   (Rename via card editor, ±1d = `SetMarkerDate`, Delete = `DeleteById`),
   "Marker" insert on background context (custom marker at visible center).

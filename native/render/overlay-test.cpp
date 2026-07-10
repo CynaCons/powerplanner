@@ -57,6 +57,8 @@
 //                       ROW_LABEL shape; undo-entry verification runs LAST via
 //                       PP_DOC reads only (ExecuteMso Undo bricks overlay
 //                       chart tracking — see undo-recovery-spike) ⇒ `ROWSEL PASS`.
+//   Stage 17: MARKERMGMT — insert marker via app-bar INSERT group, select it,
+//                       Delete hotkey removes it ⇒ `MARKERMGMT PASS`.
 //
 //   ppoverlay.exe <output.png>
 #include "../PowerPlannerAddin/pch.h"
@@ -257,6 +259,11 @@ static const PpTask* FindTaskInDoc(const PpDocument& doc, const char* id) {
 
 static const PpMilestone* FindMilestoneInDoc(const PpDocument& doc, const char* id) {
 	for (const auto& m : doc.milestones) if (m.id == id) return &m;
+	return nullptr;
+}
+
+static const PpMarker* FindMarkerInDoc(const PpDocument& doc, const char* id) {
+	for (const auto& m : doc.markers) if (m.id == id) return &m;
 	return nullptr;
 }
 
@@ -2877,6 +2884,115 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"ROWSEL FAIL COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"ROWSEL PASS\n" : L"ROWSEL FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 17: MARKERMGMT -------------------------------------------
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				int failStep = 0;
+				try {
+					HWND ov = OverlayHwnd();
+					HWND ab = OverlayAppBarHwnd();
+					PowerPoint::ShapePtr chartRoot = RefetchChartRoot(app);
+					if (!ov || !ab || !chartRoot) {
+						failStep = 0;
+						wprintf(L"MARKERMGMT FAIL preconditions (ov=%d ab=%d chart=%d)\n",
+							ov ? 1 : 0, ab ? 1 : 0, chartRoot ? 1 : 0);
+					} else {
+						auto PostAppBarClick = [&](int cmd) -> bool {
+							RECT r = {};
+							if (!OverlayAppBarButtonRectForTest(cmd, &r)) return false;
+							POINT pt = { (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+							POINT client = pt;
+							::ScreenToClient(ab, &client);
+							LPARAM lp = MAKELPARAM((short)client.x, (short)client.y);
+							::PostMessageW(ab, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+							::PostMessageW(ab, WM_LBUTTONUP, 0, lp);
+							return true;
+						};
+
+						Overlay_SelectForTest(nullptr, nullptr);
+						Overlay_InvalidateAppBarForTest();
+						PumpFor(500);
+
+						std::string docJsonBefore = ReadGanttFromSlide(app);
+						PpDocument docBefore = DocumentFromJson(docJsonBefore);
+						const size_t markersBefore = docBefore.markers.size();
+
+						bool step1 = false;
+						std::string insertedId;
+						for (int attempt = 1; attempt <= 2 && !step1; ++attempt) {
+							if (attempt > 1) wprintf(L"MARKERMGMT diag: insert retry attempt %d\n", attempt);
+							if (!PostAppBarClick(HtCmd_InsertMarker)) {
+								failStep = 1;
+								wprintf(L"MARKERMGMT FAIL step1 could not click Insert Marker\n");
+								break;
+							}
+							PumpFor(800);
+							Overlay_InvalidateAppBarForTest();
+							PumpFor(300);
+							std::string docJsonAfter = ReadGanttFromSlide(app);
+							PpDocument docAfter = DocumentFromJson(docJsonAfter);
+							if (docAfter.markers.size() != markersBefore + 1) {
+								if (attempt == 2) {
+									failStep = 1;
+									wprintf(L"MARKERMGMT FAIL step1 markers %zu expected %zu\n",
+										docAfter.markers.size(), markersBefore + 1);
+								}
+								continue;
+							}
+							for (const auto& mk : docAfter.markers) {
+								bool wasBefore = false;
+								for (const auto& prev : docBefore.markers) {
+									if (prev.id == mk.id) { wasBefore = true; break; }
+								}
+								if (!wasBefore) { insertedId = mk.id; break; }
+							}
+							step1 = !insertedId.empty()
+								&& Overlay_GetSelectedKindForTest() == OVERLAY_SELKIND_MARKER_FOR_TEST
+								&& Overlay_GetSelectedIdForTest()
+								&& std::strcmp(Overlay_GetSelectedIdForTest(), insertedId.c_str()) == 0;
+							if (!step1 && attempt == 2) {
+								failStep = 1;
+								wprintf(L"MARKERMGMT FAIL step1 insert/select (id='%hs' kind=%d sel='%hs')\n",
+									insertedId.c_str(), Overlay_GetSelectedKindForTest(),
+									Overlay_GetSelectedIdForTest() ? Overlay_GetSelectedIdForTest() : "(null)");
+							}
+						}
+
+						bool step2 = false;
+						if (step1) {
+							Overlay_SelectForTest("MARKER", insertedId.c_str());
+							Overlay_InvalidateAppBarForTest();
+							PumpFor(500);
+							for (int attempt = 1; attempt <= 2 && !step2; ++attempt) {
+								if (attempt > 1) wprintf(L"MARKERMGMT diag: Delete retry attempt %d\n", attempt);
+								PumpFor(400);
+								::PostMessageW(ov, WM_HOTKEY, OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+								PumpFor(400);
+								::PostMessageW(ov, WM_HOTKEY, OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+								PumpFor(800);
+								std::string docJsonDel = ReadGanttFromSlide(app);
+								PpDocument docDel = DocumentFromJson(docJsonDel);
+								bool markerGone = FindMarkerInDoc(docDel, insertedId.c_str()) == nullptr;
+								step2 = markerGone && docDel.markers.size() == markersBefore;
+								if (!step2 && attempt == 2) {
+									failStep = 2;
+									wprintf(L"MARKERMGMT FAIL step2 delete (gone=%d size %zu expected %zu)\n",
+										markerGone ? 1 : 0, docDel.markers.size(), markersBefore);
+								}
+							}
+						}
+
+						pass = step1 && step2;
+						if (!pass && failStep == 0) failStep = step1 ? 2 : 1;
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"MARKERMGMT FAIL COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"MARKERMGMT PASS\n" : L"MARKERMGMT FAIL\n");
 				if (!pass) rc = 1;
 			}
 

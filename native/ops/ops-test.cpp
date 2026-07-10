@@ -1511,6 +1511,21 @@ static bool RunTaskAppBarMapChecks() {
 			"map: milestone appbar Rename -> Edit") && ok;
 	}
 	{
+		HtMenuOp op = MapMarkerAppBarCommand(HtCmd_Rename);
+		ok = Check(op.opKind == HtOpKind::Edit && op.needsTaskId,
+			"map: marker appbar Rename -> Edit") && ok;
+	}
+	{
+		HtMenuOp op = MapMarkerAppBarCommand(HtCmd_Delete);
+		ok = Check(op.opKind == HtOpKind::Delete && op.needsTaskId,
+			"map: marker appbar Delete -> Delete") && ok;
+	}
+	{
+		HtMenuOp op = MapMarkerAppBarCommand(HtCmd_NudgePlus1);
+		ok = Check(op.opKind == HtOpKind::Nudge && op.needsTaskId && op.nudgeDays == 1,
+			"map: marker appbar +1d -> Nudge +1") && ok;
+	}
+	{
 		HtMenuOp op = MapTaskAppBarCommand(HtCmd_ScaleWeek);
 		ok = Check(op.opKind == HtOpKind::None, "map: task appbar ScaleWeek -> None") && ok;
 	}

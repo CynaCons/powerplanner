@@ -515,6 +515,43 @@ std::string RowForSelection(const PpDocument& doc, const std::string& kind, cons
 	return FirstRowId(doc);
 }
 
+const PpMarker* FindMarker(const PpDocument& doc, const std::string& id) {
+	for (const auto& mk : doc.markers) {
+		if (mk.id == id) return &mk;
+	}
+	return nullptr;
+}
+
+std::string DefaultMarkerDateAtVisibleCenter() {
+	float pxPerDay = ComputeEmptyCellPxPerDay();
+	if (pxPerDay <= 0.0f || g_chartScreenRect.right <= g_chartScreenRect.left) return "2026-01-01";
+	if (!g_app) return "2026-01-01";
+	try {
+		std::string json = ReadGanttFromSlide(g_app);
+		if (json.empty()) return "2026-01-01";
+		PpDocument doc = DocumentFromJson(json);
+		const long centerScreenX = (g_chartScreenRect.left + g_chartScreenRect.right) / 2;
+		bool haveRef = false;
+		long refDay = 0;
+		long refScreenX = 0;
+		for (const auto& item : g_hitSnapshot.items) {
+			if (item.kind != HtItemKind::Task) continue;
+			const PpTask* task = FindTask(doc, item.id);
+			if (!task) continue;
+			refDay = DateToDays(task->start);
+			refScreenX = item.rect.left;
+			haveRef = true;
+			break;
+		}
+		if (!haveRef) return "2026-01-01";
+		const long centerDay = refDay + (long)::lround((double)(centerScreenX - refScreenX) / (double)pxPerDay);
+		return DaysToDate(centerDay);
+	}
+	catch (...) {
+		return "2026-01-01";
+	}
+}
+
 void DefaultTaskDates(const PpDocument& doc, const std::string& rowId, const std::string& selectedTaskId, std::string& start, std::string& end) {
 	if (const PpTask* selected = FindTask(doc, selectedTaskId)) {
 		start = selected->start;
@@ -1472,6 +1509,7 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 		PpDocument doc = DocumentFromJson(json);
 
 		bool isMilestone = (kind == "MILESTONE");
+		bool isMarker = (kind == "MARKER");
 		bool isText = (kind == "TEXT");
 		std::string label, start, end, color;
 		int percent = 0;
@@ -1479,6 +1517,12 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 			const PpText* txt = FindTextById(doc, id);
 			if (!txt) return;
 			label = txt->label;
+		} else if (isMarker) {
+			const PpMarker* mk = FindMarker(doc, id);
+			if (!mk) return;
+			label = mk->label;
+			start = mk->date;
+			color = mk->color;
 		} else if (isMilestone) {
 			const PpMilestone* ms = FindMilestone(doc, id);
 			if (!ms) return;
@@ -1511,9 +1555,9 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 		SetEditText(g_cardLabelHwnd, label);
 		SetEditText(g_cardStartHwnd, start);
 		SetEditText(g_cardEndHwnd, end);
-		if (!isMilestone && !isText) SetEditText(g_cardPercentHwnd, std::to_string(percent));
+		if (!isMilestone && !isMarker && !isText) SetEditText(g_cardPercentHwnd, std::to_string(percent));
 
-		LayoutCardControls(isMilestone, isText);
+		LayoutCardControls(isMilestone || isMarker, isText);
 		SetCardInvalid(false);
 
 		RECT rc = anchorScreenRect;
@@ -1565,6 +1609,7 @@ void CommitCardEdit() {
 	std::string kind = g_cardKind;
 	std::string id = g_cardId;
 	bool isMilestone = (kind == "MILESTONE");
+	bool isMarker = (kind == "MARKER");
 	bool isText = (kind == "TEXT");
 
 	std::string label = GetEditText(g_cardLabelHwnd);
@@ -1596,15 +1641,15 @@ void CommitCardEdit() {
 	}
 
 	std::string startText = GetEditText(g_cardStartHwnd);
-	std::string endText = isMilestone ? startText : GetEditText(g_cardEndHwnd);
-	std::string percentText = isMilestone ? "" : GetEditText(g_cardPercentHwnd);
+	std::string endText = (isMilestone || isMarker) ? startText : GetEditText(g_cardEndHwnd);
+	std::string percentText = (isMilestone || isMarker) ? "" : GetEditText(g_cardPercentHwnd);
 
 	long startDays = 0, endDays = 0;
 	if (!ParseIsoDateStrict(startText, startDays)) {
 		SetCardInvalid(true);
 		return;
 	}
-	if (!isMilestone) {
+	if (!isMilestone && !isMarker) {
 		if (!ParseIsoDateStrict(endText, endDays)) {
 			SetCardInvalid(true);
 			return;
@@ -1617,7 +1662,7 @@ void CommitCardEdit() {
 	SetCardInvalid(false);
 
 	int percent = 0;
-	if (!isMilestone) {
+	if (!isMilestone && !isMarker) {
 		try { percent = std::stoi(percentText); } catch (...) { percent = 0; }
 		percent = std::max(0, std::min(100, percent));
 	}
@@ -1639,7 +1684,12 @@ void CommitCardEdit() {
 		if (!json.empty()) {
 			PpDocument doc = DocumentFromJson(json);
 			bool changed = false;
-			changed = SetEntityLabel(doc, id, label) || changed;
+			if (isMarker) {
+				changed = SetMarkerLabel(doc, id, label) || changed;
+				changed = SetMarkerDate(doc, id, DaysToDate(startDays)) || changed;
+			} else {
+				changed = SetEntityLabel(doc, id, label) || changed;
+			}
 			if (isMilestone) {
 				// Milestones only have a single date field (Start doubles as
 				// the milestone's date) and no percent/color-via-task op yet
@@ -1653,7 +1703,7 @@ void CommitCardEdit() {
 						break;
 					}
 				}
-			} else {
+			} else if (!isMarker) {
 				const PpTask* before = FindTask(doc, id);
 				std::string prevStart = before ? before->start : "";
 				std::string prevEnd = before ? before->end : "";
@@ -2758,17 +2808,19 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		HtHit hit = HitTestClientPoint(pt);
 		if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
-			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone || hit.zone == HtZone::Text) {
+			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone || hit.zone == HtZone::Marker || hit.zone == HtZone::Text) {
 			// The floating card editor (V2): double-clicking a bar, milestone,
-			// or text annotation opens the richer editor instead of the
+			// marker, or text annotation opens the richer editor instead of the
 			// simpler TITLE/ROW_LABEL inline box (TEXT uses the same card in a
 			// reduced "text mode" — label field + delete button only, see
 			// OpenCardEditor). Resolve the item's CURRENT screen rect from the
 			// hit snapshot (same source g_lastHit/drag-start use) so the card
 			// anchors to where the item actually is now.
 			const char* wantKindStr = (hit.zone == HtZone::Milestone) ? "MILESTONE"
+				: (hit.zone == HtZone::Marker) ? "MARKER"
 				: (hit.zone == HtZone::Text) ? "TEXT" : "TASK";
 			HtItemKind wantItemKind = (hit.zone == HtZone::Milestone) ? HtItemKind::Milestone
+				: (hit.zone == HtZone::Marker) ? HtItemKind::Marker
 				: (hit.zone == HtZone::Text) ? HtItemKind::Text : HtItemKind::Task;
 			for (const auto& item : g_hitSnapshot.items) {
 				if (item.kind == wantItemKind && item.id == hit.id) {
@@ -4101,6 +4153,36 @@ void ShowAppBar(const RECT& slideRect) {
 }
 
 void HandleAppBarCommand(int cmd) {
+	if (cmd == HtCmd_InsertMarker && g_ownSelKind.empty() && g_app && !g_mutating) {
+		g_mutating = true;
+		try {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) {
+				PpDocument doc = DocumentFromJson(json);
+				const std::string dateISO = DefaultMarkerDateAtVisibleCenter();
+				const std::string newId = AddMarker(doc, "custom", "Marker", dateISO);
+				if (!newId.empty()) {
+					RebuildChart(doc, newId);
+					SetOwnSelection("MARKER", newId);
+					RequestOverlayRepaint();
+				}
+			}
+		}
+		catch (const _com_error&) {
+			OvLog(L"COM error inserting marker");
+		}
+		catch (const std::exception&) {
+			OvLog(L"document error inserting marker");
+		}
+		catch (...) {
+			OvLog(L"unknown error inserting marker");
+		}
+		g_mutating = false;
+		g_appBarValid = false;
+		RequestOverlayRepaint();
+		return;
+	}
+
 	if (g_ownSelKind == "ROW" && !g_ownSelId.empty()) {
 		HtMenuOp op = MapRowAppBarCommand(cmd);
 		if (op.opKind == HtOpKind::RenameRow) {
@@ -4146,6 +4228,32 @@ void HandleAppBarCommand(int cmd) {
 			HtHit hit;
 			hit.id = g_ownSelId;
 			hit.kind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone : HtItemKind::Task;
+			HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
+			g_appBarValid = false;
+			RequestOverlayRepaint();
+			return;
+		}
+	}
+
+	if (g_ownSelKind == "MARKER" && !g_ownSelId.empty()) {
+		HtMenuOp op = MapMarkerAppBarCommand(cmd);
+		if (op.opKind == HtOpKind::Edit) {
+			for (const auto& item : g_hitSnapshot.items) {
+				if (item.kind == HtItemKind::Marker && item.id == g_ownSelId) {
+					RECT screenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+					try { OpenCardEditor(g_ownSelKind, g_ownSelId, screenRect); } catch (...) { OvLog(L"appbar marker Rename failed"); }
+					g_appBarValid = false;
+					RequestOverlayRepaint();
+					return;
+				}
+			}
+			OvLog(L"appbar marker Rename: no hit rect for selection");
+			return;
+		}
+		if (op.opKind != HtOpKind::None) {
+			HtHit hit;
+			hit.id = g_ownSelId;
+			hit.kind = HtItemKind::Marker;
 			HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
 			g_appBarValid = false;
 			RequestOverlayRepaint();
@@ -4269,7 +4377,7 @@ void HandleHotkeyDelete() {
 	if (!g_app || g_mutating) { OvLog(L"hotkey Delete ignored: busy or no app"); return; }
 	const std::string selId = g_ownSelId;
 	const std::string selKind = g_ownSelKind;
-	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE" && selKind != "TEXT" && selKind != "ROW")) {
+	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE" && selKind != "TEXT" && selKind != "ROW" && selKind != "MARKER")) {
 		wchar_t buf[128];
 		::swprintf_s(buf, 128, L"hotkey Delete ignored: sel %hs/%hs", selKind.c_str(), selId.c_str());
 		OvLog(buf);
@@ -4421,7 +4529,7 @@ void RegisterAllHotkeys() {
 void UpdateHotkeyRegistration() {
 	if (!g_hwnd) return;
 
-	bool selectionIsTaskOrMilestone = (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE" || g_ownSelKind == "TEXT" || g_ownSelKind == "ROW") && !g_ownSelId.empty();
+	bool selectionIsTaskOrMilestone = (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE" || g_ownSelKind == "TEXT" || g_ownSelKind == "ROW" || g_ownSelKind == "MARKER") && !g_ownSelId.empty();
 
 	bool foregroundIsOurs = false;
 	if (g_hostActiveOverrideMode >= 0) {
@@ -4606,7 +4714,17 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 						break;
 					}
 				}
-				selectKind = "MILESTONE";
+				if (changed) {
+					selectKind = "MILESTONE";
+				} else if (hit.kind == HtItemKind::Marker || FindMarker(doc, hit.id)) {
+					for (const auto& mk : doc.markers) {
+						if (mk.id == hit.id) {
+							changed = SetMarkerDate(doc, hit.id, DaysToDate(DateToDays(mk.date) + op.nudgeDays));
+							if (changed) selectKind = "MARKER";
+							break;
+						}
+					}
+				}
 			} else {
 				selectKind = "TASK";
 			}

@@ -399,6 +399,27 @@ HtMenuOp MapMilestoneAppBarCommand(int cmdId) {
 	return op;
 }
 
+HtMenuOp MapMarkerAppBarCommand(int cmdId) {
+	HtMenuOp op;
+	switch (cmdId) {
+	case HtCmd_Rename:
+		op.opKind = HtOpKind::Edit; op.needsTaskId = true;
+		break;
+	case HtCmd_Delete:
+		op.opKind = HtOpKind::Delete; op.needsTaskId = true;
+		break;
+	case HtCmd_NudgeMinus1:
+		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = -1;
+		break;
+	case HtCmd_NudgePlus1:
+		op.opKind = HtOpKind::Nudge; op.needsTaskId = true; op.nudgeDays = 1;
+		break;
+	default:
+		break;
+	}
+	return op;
+}
+
 // ---- pure zone -> cursor mapping --------------------------------------------
 
 HtCursor GanttCursorForZone(HtZone zone) {

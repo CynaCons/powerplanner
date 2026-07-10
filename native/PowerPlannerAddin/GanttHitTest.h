@@ -260,6 +260,10 @@ HtMenuOp MapTaskAppBarCommand(int cmdId);
 // delete, rename). Pure registry for ops-test.
 HtMenuOp MapMilestoneAppBarCommand(int cmdId);
 
+// Map app-bar commands issued while a MARKER is selected (rename, nudge,
+// delete). Pure registry for ops-test.
+HtMenuOp MapMarkerAppBarCommand(int cmdId);
+
 // ---- pure zone -> cursor mapping --------------------------------------------
 // WM_SETCURSOR needs to pick a cursor shape from the hit zone under the
 // pointer. This enum is the pure (COM/Windows-free) output of that mapping —
