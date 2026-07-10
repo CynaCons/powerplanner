@@ -129,15 +129,21 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 		}
 	}
 
-	// 7) Row bands: right of the row's label column is an empty timeline cell;
-	//    left of / around the label column is the generic row band.
+	// 7) Row bands: right of the rail column is an empty timeline cell; the
+	//    rail column itself (row-name area and rail-task label area per B2.1/
+	//    B2.2) is RowBand and selects the row. Rail extent comes from
+	//    snap.railRightPx when set (PP_ROWY); otherwise labelRight is used.
 	for (const auto& band : snap.rowBands) {
 		if (y < band.yTop || y >= band.yBottom) continue;
 		long labelRight = snap.chartRect.left;
-		for (const auto& it : snap.items) {
-			if (it.kind == HtItemKind::RowLabel && it.id == band.rowId) {
-				labelRight = it.rect.right;
-				break;
+		if (snap.railRightPx > snap.railLeftPx) {
+			labelRight = snap.railRightPx;
+		} else {
+			for (const auto& it : snap.items) {
+				if (it.kind == HtItemKind::RowLabel && it.id == band.rowId) {
+					labelRight = it.rect.right;
+					break;
+				}
 			}
 		}
 		hit.zone = (x >= labelRight) ? HtZone::EmptyCell : HtZone::RowBand;
@@ -292,6 +298,39 @@ HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind, bool hasRowId) 
 		break;
 	case HtCmd_AddRow:
 		op.opKind = HtOpKind::AddRow; op.needsRowId = false;
+		break;
+	default:
+		break;
+	}
+	return op;
+}
+
+HtMenuOp MapRowAppBarCommand(int cmdId) {
+	HtMenuOp op;
+	switch (cmdId) {
+	case HtCmd_AddRowAbove:
+		op.opKind = HtOpKind::AddRowAbove; op.needsRowId = true;
+		break;
+	case HtCmd_AddRowBelow:
+		op.opKind = HtOpKind::AddRow; op.needsRowId = true;
+		break;
+	case HtCmd_MoveRowUp:
+		op.opKind = HtOpKind::MoveRowUp; op.needsRowId = true;
+		break;
+	case HtCmd_MoveRowDown:
+		op.opKind = HtOpKind::MoveRowDown; op.needsRowId = true;
+		break;
+	case HtCmd_IndentRow:
+		op.opKind = HtOpKind::IndentRow; op.needsRowId = true;
+		break;
+	case HtCmd_OutdentRow:
+		op.opKind = HtOpKind::OutdentRow; op.needsRowId = true;
+		break;
+	case HtCmd_DeleteRow:
+		op.opKind = HtOpKind::DeleteRow; op.needsRowId = true;
+		break;
+	case HtCmd_Rename:
+		op.opKind = HtOpKind::RenameRow; op.needsRowId = true;
 		break;
 	default:
 		break;

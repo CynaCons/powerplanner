@@ -84,3 +84,24 @@ struct PpProj {
 	float originX = 0.0f;
 };
 bool ParseProj(const std::string& projJson, PpProj* out);
+
+// Parsed form of the CHART_ROOT's PP_ROWY tag (row lane geometry in chart-local
+// points — see BuildRowYJson in GanttScene.h).
+struct PpRowYEntry {
+	std::string id;
+	float top = 0.0f;
+	float bot = 0.0f;
+	int lvl = 0;
+	bool name = true;
+};
+struct PpRowY {
+	float railL = 0.0f;
+	float railR = 0.0f;
+	float naturalW = 0.0f;
+	float naturalH = 0.0f;
+	std::vector<PpRowYEntry> rows;
+};
+bool ParseRowY(const std::string& rowYJson, PpRowY* out);
+// Scale chart-local PP_ROWY coords after a group resize (sx/sy from
+// FitChartRootToFrame). Returns the original string if parsing fails.
+std::string ScaleRowYJson(const std::string& rowYJson, float sx, float sy);

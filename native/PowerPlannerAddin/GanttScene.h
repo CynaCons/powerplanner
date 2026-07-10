@@ -444,10 +444,13 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 		t.tagKind = "TEXT"; t.tagId = lt.id; sc.prims.push_back(t);
 	}
 
-	// Row labels (in the rail, indented for children).
+	// Row labels (in the rail, indented for children). Rows with an empty
+	// label are rail-task rows (identity comes from rail task labels) — no
+	// ROW_LABEL shape is emitted so BuildRowBands must use PP_ROWY for bands.
 	for (size_t i = 0; i < L.visibleRowIds.size(); ++i) {
 		std::string label, groupId;
 		for (const auto& r : doc.rows) if (r.id == L.visibleRowIds[i]) { label = r.label; groupId = r.groupId; }
+		if (label.empty()) continue;
 		float indent = groupId.empty() ? 0.0f : 14.0f;
 		Style rl; rl.textBgr = Bgr(groupId.empty() ? th.onSurface : th.onSurfaceVariant);
 		rl.fontSize = 11.0f; rl.bold = groupId.empty(); rl.align = TextAlign::Left;
@@ -462,6 +465,55 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 	}
 
 	return sc;
+}
+
+// True when the row renders its name in the left rail (vs a rail-task row whose
+// identity is carried only by task rail labels).
+inline bool RowShowsNameInRail(const PpDocument& doc, const std::string& rowId) {
+	for (const auto& r : doc.rows) {
+		if (r.id == rowId) return !r.label.empty();
+	}
+	return false;
+}
+
+// PP_ROWY payload: row lane geometry in chart-local points (same space as
+// emitted prim Left/Top before grouping). naturalW/naturalH are the chart's
+// layout footprint so the overlay can map local coords through a fitted frame.
+inline std::string BuildRowYJson(const PpDocument& doc, float slideW, const std::string& minD) {
+	GanttLayoutResult L = LayoutGantt(doc, minD);
+	const float chartTop = MARGIN + AXIS_H;
+	const float naturalW = slideW - MARGIN * 2.0f;
+
+	std::string rowsJson;
+	rowsJson.reserve(L.visibleRowIds.size() * 96);
+	// Defer naturalH until row bands are emitted — a row with rowSlots==0
+	// (milestone-only / empty-task edge cases) must still get one lane so
+	// Overlay's PP_ROWY bands cover every doc row.
+	float bandBottom = chartTop + (float)L.chartRows * ROW_HEIGHT;
+	for (size_t i = 0; i < L.visibleRowIds.size(); ++i) {
+		if (i) rowsJson += ",";
+		const int slots = (i < L.rowSlots.size()) ? std::max(1, L.rowSlots[i]) : 1;
+		const float top = chartTop + (float)L.rowOffsets[i] * ROW_HEIGHT;
+		const float bot = top + (float)slots * ROW_HEIGHT;
+		if (bot > bandBottom) bandBottom = bot;
+		int lvl = 0;
+		for (const auto& r : doc.rows) {
+			if (r.id == L.visibleRowIds[i]) { lvl = r.groupId.empty() ? 0 : 1; break; }
+		}
+		const bool name = RowShowsNameInRail(doc, L.visibleRowIds[i]);
+		char rowBuf[160];
+		::sprintf_s(rowBuf, "{\"id\":\"%s\",\"top\":%.4f,\"bot\":%.4f,\"lvl\":%d,\"name\":%s}",
+			L.visibleRowIds[i].c_str(), top, bot, lvl, name ? "true" : "false");
+		rowsJson += rowBuf;
+	}
+	const float naturalH = bandBottom - MARGIN;
+	char head[192];
+	::sprintf_s(head, "{\"railL\":%.4f,\"railR\":%.4f,\"naturalW\":%.4f,\"naturalH\":%.4f,\"rows\":[",
+		MARGIN, MARGIN + ROW_GUTTER, naturalW, naturalH);
+	std::string out = head;
+	out += rowsJson;
+	out += "]}";
+	return out;
 }
 
 // Shared by InsertGantt/UpdateGantt (and the ops harness): date range ->

@@ -55,6 +55,11 @@ struct HtSnapshot {
 	// [x-edgeBandPx, x+edgeBandPx] spanning the chart's full vertical band,
 	// synthesized by the overlay from PP_PROJ (see Overlay.cpp's BuildRowBands).
 	long edgeBandPx = 4;
+	// Rail column x-extent in screen pixels (half-open [railLeftPx,railRightPx)),
+	// from PP_ROWY (DPI-scaled). When both are zero the overlay falls back to
+	// label-derived gutter geometry (legacy charts without PP_ROWY).
+	long railLeftPx = 0;
+	long railRightPx = 0;
 };
 
 // Semantic zones, most specific wins. Edge zones take priority over bodies so
@@ -210,6 +215,12 @@ enum class HtOpKind {
 	Percent,        // needsTaskId; percentDelta set
 	SetScale,       // scale set
 	AddRow,         // needsRowId (afterRowId; empty = append)
+	AddRowAbove,    // needsRowId (ref row)
+	MoveRowUp,      // needsRowId
+	MoveRowDown,    // needsRowId
+	IndentRow,      // needsRowId
+	OutdentRow,     // needsRowId
+	RenameRow,      // needsRowId
 	AddTaskAtPoint, // needsRowId; anchor day comes from the click point
 };
 
@@ -229,6 +240,11 @@ struct HtMenuOp {
 // HtCmd_PercentMinus10 on a Milestone zone (milestones have no percent), or
 // HtCmd_AddTaskThisRow on RowBand background (hasRowId=false).
 HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind = HtItemKind::Task, bool hasRowId = true);
+
+// Map an app-bar command issued while a ROW is selected (R8 row group + Rename).
+// Pure registry for ops-test; Overlay.cpp's HandleAppBarCommand dispatches on
+// the returned opKind.
+HtMenuOp MapRowAppBarCommand(int cmdId);
 
 // ---- pure zone -> cursor mapping --------------------------------------------
 // WM_SETCURSOR needs to pick a cursor shape from the hit zone under the

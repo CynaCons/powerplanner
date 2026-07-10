@@ -174,6 +174,7 @@ std::string g_lastKind;       // last shown PP_KIND (to log on change)
 std::string g_selId;          // current selected PowerPlanner PP_ID
 std::string g_selKind;        // current selected PowerPlanner PP_KIND
 std::string g_chartProj;      // current CHART_ROOT PP_PROJ payload
+std::string g_chartRowY;      // current CHART_ROOT PP_ROWY payload
 // Most recent PowerPoint-native selection of a chart child that Tick()
 // suppressed (Unselect()'d). Mirrored into the internal selection model
 // below, then cleared.
@@ -272,16 +273,20 @@ struct RowBand {
 	std::string rowId;
 	RECT screenRect;
 	int screenLeftGutter;
+	RECT screenRailRect;
 };
 
 std::vector<RowBand> g_rowBands;
 
 // Semantic hit-test snapshot (pure, COM-free — see GanttHitTest.h). Rebuilt by
-// BuildRowBands' child walk; reused across ticks while the chart screen rect
-// and child count are unchanged so the per-tick COM cost stays bounded.
+// BuildRowBands' child walk; reused across ticks while the chart screen rect,
+// child count, and PP_ROWY/PP_PROJ payloads are unchanged so the per-tick COM
+// cost stays bounded.
 HtSnapshot g_hitSnapshot;
 RECT g_hitCacheChartRect = {};
 long g_hitCacheChildCount = -1;
+std::string g_hitCacheChartRowY;
+std::string g_hitCacheChartProj;
 // Last semantic hit from a mouse-down on the overlay. The selection-model unit
 // will consume this; for now it is only stored (and logged on change).
 HtHit g_lastHit;
@@ -466,7 +471,7 @@ LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK CardFieldProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 void UpdateHotkeyRegistration();
-void UnregisterAllHotkeys();
+void UnregisterAllHotkeys(const wchar_t* caller = L"?");
 void HandleHotkeyDelete();
 void HandleHotkeyNudge(long deltaDays);
 
@@ -572,6 +577,8 @@ void InvalidateHitSnapshot() {
 	g_hitSnapshot = HtSnapshot{};
 	::SetRectEmpty(&g_hitCacheChartRect);
 	g_hitCacheChildCount = -1;
+	g_hitCacheChartRowY.clear();
+	g_hitCacheChartProj.clear();
 }
 
 // Scale a 96-DPI ("100%") chrome pixel constant to the overlay's current DPI
@@ -766,17 +773,33 @@ PowerPoint::ShapePtr FindChartRoot(PowerPoint::_SlidePtr slide) {
 	if (!shapes) return nullptr;
 	long n = shapes->GetCount();
 	for (long i = 1; i <= n; ++i) {
-		PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
-		_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
-		if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") return sh;
+		try {
+			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+			_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!kind.length() || Narrow((const wchar_t*)kind) != "CHART_ROOT") continue;
+			// External undo (ExecuteMso) can leave a deleted-but-still-enumerable
+			// zombie CHART_ROOT: PP_KIND still reads, but geometry / GroupItems
+			// throw 0x800A01A8. Probe the accessors BuildRowBands needs and skip
+			// dead candidates so the live restored group is found instead.
+			(void)sh->GetLeft();
+			PowerPoint::GroupShapesPtr items = sh->GetGroupItems();
+			if (!items) continue;
+			(void)items->GetCount();
+			return sh;
+		} catch (const _com_error&) {
+			continue;
+		}
 	}
 	return nullptr;
 }
 
 // Single per-tick child walk: builds the row bands, inline-edit regions AND
-// the semantic hit-test snapshot. When the chart screen rect and child count
-// are unchanged since the last walk, the cached results are reused so the
-// per-tick COM cost stays bounded (one GetGroupItems + GetCount call).
+// the semantic hit-test snapshot. When the chart screen rect, child count, and
+// PP_ROWY/PP_PROJ tag payloads are unchanged since the last walk, the cached
+// results are reused so the per-tick COM cost stays bounded (one GetGroupItems
+// + GetCount call). Tag fingerprints are part of the key because an external
+// undo (ExecuteMso) can restore the same child count + screen rect while
+// changing row geometry without going through RebuildChart's invalidation.
 void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win) {
 	if (!chart || !win) {
 		g_rowBands.clear();
@@ -793,7 +816,8 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			return;
 		}
 		long n = items->GetCount();
-		if (n == g_hitCacheChildCount && SameRect(g_chartScreenRect, g_hitCacheChartRect)) {
+		if (n == g_hitCacheChildCount && SameRect(g_chartScreenRect, g_hitCacheChartRect)
+			&& g_chartRowY == g_hitCacheChartRowY && g_chartProj == g_hitCacheChartProj) {
 			return; // cache hit: reuse g_rowBands / g_editRegions / g_hitSnapshot
 		}
 		g_rowBands.clear();
@@ -882,9 +906,70 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 				g_hitSnapshot.items.push_back({ HtItemKind::Text, idStr, ToHtRect(rr) });
 				continue;
 			}
-			g_rowBands.push_back({ idStr, { g_chartScreenRect.left, rr.top, g_chartScreenRect.right, rr.bottom }, rr.left });
-			g_editRegions.push_back({ "ROW_LABEL", idStr, rr });
-			g_hitSnapshot.items.push_back({ HtItemKind::RowLabel, idStr, ToHtRect(rr) });
+			if (kindStr == "ROW_LABEL") {
+				g_editRegions.push_back({ "ROW_LABEL", idStr, rr });
+				g_hitSnapshot.items.push_back({ HtItemKind::RowLabel, idStr, ToHtRect(rr) });
+				continue;
+			}
+		}
+
+		// Row bands: prefer PP_ROWY (model-derived geometry, fixes rows with no
+		// ROW_LABEL shape). Fall back to label-derived bands for older charts.
+		PpRowY rowy;
+		bool haveRowY = ParseRowY(g_chartRowY, &rowy);
+		if (haveRowY) {
+			float chartLeftPt = chart->GetLeft();
+			float chartTopPt = chart->GetTop();
+			float chartWPt = chart->GetWidth();
+			float chartHPt = chart->GetHeight();
+			float yScale = (rowy.naturalH > 0.0f) ? chartHPt / rowy.naturalH : 1.0f;
+			float xScale = (rowy.naturalW > 0.0f) ? chartWPt / rowy.naturalW : 1.0f;
+			int railLeftScreen = win->PointsToScreenPixelsX(chartLeftPt + rowy.railL * xScale);
+			int railRightScreen = win->PointsToScreenPixelsX(chartLeftPt + rowy.railR * xScale);
+			g_hitSnapshot.railLeftPx = railLeftScreen;
+			g_hitSnapshot.railRightPx = railRightScreen;
+			for (const auto& entry : rowy.rows) {
+				float absTop = chartTopPt + entry.top * yScale;
+				float absBot = chartTopPt + entry.bot * yScale;
+				RECT bandRect = {
+					g_chartScreenRect.left,
+					win->PointsToScreenPixelsY(absTop),
+					g_chartScreenRect.right,
+					win->PointsToScreenPixelsY(absBot)
+				};
+				RECT railRect = {
+					railLeftScreen,
+					bandRect.top,
+					railRightScreen,
+					bandRect.bottom
+				};
+				NormalizeRect(bandRect);
+				NormalizeRect(railRect);
+				if (bandRect.bottom <= bandRect.top) continue;
+				g_rowBands.push_back({ entry.id, bandRect, railLeftScreen, railRect });
+			}
+		} else {
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t kind = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (!kind.length()) continue;
+				std::string kindStr = Narrow((const wchar_t*)kind);
+				if (kindStr != "ROW_LABEL") continue;
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				std::string idStr = Narrow((const wchar_t*)id);
+				if (idStr.empty()) continue;
+				float left = ch->GetLeft(), top = ch->GetTop(), w = ch->GetWidth(), h = ch->GetHeight();
+				RECT rr = {
+					win->PointsToScreenPixelsX(left),
+					win->PointsToScreenPixelsY(top),
+					win->PointsToScreenPixelsX(left + w),
+					win->PointsToScreenPixelsY(top + h)
+				};
+				NormalizeRect(rr);
+				if (rr.bottom <= rr.top) continue;
+				RECT railRect = { g_chartScreenRect.left, rr.top, rr.right, rr.bottom };
+				g_rowBands.push_back({ idStr, { g_chartScreenRect.left, rr.top, g_chartScreenRect.right, rr.bottom }, rr.left, railRect });
+			}
 		}
 		std::sort(g_rowBands.begin(), g_rowBands.end(), [](const RowBand& a, const RowBand& b) {
 			return a.screenRect.top < b.screenRect.top;
@@ -895,8 +980,27 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		}
 		g_hitCacheChartRect = g_chartScreenRect;
 		g_hitCacheChildCount = n;
+		g_hitCacheChartRowY = g_chartRowY;
+		g_hitCacheChartProj = g_chartProj;
+		if (g_rowBands.empty()) {
+			wchar_t buf[96];
+			::swprintf_s(buf, 96, L"BuildRowBands: 0 bands (children=%ld rowY=%zu chars)", n, g_chartRowY.size());
+			OvLog(buf);
+		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
+		wchar_t buf[96];
+		::swprintf_s(buf, 96, L"BuildRowBands: COM error 0x%08lX - cleared", (unsigned long)e.Error());
+		OvLog(buf);
+		g_rowBands.clear();
+		g_editRegions.clear();
+		InvalidateHitSnapshot();
+	}
+	catch (const std::exception&) {
+		// DocumentFromJson / ParseRowY inputs come from tags that can be torn
+		// mid-rebuild — a parse failure must degrade like a COM failure, not
+		// escape into Tick's catch-all (which hides the whole overlay).
+		OvLog(L"BuildRowBands: parse error - cleared");
 		g_rowBands.clear();
 		g_editRegions.clear();
 		InvalidateHitSnapshot();
@@ -918,7 +1022,7 @@ void SyncSelectionChromeFromOwnSelection() {
 			if (band.rowId == g_ownSelId) {
 				g_selKind = "ROW";
 				g_selId = g_ownSelId;
-				g_selScreenRect = band.screenRect;
+				g_selScreenRect = ::IsRectEmpty(&band.screenRailRect) ? band.screenRect : band.screenRailRect;
 				g_hasSelectionChrome = true;
 				return;
 			}
@@ -954,6 +1058,9 @@ bool UpdateHoverFromCursor() {
 
 	for (const auto& band : g_rowBands) {
 		if (pt.y >= band.screenRect.top && pt.y <= band.screenRect.bottom) {
+			if (!::IsRectEmpty(&band.screenRailRect) && !::PtInRect(&band.screenRailRect, pt)) {
+				continue;
+			}
 			g_hoverRowId = band.rowId;
 			g_hoverBandRect = band.screenRect;
 			break;
@@ -1782,8 +1889,12 @@ void ApplyClickSelection(const HtHit& hit) {
 		}
 		return;
 	case HtZone::Label:
-		// Labels are handled by double-click-to-edit; a single click on a
-		// label does not change selection either way today.
+		// B2.1: a single click on a row's rail NAME selects that ROW (rename
+		// stays on double-click via the edit region). TITLE labels keep the
+		// old behavior — no selection change on single click.
+		if (hit.kind == HtItemKind::RowLabel && !hit.id.empty()) {
+			SetOwnSelection("ROW", hit.id);
+		}
 		return;
 	case HtZone::EmptyCell:
 	case HtZone::Outside:
@@ -2696,6 +2807,11 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// focus (see kHotkeySpecs' header comment / keys-probe.txt OPTION C).
 		// wp is the id passed to RegisterHotKey; dispatch on it directly
 		// rather than re-deriving the key from lp's packed vk/mods.
+		{
+			wchar_t hb[64];
+			::swprintf_s(hb, 64, L"WM_HOTKEY wp=%d", (int)wp);
+			OvLog(hb);
+		}
 		try {
 			switch ((int)wp) {
 			case HOTKEY_DELETE:
@@ -2863,6 +2979,10 @@ void EnsureWindow() {
 Gdiplus::Color GpColor(BYTE a, COLORREF c) {
 	return Gdiplus::Color(a, GetRValue(c), GetGValue(c), GetBValue(c));
 }
+
+// Defined further down with the app-bar painters; declared here because the
+// chart-overlay paint path (rail row highlight) uses it first.
+Gdiplus::Color GpToken(BYTE a, unsigned long rgb);
 
 void AddRoundRect(Gdiplus::GraphicsPath& path, Gdiplus::REAL x, Gdiplus::REAL y,
 	Gdiplus::REAL w, Gdiplus::REAL h, Gdiplus::REAL r) {
@@ -3168,6 +3288,15 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	REAL fx = (REAL)frame.left, fy = (REAL)frame.top;
 	REAL fw = (REAL)(frame.right - frame.left), fh = (REAL)(frame.bottom - frame.top);
 
+	if (g_ownSelKind == "ROW") {
+		SolidBrush fill(GpToken(255, gt::primarySoft));
+		g.FillRectangle(&fill, (INT)fx, (INT)fy, (INT)fw, (INT)fh);
+		const int inset = Scale(3);
+		Pen edge(GpToken(255, gt::primary), ScaleF(2.5f));
+		g.DrawLine(&edge, (INT)fx + inset, (INT)fy, (INT)fx + inset, (INT)(fy + fh));
+		return;
+	}
+
 	// Soft halo behind the frame, then the crisp accent frame itself. Stroke
 	// widths and the halo's outward inflation are DPI-scaled so the chrome
 	// stays proportioned (not hairline-thin) at high scale factors.
@@ -3347,12 +3476,18 @@ void RenderOverlay() {
 }
 
 void HideOverlay() {
+	if (g_shown || g_hotkeysActive) {
+		wchar_t buf[128];
+		::swprintf_s(buf, 128, L"HideOverlay (shown=%d hotkeys=%d sel=%hs/%hs)",
+			g_shown ? 1 : 0, g_hotkeysActive ? 1 : 0, g_ownSelKind.c_str(), g_ownSelId.c_str());
+		OvLog(buf);
+	}
 	if (g_shown && g_hwnd) { ::ShowWindow(g_hwnd, SW_HIDE); g_shown = false; }
 	g_buttonsValid = false;
 	ClearSelectionState();
 	ClearOwnSelection();
 	CloseCardEditor(); // chart/slide went away (or is hidden): no editor can stay meaningfully open
-	UnregisterAllHotkeys(); // no selection left to Delete/Nudge; release any stolen keys
+	UnregisterAllHotkeys(L"HideOverlay"); // no selection left to Delete/Nudge; release any stolen keys
 
 	if (g_captureActive) {
 		g_captureActive = false;
@@ -3878,12 +4013,20 @@ LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 		if (msg == WM_LBUTTONUP) {
 			POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+			int resolved = 0;
 			for (const auto& h : g_appBarHits) {
 				if (h.enabled && ::PtInRect(&h.rc, pt)) {
-					HandleAppBarCommand(h.cmd);
+					resolved = h.cmd;
 					break;
 				}
 			}
+			{
+				wchar_t buf[96];
+				::swprintf_s(buf, 96, L"appbar click (%ld,%ld) -> cmd %d (hits=%zu)",
+					(long)pt.x, (long)pt.y, resolved, g_appBarHits.size());
+				OvLog(buf);
+			}
+			if (resolved != 0) HandleAppBarCommand(resolved);
 			return 0;
 		}
 	}
@@ -3958,6 +4101,63 @@ void ShowAppBar(const RECT& slideRect) {
 }
 
 void HandleAppBarCommand(int cmd) {
+	if (g_ownSelKind == "ROW" && !g_ownSelId.empty()) {
+		HtMenuOp op = MapRowAppBarCommand(cmd);
+		if (op.opKind == HtOpKind::RenameRow) {
+			for (const auto& region : g_editRegions) {
+				if (region.kind == "ROW_LABEL" && region.id == g_ownSelId) {
+					try { OpenInlineEditor(region); } catch (...) { OvLog(L"row rename failed"); }
+					g_appBarValid = false;
+					RequestOverlayRepaint();
+					return;
+				}
+			}
+			OvLog(L"row rename: no ROW_LABEL edit region");
+			return;
+		}
+		if (op.opKind != HtOpKind::None) {
+			HtHit hit;
+			hit.rowId = g_ownSelId;
+			hit.id = g_ownSelId;
+			HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
+			g_appBarValid = false;
+			RequestOverlayRepaint();
+			return;
+		}
+	}
+
+	if (cmd == HtCmd_ToggleRailLabels && g_app && !g_mutating) {
+		g_mutating = true;
+		try {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) {
+				PpDocument doc = DocumentFromJson(json);
+				const std::string keepKind = g_ownSelKind;
+				const std::string keepId = g_ownSelId;
+				if (SetRailLabelsGlobal(doc, !doc.railLabels)) {
+					std::string reselect = (keepKind == "ROW") ? keepId : keepId;
+					RebuildChart(doc, reselect);
+					if (!keepId.empty() && !keepKind.empty()) {
+						SetOwnSelection(keepKind, keepId);
+					}
+				}
+			}
+		}
+		catch (const _com_error&) {
+			OvLog(L"COM error toggling rail labels");
+		}
+		catch (const std::exception&) {
+			OvLog(L"document error toggling rail labels");
+		}
+		catch (...) {
+			OvLog(L"unknown error toggling rail labels");
+		}
+		g_mutating = false;
+		g_appBarValid = false;
+		RequestOverlayRepaint();
+		return;
+	}
+
 	HtMenuOp op;
 	HtHit hit;
 	hit.id = g_ownSelId;
@@ -4004,17 +4204,35 @@ void RebuildChart(PpDocument& doc, const std::string& selectId) {
 
 // WM_HOTKEY(Delete): delete the selected task/milestone/text and clear selection.
 void HandleHotkeyDelete() {
-	if (!g_app || g_mutating) return;
+	if (!g_app || g_mutating) { OvLog(L"hotkey Delete ignored: busy or no app"); return; }
 	const std::string selId = g_ownSelId;
 	const std::string selKind = g_ownSelKind;
-	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE" && selKind != "TEXT")) return;
+	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE" && selKind != "TEXT" && selKind != "ROW")) {
+		wchar_t buf[128];
+		::swprintf_s(buf, 128, L"hotkey Delete ignored: sel %hs/%hs", selKind.c_str(), selId.c_str());
+		OvLog(buf);
+		return;
+	}
 
 	g_mutating = true;
 	try {
 		std::string json = ReadGanttFromSlide(g_app);
-		if (!json.empty()) {
+		if (json.empty()) {
+			OvLog(L"hotkey Delete: ReadGanttFromSlide returned empty");
+		} else {
 			PpDocument doc = DocumentFromJson(json);
-			if (DeleteById(doc, selId)) {
+			bool changed = false;
+			if (selKind == "ROW") {
+				changed = DeleteRow(doc, selId);
+			} else {
+				changed = DeleteById(doc, selId);
+			}
+			if (!changed) {
+				wchar_t buf[128];
+				::swprintf_s(buf, 128, L"hotkey Delete: no-op for %hs/%hs (id not found?)", selKind.c_str(), selId.c_str());
+				OvLog(buf);
+			}
+			if (changed) {
 				RebuildChart(doc, "");
 				ClearOwnSelection();
 				RequestOverlayRepaint();
@@ -4087,7 +4305,7 @@ void HandleHotkeyNudge(long deltaDays) {
 // registration). Called on the shouldRegister true->false transition, and
 // from HideOverlay/OverlayStop so a hidden/stopped overlay never leaves keys
 // stolen system-wide.
-void UnregisterAllHotkeys() {
+void UnregisterAllHotkeys(const wchar_t* caller) {
 	for (int i = 0; i < kHotkeyCount; ++i) {
 		if (g_hotkeysRegistered[i]) {
 			::UnregisterHotKey(g_hwnd, kHotkeySpecs[i].id);
@@ -4095,6 +4313,9 @@ void UnregisterAllHotkeys() {
 		}
 	}
 	g_hotkeysActive = false;
+	wchar_t buf[96];
+	::swprintf_s(buf, 96, L"hotkeys unregistered (by %s)", caller ? caller : L"?");
+	OvLog(buf);
 }
 
 // Register every hotkey (best-effort per-key: a single key's RegisterHotKey
@@ -4115,6 +4336,7 @@ void RegisterAllHotkeys() {
 		}
 	}
 	g_hotkeysActive = true;
+	OvLog(L"hotkeys registered");
 }
 
 // Evaluate shouldRegister = (internal selection is TASK/MILESTONE/TEXT) AND
@@ -4137,7 +4359,7 @@ void RegisterAllHotkeys() {
 void UpdateHotkeyRegistration() {
 	if (!g_hwnd) return;
 
-	bool selectionIsTaskOrMilestone = (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE" || g_ownSelKind == "TEXT") && !g_ownSelId.empty();
+	bool selectionIsTaskOrMilestone = (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE" || g_ownSelKind == "TEXT" || g_ownSelKind == "ROW") && !g_ownSelId.empty();
 
 	bool foregroundIsOurs = false;
 	if (g_hostActiveOverrideMode >= 0) {
@@ -4161,7 +4383,12 @@ void UpdateHotkeyRegistration() {
 	if (shouldRegister && !g_hotkeysActive) {
 		RegisterAllHotkeys();
 	} else if (!shouldRegister && g_hotkeysActive) {
-		UnregisterAllHotkeys();
+		wchar_t buf[192];
+		::swprintf_s(buf, 192, L"hotkey gate drop: sel=%hs/%hs fg=%d gesture=%d mutating=%d edit=%d",
+			g_ownSelKind.c_str(), g_ownSelId.c_str(), foregroundIsOurs ? 1 : 0,
+			g_gestureActive ? 1 : 0, g_mutating ? 1 : 0, IsEditSessionActive() ? 1 : 0);
+		OvLog(buf);
+		UnregisterAllHotkeys(L"gate");
 	}
 }
 
@@ -4233,11 +4460,13 @@ void HandleHoverInsertRow() {
 		if (json.empty()) { g_mutating = false; return; }
 
 		PpDocument doc = DocumentFromJson(json);
-		std::string rowId = AddRow(doc, "New Row", afterRowId);
+		std::string rowId = AddRowBelow(doc, afterRowId, "New Row");
 		if (!rowId.empty()) {
-			RebuildChart(doc, "");
+			RebuildChart(doc, rowId);
+			SetOwnSelection("ROW", rowId);
+			RequestOverlayRepaint();
 			wchar_t buf[128];
-			::swprintf_s(buf, 128, L"hover insert row after %hs", afterRowId.c_str());
+			::swprintf_s(buf, 128, L"hover insert row below %hs", afterRowId.c_str());
 			OvLog(buf);
 		}
 	}
@@ -4300,7 +4529,7 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 		}
 		case HtOpKind::DeleteRow: {
 			selectId.clear();
-			changed = DeleteById(doc, hit.rowId);
+			changed = DeleteRow(doc, hit.rowId);
 			break;
 		}
 		case HtOpKind::Nudge: {
@@ -4342,9 +4571,39 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			// needsRowId => "Add Row Below" (afterRowId = hit.rowId); the
 			// background "Add Row" command has needsRowId == false and
 			// appends (AddRow's empty-afterRowId behavior).
-			std::string afterRowId = op.needsRowId ? hit.rowId : "";
-			std::string rowId = AddRow(doc, "New Row", afterRowId);
-			changed = !rowId.empty();
+			if (op.needsRowId) {
+				selectId = AddRowBelow(doc, hit.rowId, "New Row");
+			} else {
+				selectId = AddRow(doc, "New Row", "");
+			}
+			changed = !selectId.empty();
+			if (changed) { selectKind = "ROW"; }
+			break;
+		}
+		case HtOpKind::AddRowAbove: {
+			selectId = AddRowAbove(doc, hit.rowId, "New Row");
+			changed = !selectId.empty();
+			if (changed) { selectKind = "ROW"; }
+			break;
+		}
+		case HtOpKind::MoveRowUp: {
+			changed = MoveRowUp(doc, hit.rowId);
+			if (changed) { selectId = hit.rowId; selectKind = "ROW"; }
+			break;
+		}
+		case HtOpKind::MoveRowDown: {
+			changed = MoveRowDown(doc, hit.rowId);
+			if (changed) { selectId = hit.rowId; selectKind = "ROW"; }
+			break;
+		}
+		case HtOpKind::IndentRow: {
+			changed = IndentRow(doc, hit.rowId);
+			if (changed) { selectId = hit.rowId; selectKind = "ROW"; }
+			break;
+		}
+		case HtOpKind::OutdentRow: {
+			changed = OutdentRow(doc, hit.rowId);
+			if (changed) { selectId = hit.rowId; selectKind = "ROW"; }
 			break;
 		}
 		case HtOpKind::AddTaskAtPoint: {
@@ -4387,6 +4646,8 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			RebuildChart(doc, selectId);
 			if (!selectId.empty() && !selectKind.empty()) {
 				SetOwnSelection(selectKind, selectId);
+			} else if (selectKind == "ROW" && !hit.rowId.empty() && op.opKind != HtOpKind::DeleteRow) {
+				SetOwnSelection("ROW", hit.rowId);
 			}
 			RequestOverlayRepaint();
 			wchar_t buf[160];
@@ -4548,7 +4809,7 @@ void Tick() {
 		TickGuard() { g_inTick = true; }
 		~TickGuard() { g_inTick = false; }
 	} tickGuard;
-	if (!g_app) { HideOverlay(); HideAppBar(); return; }
+	if (!g_app) { if (g_shown) OvLog(L"Tick: g_app null - hiding"); HideOverlay(); HideAppBar(); return; }
 	try {
 		RECT oldChartRect = g_chartScreenRect;
 		RECT oldSelRect = g_selScreenRect;
@@ -4595,7 +4856,7 @@ void Tick() {
 		}
 
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
-		if (!win) { HideOverlay(); HideAppBar(); return; }
+		if (!win) { if (g_shown) OvLog(L"Tick: no active window - hiding"); HideOverlay(); HideAppBar(); return; }
 		g_pptHwnd = (HWND)(INT_PTR)g_app->GetHWND();
 
 		// Host-scoping: the overlay chrome (selection frame + toolbar) may be
@@ -4624,6 +4885,7 @@ void Tick() {
 		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
 		PowerPoint::ShapePtr chart = FindChartRoot(slide);
 		if (!chart) {
+			if (g_shown) OvLog(L"Tick: no CHART_ROOT found - hiding overlay");
 			HideOverlay();
 			HideAppBar();
 			return;
@@ -4639,6 +4901,8 @@ void Tick() {
 		};
 		NormalizeRect(g_chartScreenRect);
 		g_chartProj = Narrow((const wchar_t*)chart->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+		_bstr_t rowYTag = chart->GetTags()->Item(_bstr_t(L"PP_ROWY"));
+		g_chartRowY = rowYTag.length() ? Narrow((const wchar_t*)rowYTag) : "";
 		bool chartChanged = !SameRect(oldChartRect, g_chartScreenRect);
 		BuildRowBands(chart, win);
 		bool hoverChanged = UpdateHoverFromCursor();
@@ -4749,13 +5013,18 @@ void Tick() {
 				g_chartScreenRect.left, g_chartScreenRect.top, g_chartScreenRect.right, g_chartScreenRect.bottom, k.c_str());
 			OvLog(buf);
 		}
-	} catch (const _com_error&) {
+	} catch (const _com_error& e) {
+		wchar_t buf[96];
+		::swprintf_s(buf, 96, L"Tick: COM error 0x%08lX - hiding overlay", (unsigned long)e.Error());
+		OvLog(buf);
 		HideOverlay();
 		HideAppBar();
 	} catch (const std::exception&) {
+		OvLog(L"Tick: std::exception - hiding overlay");
 		HideOverlay();
 		HideAppBar();
 	} catch (...) {
+		OvLog(L"Tick: unknown exception - hiding overlay");
 		HideOverlay();
 		HideAppBar();
 	}
@@ -4790,7 +5059,7 @@ void OverlayStop() {
 		if (g_hwnd && ::GetCapture() == g_hwnd) ::ReleaseCapture();
 	}
 	ResetDragGestureState();
-	UnregisterAllHotkeys(); // MUST run before DestroyWindow below (needs g_hwnd)
+	UnregisterAllHotkeys(L"OverlayStop"); // MUST run before DestroyWindow below (needs g_hwnd)
 	if (g_hwnd) { ::DestroyWindow(g_hwnd); g_hwnd = NULL; }
 	FreeBackBuffer();
 	if (g_appBarHwnd) { ::DestroyWindow(g_appBarHwnd); g_appBarHwnd = NULL; }

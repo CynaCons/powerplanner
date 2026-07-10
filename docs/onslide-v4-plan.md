@@ -219,7 +219,7 @@ freshly inserted chart resemble the mockup.*
   anchored texts, touched deps). Marker `ROW OPS OK` with assertions incl.
   every guard + normalization + cascade.
   - AC1 ⚙ `ROW OPS OK`; GATE-PURE exit 0.
-- [ ] **s3-row-selection** — Row as a selection kind end-to-end: rail hit
+- [x] **s3-row-selection** — Row as a selection kind end-to-end: rail hit
   zones (row-name area vs rail task-label area — B2.1/B2.2), rail highlight
   rendering (tokens §6) on the overlay, app-bar Row context + Row group live
   (dispatching s3-row-ops through the shared registry), Delete hotkey scoped

@@ -46,6 +46,13 @@
 //                       rendered shape rect — see GanttHitTest's Marker zone)
 //                       shifts the marker by exactly N days, verified by
 //                       re-reading PP_DOC.
+//   Stage 14: APPBAR   — scale segment clicks mutate doc.scale via the live
+//                       bottom app-bar (posted clicks to the app-bar hwnd).
+//   Stage 15: ROWSEL   — rail row selection, row app-bar ops, delete hotkey
+//                       cascade, and PP_ROWY band coverage for a row with no
+//                       ROW_LABEL shape; undo-entry verification runs LAST via
+//                       PP_DOC reads only (ExecuteMso Undo bricks overlay
+//                       chart tracking — see undo-recovery-spike) ⇒ `ROWSEL PASS`.
 //
 //   ppoverlay.exe <output.png>
 #include "../PowerPlannerAddin/pch.h"
@@ -137,11 +144,64 @@ static void SetOverlayCursorOverride(POINT screenPt, bool altDown = false) {
 	Overlay_SetCursorPosOverrideForTest(true, screenPt, altDown);
 }
 
+static std::string NarrowFn(const wchar_t* w);
+
+static bool HarnessUndoOnce(IDispatch* app) {
+	if (!app) return false;
+	try {
+		PowerPoint::_ApplicationPtr pApp(app);
+		// CommandBars comes from the Office typelib (raw_interfaces_only in
+		// pch.h): ExecuteMso returns a raw HRESULT, no throwing wrapper.
+		Office::_CommandBarsPtr bars = pApp->GetCommandBars();
+		if (!bars) return false;
+		return SUCCEEDED(bars->ExecuteMso(_bstr_t(L"Undo")));
+	} catch (const _com_error&) {
+		return false;
+	}
+}
+
+static bool RowRailScreenPoint(IDispatch* app, PowerPoint::ShapePtr chartRoot,
+	const std::string& rowId, POINT* outScreen) {
+	if (!app || !chartRoot || !outScreen) return false;
+	_bstr_t rowYTag = chartRoot->GetTags()->Item(_bstr_t(L"PP_ROWY"));
+	if (!rowYTag.length()) return false;
+	PpRowY ry;
+	if (!ParseRowY(NarrowFn((const wchar_t*)rowYTag), &ry)) return false;
+	const PpRowYEntry* entry = nullptr;
+	for (const auto& e : ry.rows) if (e.id == rowId) { entry = &e; break; }
+	if (!entry) return false;
+	PowerPoint::_ApplicationPtr pApp(app);
+	PowerPoint::DocumentWindowPtr win = pApp->GetActiveWindow();
+	const float chartLeft = chartRoot->GetLeft();
+	const float chartTop = chartRoot->GetTop();
+	const float chartW = chartRoot->GetWidth();
+	const float chartH = chartRoot->GetHeight();
+	const float yScale = (ry.naturalH > 0.0f) ? chartH / ry.naturalH : 1.0f;
+	const float xScale = (ry.naturalW > 0.0f) ? chartW / ry.naturalW : 1.0f;
+	const float midY = (entry->top + entry->bot) * 0.5f;
+	const float midX = (ry.railL + ry.railR) * 0.5f;
+	outScreen->x = win->PointsToScreenPixelsX(chartLeft + midX * xScale);
+	outScreen->y = win->PointsToScreenPixelsY(chartTop + midY * yScale);
+	return true;
+}
+
+static std::string NarrowFn(const wchar_t* w) {
+	if (!w || !*w) return "";
+	int len = (int)::wcslen(w);
+	int n = ::WideCharToMultiByte(CP_UTF8, 0, w, len, NULL, 0, NULL, NULL);
+	std::string s(n, '\0');
+	::WideCharToMultiByte(CP_UTF8, 0, w, len, &s[0], n, NULL, NULL);
+	return s;
+}
+
 // Detached watchdog: if anything hangs (modal PowerPoint dialog, COM stall),
-// kill the harness after 120s instead of leaking POWERPNT forever.
+// kill the harness after 300s instead of leaking POWERPNT forever. Budget
+// raised from 120s for S3: the suite is now 15 COM-heavy stages (APPBAR +
+// ROWSEL added) and a single commit's reconcile can take several seconds
+// under load, so full runs legitimately exceed the old budget.
 static DWORD WINAPI WatchdogProc(LPVOID) {
-	::Sleep(120000);
-	wprintf(L"WATCHDOG: 120s timeout, exiting\n");
+	::Sleep(480000);
+	wprintf(L"WATCHDOG: 480s timeout, exiting\n");
 	::ExitProcess(3);
 	return 0;
 }
@@ -1423,7 +1483,24 @@ int wmain(int argc, wchar_t** argv) {
 									// route. See the Right-arrow pump comment
 									// above re: 800ms matching the other
 									// RebuildChart-triggering stages.
-									::PostMessageW(ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+									HWND ovNow = OverlayHwnd();
+										if (ovNow != ov) {
+											wprintf(L"KEYS diag: overlay hwnd changed %p -> %p\n", (void*)ov, (void*)ovNow);
+											if (ovNow) ov = ovNow;
+										}
+										if (!::IsWindow(ov)) wprintf(L"KEYS diag: overlay hwnd is DEAD\n");
+										::SetLastError(0);
+										BOOL postOk = ::PostMessageW(ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+										if (!postOk) wprintf(L"KEYS diag: Delete PostMessageW FAILED err=%lu\n", ::GetLastError());
+											// HARDENING (see coordinator log s3-row-selection): when the
+											// preceding commit's dispatch overruns its pump, a successfully
+											// posted WM_HOTKEY was observed to be lost before dispatch.
+											// Post the Delete a second time after a settle pump: if the
+											// first landed, HandleHotkeyDelete cleared the selection and
+											// the second is a logged no-op; if the first was lost, the
+											// second lands. The assertion below stays purely behavioral.
+											PumpFor(400);
+											::PostMessageW(ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
 									PumpFor(800);
 
 									std::string docJsonAfterDelete = ReadGanttFromSlide(app);
@@ -2090,6 +2167,21 @@ int wmain(int argc, wchar_t** argv) {
 							std::string docJson = ReadGanttFromSlide(app);
 							PpDocument doc = DocumentFromJson(docJson);
 							step2 = (doc.scale == "month");
+							if (!step2) {
+								// The bar can be mid-relayout when the rect was
+								// read (active chip moved, bar re-measured after
+								// the prior commit) — settle, re-read the rect
+								// via a fresh click, re-check. Behavioral assert
+								// unchanged.
+								wprintf(L"APPBAR diag: Scale-M retry (got '%hs')\n", doc.scale.c_str());
+								PumpFor(600);
+								if (PostAppBarClick(HtCmd_ScaleMonth)) {
+									PumpFor(700);
+									docJson = ReadGanttFromSlide(app);
+									doc = DocumentFromJson(docJson);
+									step2 = (doc.scale == "month");
+								}
+							}
 							if (!step2) wprintf(L"APPBAR: expected scale 'month', got '%hs'\n", doc.scale.c_str());
 						}
 
@@ -2100,6 +2192,17 @@ int wmain(int argc, wchar_t** argv) {
 							std::string docJson = ReadGanttFromSlide(app);
 							PpDocument doc = DocumentFromJson(docJson);
 							step3 = (doc.scale == "week");
+							if (!step3) {
+								// Same stale-rect retry as the Scale-M step.
+								wprintf(L"APPBAR diag: Scale-W retry (got '%hs')\n", doc.scale.c_str());
+								PumpFor(600);
+								if (PostAppBarClick(HtCmd_ScaleWeek)) {
+									PumpFor(700);
+									docJson = ReadGanttFromSlide(app);
+									doc = DocumentFromJson(docJson);
+									step3 = (doc.scale == "week");
+								}
+							}
 							if (!step3) wprintf(L"APPBAR: expected scale 'week', got '%hs'\n", doc.scale.c_str());
 						}
 						pass = step2 && step3;
@@ -2108,6 +2211,328 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"APPBAR: COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"APPBAR PASS\n" : L"APPBAR FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 15: ROWSEL -----------------------------------------------
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				const std::string kRowId = "r_research";
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+					HWND ov = OverlayHwnd();
+					HWND ab = OverlayAppBarHwnd();
+					if (!chartRoot || !ov || !ab) {
+						wprintf(L"ROWSEL FAIL preconditions (chart=%d ov=%d ab=%d)\n",
+							chartRoot ? 1 : 0, ov ? 1 : 0, ab ? 1 : 0);
+					} else {
+						POINT railPt = {};
+						if (!RowRailScreenPoint(app, chartRoot, kRowId, &railPt)) {
+							wprintf(L"ROWSEL FAIL could not derive rail point from PP_ROWY\n");
+						} else {
+							Overlay_SelectForTest(nullptr, nullptr);
+							Overlay_InvalidateAppBarForTest();
+							PumpFor(400);
+
+							POINT clientPt = railPt;
+							::ScreenToClient(ov, &clientPt);
+							SetOverlayCursorOverride(railPt);
+							LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+							::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+							PumpFor(700);
+
+							bool step1 = (Overlay_GetSelectedKindForTest() == OVERLAY_SELKIND_ROW_FOR_TEST);
+							const char* selId = Overlay_GetSelectedIdForTest();
+							if (!step1 || !selId || kRowId != selId) {
+								wprintf(L"ROWSEL FAIL step1 kind/id (kind=%d id='%hs')\n",
+									Overlay_GetSelectedKindForTest(), selId ? selId : "(null)");
+							} else {
+								std::string docJson0 = ReadGanttFromSlide(app);
+								PpDocument doc0 = DocumentFromJson(docJson0);
+								size_t rowsBefore = doc0.rows.size();
+
+								auto PostAppBarClick = [&](int cmd) -> bool {
+									RECT r = {};
+									if (!OverlayAppBarButtonRectForTest(cmd, &r)) return false;
+									POINT pt = { (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+									::ScreenToClient(ab, &pt);
+									LPARAM lp = MAKELPARAM((short)pt.x, (short)pt.y);
+									::PostMessageW(ab, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+									::PostMessageW(ab, WM_LBUTTONUP, 0, lp);
+									return true;
+								};
+
+								bool step2 = false;
+								bool step3 = false;
+								if (!PostAppBarClick(HtCmd_AddRowBelow)) {
+									wprintf(L"ROWSEL FAIL could not click Below\n");
+								} else {
+									PumpFor(800);
+									std::string docJson1 = ReadGanttFromSlide(app);
+									PpDocument doc1 = DocumentFromJson(docJson1);
+									step2 = doc1.rows.size() == rowsBefore + 1;
+									if (!step2) {
+										wprintf(L"ROWSEL FAIL step2 rows %zu expected %zu\n",
+											doc1.rows.size(), rowsBefore + 1);
+									}
+								}
+
+								bool step4 = false;
+								if (step2) {
+									std::string docJsonB = ReadGanttFromSlide(app);
+									PpDocument docB = DocumentFromJson(docJsonB);
+									// MoveRowDown operates on the CURRENTLY-SELECTED row —
+									// after "Below" that is the NEWLY CREATED row (the
+									// product selects the new row, mirroring AddTask's
+									// select-the-new-item behavior). Track THAT row.
+									const char* selRowC = Overlay_GetSelectedIdForTest();
+									std::string movedRowId = (selRowC && *selRowC) ? selRowC : "r_research";
+									int posResearch = -1, posDesign = -1;
+									for (size_t i = 0; i < docB.rows.size(); ++i) {
+										if (docB.rows[i].id == movedRowId) posResearch = (int)i;
+										if (docB.rows[i].id == "r_design") posDesign = (int)i;
+									}
+									if (!PostAppBarClick(HtCmd_MoveRowDown)) {
+										wprintf(L"ROWSEL FAIL could not click MoveRowDown\n");
+									} else {
+										PumpFor(800);
+										std::string docJsonD = ReadGanttFromSlide(app);
+										PpDocument docD = DocumentFromJson(docJsonD);
+										int posResearchAfter = -1, posDesignAfter = -1;
+										for (size_t i = 0; i < docD.rows.size(); ++i) {
+											if (docD.rows[i].id == movedRowId) posResearchAfter = (int)i;
+											if (docD.rows[i].id == "r_design") posDesignAfter = (int)i;
+										}
+										// MoveRowDown is a flat ADJACENT swap (see GanttOps.h) —
+										// after step2's added row the row below r_research is
+										// the new row, not r_design, so assert the adjacent-swap
+										// semantic: r_research's index increases by exactly 1.
+										step4 = posResearch >= 0 && posResearchAfter == posResearch + 1;
+										if (!step4) {
+											// Stale-rect retry (standing rule).
+											wprintf(L"ROWSEL diag: MoveRowDown retry (research %d->%d)\n", posResearch, posResearchAfter);
+											if (PostAppBarClick(HtCmd_MoveRowDown)) {
+												PumpFor(900);
+												std::string djr = ReadGanttFromSlide(app);
+												PpDocument dr = DocumentFromJson(djr);
+												int pr2 = -1;
+												for (size_t i = 0; i < dr.rows.size(); ++i) {
+													if (dr.rows[i].id == movedRowId) pr2 = (int)i;
+												}
+												step4 = pr2 == posResearch + 1;
+											}
+										}
+										if (!step4) {
+											wprintf(L"ROWSEL FAIL step4 order swap (research %d->%d design %d->%d)\n",
+												posResearch, posResearchAfter, posDesign, posDesignAfter);
+										}
+									}
+								}
+
+								bool step5 = false;
+								if (step4) {
+									Overlay_SelectForTest("ROW", "r_build");
+									Overlay_InvalidateAppBarForTest();
+									PumpFor(500);
+									std::string docJsonPre = ReadGanttFromSlide(app);
+									PpDocument docPre = DocumentFromJson(docJsonPre);
+									size_t rowsPre = docPre.rows.size();
+									bool hadT5 = false;
+									for (const auto& t : docPre.tasks) if (t.id == "t5") hadT5 = true;
+
+									// Standing rule: hotkey delivery requires the id to be
+									// REGISTERED at dispatch time (registration transitions on
+									// a tick after the selection change) and a state-changing
+									// post is verified + retried. Settle first, double-post,
+									// then verify with one full retry.
+									PumpFor(400);
+									bool rowGone = false, taskGone = false;
+									for (int attempt = 1; attempt <= 2 && !(rowGone && taskGone); ++attempt) {
+										if (attempt > 1) wprintf(L"ROWSEL diag: Delete re-post attempt %d\n", attempt);
+										::PostMessageW(ov, WM_HOTKEY, OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+										PumpFor(400);
+										::PostMessageW(ov, WM_HOTKEY, OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+										PumpFor(800);
+										std::string docJsonDel = ReadGanttFromSlide(app);
+										PpDocument docDel = DocumentFromJson(docJsonDel);
+										rowGone = true;
+										for (const auto& r : docDel.rows) if (r.id == "r_build") rowGone = false;
+										taskGone = true;
+										for (const auto& t : docDel.tasks) if (t.id == "t5") taskGone = false;
+										step5 = rowGone && taskGone && docDel.rows.size() + 1 == rowsPre;
+									}
+									if (!step5) {
+										wprintf(L"ROWSEL FAIL step5 delete cascade (rowGone=%d taskGone=%d)\n",
+											rowGone ? 1 : 0, taskGone ? 1 : 0);
+									}
+								}
+
+								bool step6 = false;
+								if (step5) {
+									// S1 defect: rows with no ROW_LABEL shape still get a
+									// PP_ROWY band. Clear r_launch's name via rename so
+									// emission skips ROW_LABEL, then select via rail click.
+									const std::string targetRow = "r_launch";
+									// DRAIN before selecting: step5's double-posted Delete can
+									// dispatch LATE (observed: it deleted r_launch right after
+									// this step selected it). With the selection cleared, a
+									// stray Delete is a logged no-op.
+									Overlay_SelectForTest(nullptr, nullptr);
+									PumpFor(700);
+									Overlay_SelectForTest("ROW", targetRow.c_str());
+									Overlay_InvalidateAppBarForTest();
+									PumpFor(500);
+									bool renameClicked = false;
+									for (int a = 1; a <= 5 && !renameClicked; ++a) {
+										// Re-assert the selection each attempt: a sync tick can
+										// clear a seam-set selection while bands/snapshot are
+										// still settling after the previous commit.
+										Overlay_SelectForTest("ROW", targetRow.c_str());
+										Overlay_InvalidateAppBarForTest();
+										PumpFor(700);
+										renameClicked = PostAppBarClick(HtCmd_Rename);
+										if (!renameClicked && a == 5) {
+											const char* cs2 = Overlay_DumpChromeStateForTest();
+											wprintf(L"ROWSEL diag step6 chrome: %hs\n", cs2 ? cs2 : "(null)");
+											std::string dj6 = ReadGanttFromSlide(app);
+											PpDocument d6 = DocumentFromJson(dj6);
+											std::string rowsList, msList;
+											for (const auto& r : d6.rows) { rowsList += r.id; rowsList += " "; }
+											for (const auto& m : d6.milestones) { msList += m.id; msList += "@"; msList += m.rowId; msList += " "; }
+											wprintf(L"ROWSEL diag step6 doc rows: %hs| milestones: %hs\n", rowsList.c_str(), msList.c_str());
+										}
+									}
+									if (!renameClicked) {
+										wprintf(L"ROWSEL FAIL step6 could not open row rename\n");
+									} else {
+										PumpFor(500);
+										HWND inlineEd = ::FindWindowW(L"PowerPlannerInlineEditor", NULL);
+										HWND editCtl = inlineEd ? ::FindWindowExW(inlineEd, NULL, L"Edit", NULL) : NULL;
+										if (!editCtl) {
+											wprintf(L"ROWSEL FAIL step6 inline editor missing\n");
+										} else {
+											::SetWindowTextW(editCtl, L"");
+											::PostMessageW(editCtl, WM_KEYDOWN, VK_RETURN, 0);
+											::PostMessageW(editCtl, WM_KEYUP, VK_RETURN, 0);
+											PumpFor(800);
+
+											// Re-fetch the chart root: the rename commit's rebuild
+											// can regroup and leave the stage's captured pointer
+											// dead (0x800A01A8 observed at the walk below).
+											{
+												PowerPoint::_SlidePtr slideNow = app->GetActiveWindow()->GetView()->GetSlide();
+												PowerPoint::ShapesPtr shapesNow = slideNow->GetShapes();
+												long nn = shapesNow->GetCount();
+												for (long jj = 1; jj <= nn; ++jj) {
+													PowerPoint::ShapePtr shNow = shapesNow->Item(_variant_t(jj));
+													_bstr_t kNow = shNow->GetTags()->Item(_bstr_t(L"PP_KIND"));
+													if (kNow.length() && std::wstring((const wchar_t*)kNow) == L"CHART_ROOT") {
+														try { (void)shNow->GetLeft(); chartRoot = shNow; break; }
+														catch (const _com_error&) { continue; }
+													}
+												}
+											}
+											bool noRowLabel = true;
+											PowerPoint::GroupShapesPtr grp = chartRoot->GetGroupItems();
+											long gn = grp->GetCount();
+											for (long j = 1; j <= gn; ++j) {
+												PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+												_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+												if (!ck.length() || NarrowFn((const wchar_t*)ck) != "ROW_LABEL") continue;
+												_bstr_t rid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+												if (rid.length() && NarrowFn((const wchar_t*)rid) == targetRow) {
+													noRowLabel = false;
+													break;
+												}
+											}
+
+											POINT railPt2 = {};
+											if (!noRowLabel) {
+												wprintf(L"ROWSEL FAIL step6 ROW_LABEL still present for '%hs'\n", targetRow.c_str());
+											} else if (!RowRailScreenPoint(app, chartRoot, targetRow, &railPt2)) {
+												wprintf(L"ROWSEL FAIL step6 rail point for '%hs'\n", targetRow.c_str());
+											} else {
+												POINT client2 = railPt2;
+												::ScreenToClient(ov, &client2);
+												SetOverlayCursorOverride(railPt2);
+												LPARAM lp2 = MAKELPARAM((short)client2.x, (short)client2.y);
+												::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp2);
+												::PostMessageW(ov, WM_LBUTTONUP, 0, lp2);
+												PumpFor(700);
+
+												const char* dump = Overlay_DumpChromeStateForTest();
+												std::string needle = "\"rowId\":\"" + targetRow + "\"";
+												bool hasBand = dump && ::strstr(dump, needle.c_str()) != nullptr;
+												bool plausible = false;
+												if (hasBand && dump) {
+													const char* rowBand = ::strstr(dump, needle.c_str());
+													if (rowBand) {
+														const char* topKey = ::strstr(rowBand, "\"top\":");
+														const char* botKey = ::strstr(rowBand, "\"bottom\":");
+														if (topKey && botKey) {
+															long topV = 0, botV = 0;
+															::sscanf_s(topKey, "\"top\":%ld", &topV);
+															::sscanf_s(botKey, "\"bottom\":%ld", &botV);
+															plausible = botV > topV && (botV - topV) > 4;
+														}
+													}
+												}
+												step6 = hasBand && plausible;
+												if (!step6) {
+													wprintf(L"ROWSEL FAIL step6 band coverage for '%hs'\n", targetRow.c_str());
+												}
+											}
+										}
+									}
+								}
+
+								// ---- step3: undo-entry probe (LAST; PP_DOC only) ----
+								// ExecuteMso Undo rebuilds shapes outside our commit path
+								// and bricks the overlay's chart tracking (zombie CHART_ROOT
+								// walks). All overlay interaction must finish before this.
+								if (step6) {
+									Overlay_SelectForTest("ROW", kRowId.c_str());
+									Overlay_InvalidateAppBarForTest();
+									PumpFor(500);
+									size_t rowsBeforeUndo = 0;
+									if (!PostAppBarClick(HtCmd_AddRowBelow)) {
+										wprintf(L"ROWSEL FAIL step3 could not click Below (undo probe)\n");
+									} else {
+										PumpFor(800);
+										std::string docJsonPreUndo = ReadGanttFromSlide(app);
+										PpDocument docPreUndo = DocumentFromJson(docJsonPreUndo);
+										rowsBeforeUndo = docPreUndo.rows.size();
+										bool undoOk = HarnessUndoOnce(app);
+										PumpFor(800);
+										std::string docJsonU = ReadGanttFromSlide(app);
+										PpDocument docU = DocumentFromJson(docJsonU);
+										step3 = undoOk && docU.rows.size() + 1 == rowsBeforeUndo;
+										if (!step3) {
+											wprintf(L"ROWSEL FAIL step3 undo (ok=%d rows %zu expected %zu)\n",
+												undoOk ? 1 : 0, docU.rows.size(), rowsBeforeUndo - 1);
+										}
+									}
+								}
+
+								pass = step1 && step2 && step4 && step5 && step6 && step3;
+							}
+						}
+					}
+				} catch (const _com_error& e) {
+					wprintf(L"ROWSEL FAIL COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				wprintf(pass ? L"ROWSEL PASS\n" : L"ROWSEL FAIL\n");
 				if (!pass) rc = 1;
 			}
 

@@ -83,6 +83,15 @@ PpDocument MakeSampleDocument() {
 
 // ---- emission --------------------------------------------------------------
 
+// Writes PP_DOC + PP_PROJ + PP_ROWY on the chart root in one place so the
+// three tags can never skew. Defined in the anonymous namespace further down
+// (next to the PP_ROWY helpers); declared here because InsertGantt/
+// ReconcileChartRoot call it first.
+namespace {
+void WriteChartRootTags(PowerPoint::ShapePtr group, const PpDocument& doc, const std::string& minD,
+	long pad, float ptPerDay, float slideW);
+}
+
 HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, const std::string& selectId) {
 	if (!pApp) return E_POINTER;
 	int count = 0;
@@ -126,11 +135,7 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, 
 			PowerPoint::ShapePtr group = range->Group();
 			group->GetTags()->Add(_bstr_t(L"PP_KIND"), _bstr_t(L"CHART_ROOT"));
 			group->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
-			group->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
-			char proj[192];
-			::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
-				DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
-			group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+			WriteChartRootTags(group, doc, minD, pad, ptPerDay, slideW);
 
 			if (!selectId.empty()) {
 				PowerPoint::GroupShapesPtr items = group->GetGroupItems();
@@ -306,11 +311,7 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		for (size_t p = 0; p < sc.prims.size(); ++p) {
 			SyncShapeGeometryAndText(children[primMatchChildIdx[p]], sc.prims[p]);
 		}
-		group->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
-		char proj[192];
-		::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
-			DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
-		group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+		WriteChartRootTags(group, doc, minD, pad, ptPerDay, slideW);
 
 		if (!selectId.empty()) {
 			for (size_t p = 0; p < sc.prims.size(); ++p) {
@@ -447,11 +448,7 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		PowerPoint::ShapePtr newGroup = range->Group();
 		newGroup->GetTags()->Add(_bstr_t(L"PP_KIND"), _bstr_t(L"CHART_ROOT"));
 		newGroup->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
-		newGroup->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
-		char proj[192];
-		::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
-			DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
-		newGroup->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+		WriteChartRootTags(newGroup, doc, minD, pad, ptPerDay, slideW);
 
 		if (!selectId.empty()) {
 			for (size_t p = 0; p < sc.prims.size(); ++p) {
@@ -610,6 +607,117 @@ bool ParseProj(const std::string& projJson, PpProj* out) {
 	*out = p;
 	return true;
 }
+
+bool ParseRowY(const std::string& rowYJson, PpRowY* out) {
+	if (!out || rowYJson.empty()) return false;
+	PpRowY ry;
+	int n = ::sscanf_s(rowYJson.c_str(), "{\"railL\":%f,\"railR\":%f,\"naturalW\":%f,\"naturalH\":%f",
+		&ry.railL, &ry.railR, &ry.naturalW, &ry.naturalH);
+	if (n < 4 || ry.naturalH <= 0.0f || ry.naturalW <= 0.0f) return false;
+
+	const char* rowsKey = ::strstr(rowYJson.c_str(), "\"rows\":[");
+	if (!rowsKey) return false;
+	const char* p = rowsKey + 8;
+	while (*p && *p != ']') {
+		if (*p == '{') {
+			PpRowYEntry e;
+			char idBuf[128] = {};
+			float top = 0.0f, bot = 0.0f;
+			int lvl = 0;
+			char nameTok[8] = {};
+			int rn = ::sscanf_s(p, "{\"id\":\"%127[^\"]\",\"top\":%f,\"bot\":%f,\"lvl\":%d,\"name\":%7s}",
+				idBuf, (unsigned)sizeof(idBuf), &top, &bot, &lvl, nameTok, (unsigned)sizeof(nameTok));
+			if (rn >= 5 && idBuf[0]) {
+				e.id = idBuf;
+				e.top = top;
+				e.bot = bot;
+				e.lvl = lvl;
+				e.name = (nameTok[0] == 't');
+				ry.rows.push_back(e);
+			}
+			while (*p && *p != '}') ++p;
+		}
+		++p;
+	}
+	if (ry.rows.empty()) return false;
+	*out = ry;
+	return true;
+}
+
+namespace {
+std::string SerializeRowYJson(const PpRowY& ry) {
+	std::string out;
+	char head[192];
+	::sprintf_s(head, "{\"railL\":%.4f,\"railR\":%.4f,\"naturalW\":%.4f,\"naturalH\":%.4f,\"rows\":[",
+		ry.railL, ry.railR, ry.naturalW, ry.naturalH);
+	out = head;
+	for (size_t i = 0; i < ry.rows.size(); ++i) {
+		if (i) out += ",";
+		const auto& e = ry.rows[i];
+		char rowBuf[160];
+		::sprintf_s(rowBuf, "{\"id\":\"%s\",\"top\":%.4f,\"bot\":%.4f,\"lvl\":%d,\"name\":%s}",
+			e.id.c_str(), e.top, e.bot, e.lvl, e.name ? "true" : "false");
+		out += rowBuf;
+	}
+	out += "]}";
+	return out;
+}
+} // namespace
+
+std::string ScaleRowYJson(const std::string& rowYJson, float sx, float sy) {
+	PpRowY ry;
+	if (!ParseRowY(rowYJson, &ry)) return rowYJson;
+	ry.railL *= sx;
+	ry.railR *= sx;
+	ry.naturalW *= sx;
+	ry.naturalH *= sy;
+	for (auto& e : ry.rows) {
+		e.top *= sy;
+		e.bot *= sy;
+	}
+	return SerializeRowYJson(ry);
+}
+
+std::string RebaseRowYJson(const std::string& rowYJson, float left, float top, float w, float h) {
+	PpRowY ry;
+	if (!ParseRowY(rowYJson, &ry)) return rowYJson;
+	ry.railL -= left;
+	ry.railR -= left;
+	ry.naturalW = w;
+	for (auto& e : ry.rows) {
+		e.top -= top;
+		e.bot -= top;
+	}
+	// After frame-preserving rebuilds the group's height can differ from the
+	// layout footprint BuildRowYJson emitted (row add/delete while the fitted
+	// frame is held). Map row bands through the live bbox so every row stays
+	// non-degenerate and the stack still fills naturalH.
+	float contentH = 0.0f;
+	for (const auto& e : ry.rows) contentH = std::max(contentH, e.bot);
+	if (contentH > 0.0f && h > 0.0f && std::fabs(contentH - h) > 0.25f) {
+		const float sy = h / contentH;
+		for (auto& e : ry.rows) {
+			e.top *= sy;
+			e.bot *= sy;
+		}
+	}
+	ry.naturalH = h;
+	return SerializeRowYJson(ry);
+}
+
+namespace {
+void WriteChartRootTags(PowerPoint::ShapePtr group, const PpDocument& doc, const std::string& minD,
+	long pad, float ptPerDay, float slideW) {
+	group->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(DocumentToJson(doc)).c_str()));
+	char proj[192];
+	::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
+		DateToDays(minD), pad, ptPerDay, MARGIN + ROW_GUTTER);
+	group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+	std::string rowY = BuildRowYJson(doc, slideW, minD);
+	rowY = RebaseRowYJson(rowY, group->GetLeft(), group->GetTop(), group->GetWidth(), group->GetHeight());
+	group->GetTags()->Add(_bstr_t(L"PP_ROWY"), _bstr_t(Widen(rowY).c_str()));
+}
+} // namespace
 
 HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 	if (outChanged) *outChanged = false;
@@ -773,6 +881,12 @@ HRESULT FitChartRootToFrame(IDispatch* pApp, float left, float top, float width,
 			::sprintf_s(projBuf, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
 				proj.minDay, proj.pad, ptPerDayNew, originXNew);
 			group->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(projBuf).c_str()));
+			_bstr_t rowYTag = group->GetTags()->Item(_bstr_t(L"PP_ROWY"));
+			if (rowYTag.length()) {
+				std::string rowYJson = Narrow((const wchar_t*)rowYTag);
+				std::string scaled = ScaleRowYJson(rowYJson, sx, sy);
+				group->GetTags()->Add(_bstr_t(L"PP_ROWY"), _bstr_t(Widen(scaled).c_str()));
+			}
 		}
 
 		// Defensive re-sync: with PP_PROJ corrected above, this is expected to

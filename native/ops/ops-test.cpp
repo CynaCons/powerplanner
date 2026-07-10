@@ -18,6 +18,26 @@ static bool Check(bool cond, const char* msg) {
 	return true;
 }
 
+// Lightweight PP_ROWY row-band checker for ops tests (no COM / GanttBuilder link).
+static bool RowYBandsNonDegenerate(const std::string& rowYJson, size_t expectedRows) {
+	const char* rowsKey = ::strstr(rowYJson.c_str(), "\"rows\":[");
+	if (!rowsKey) return false;
+	size_t count = 0;
+	const char* p = rowsKey + 8;
+	while (*p && *p != ']') {
+		if (*p == '{') {
+			float top = 0.0f, bot = 0.0f;
+			char idBuf[128] = {};
+			int n = ::sscanf_s(p, "{\"id\":\"%127[^\"]\",\"top\":%f,\"bot\":%f", idBuf,
+				(unsigned)sizeof(idBuf), &top, &bot);
+			if (n >= 3 && idBuf[0] && bot > top) ++count;
+			while (*p && *p != '}') ++p;
+		}
+		++p;
+	}
+	return count == expectedRows;
+}
+
 // Free-standing zone-check helper (takes the snapshot explicitly) shared by
 // RunHitTestChecks' 96dpi checks (via its own local lambda) and
 // RunDpiHelperChecks' 192dpi edge-band checks below.
@@ -37,6 +57,8 @@ static bool RunHitTestChecks() {
 	snap.items.push_back({ HtItemKind::RowLabel, "row-2", { 110, 280, 220, 320 } });
 	snap.rowBands.push_back({ "row-1", 150, 250 });
 	snap.rowBands.push_back({ "row-2", 250, 350 });
+	snap.railLeftPx = snap.chartRect.left;
+	snap.railRightPx = 230;
 	// Task bar in row 1, milestone marker in row 2.
 	snap.items.push_back({ HtItemKind::Task, "task-1", { 300, 180, 500, 220 } });
 	snap.items.push_back({ HtItemKind::Milestone, "ms-1", { 600, 280, 640, 320 } });
@@ -122,6 +144,14 @@ static bool RunHitTestChecks() {
 	{
 		HtHit hit = GanttHitTestPoint(snap, 400, 145);
 		ok = Check(hit.zone == HtZone::RowBand && hit.rowId.empty() && hit.id.empty(), "hit: in-chart point outside all bands is RowBand with empty rowId") && ok;
+	}
+
+	// PP_ROWY rail extent: a model row with no ROW_LABEL shape still maps
+	// clicks in the rail column to RowBand(rowId).
+	{
+		snap.rowBands.push_back({ "row-3", 350, 400 });
+		HtHit hit = GanttHitTestPoint(snap, 150, 375);
+		ok = Check(hit.zone == HtZone::RowBand && hit.rowId == "row-3", "hit: rail column selects row without ROW_LABEL") && ok;
 	}
 
 	return ok;
@@ -768,6 +798,18 @@ static bool RunLabelOpsChecks() {
 		ok = Check(tbBar2 && tbBar2->text.empty(), "global railLabels suppresses the bar task's on-bar label") && ok;
 	}
 
+	// --- PP_ROWY: milestone-only last row still gets a non-degenerate band ---
+	{
+		PpDocument mDoc;
+		mDoc.rows.push_back(PpRow{"r1", "Row 1", "", false});
+		mDoc.rows.push_back(PpRow{"r_launch", "Launch", "", false});
+		mDoc.tasks.push_back(PpTask{"t1", "Work", "2026-06-01", "2026-06-12", "r1", "", 0});
+		mDoc.milestones.push_back(PpMilestone{"m2", "Ship", "2026-08-10", "r_launch", ""});
+		std::string rowY = BuildRowYJson(mDoc, 960.0f, "2026-06-01");
+		ok = Check(RowYBandsNonDegenerate(rowY, mDoc.rows.size()),
+			"PP_ROWY: every row including milestone-only last has bot>top") && ok;
+	}
+
 	return ok;
 }
 
@@ -1262,6 +1304,39 @@ static bool RunRowOpsChecks() {
 	return ok;
 }
 
+static bool RunRowAppBarMapChecks() {
+	bool ok = true;
+	{
+		HtMenuOp op = MapRowAppBarCommand(HtCmd_AddRowAbove);
+		ok = Check(op.opKind == HtOpKind::AddRowAbove && op.needsRowId, "map: row appbar Above -> AddRowAbove") && ok;
+	}
+	{
+		HtMenuOp op = MapRowAppBarCommand(HtCmd_AddRowBelow);
+		ok = Check(op.opKind == HtOpKind::AddRow && op.needsRowId, "map: row appbar Below -> AddRow(needsRowId)") && ok;
+	}
+	{
+		HtMenuOp op = MapRowAppBarCommand(HtCmd_MoveRowDown);
+		ok = Check(op.opKind == HtOpKind::MoveRowDown && op.needsRowId, "map: row appbar MoveDown -> MoveRowDown") && ok;
+	}
+	{
+		HtMenuOp op = MapRowAppBarCommand(HtCmd_IndentRow);
+		ok = Check(op.opKind == HtOpKind::IndentRow && op.needsRowId, "map: row appbar Indent -> IndentRow") && ok;
+	}
+	{
+		HtMenuOp op = MapRowAppBarCommand(HtCmd_DeleteRow);
+		ok = Check(op.opKind == HtOpKind::DeleteRow && op.needsRowId, "map: row appbar DeleteRow -> DeleteRow") && ok;
+	}
+	{
+		HtMenuOp op = MapRowAppBarCommand(HtCmd_Rename);
+		ok = Check(op.opKind == HtOpKind::RenameRow && op.needsRowId, "map: row appbar Rename -> RenameRow") && ok;
+	}
+	{
+		HtMenuOp op = MapRowAppBarCommand(HtCmd_ScaleWeek);
+		ok = Check(op.opKind == HtOpKind::None, "map: row appbar ScaleWeek -> None") && ok;
+	}
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -1373,6 +1448,9 @@ int main() {
 	bool rowOpsOk = RunRowOpsChecks();
 	ok = rowOpsOk && ok;
 
+	bool rowAppBarMapOk = RunRowAppBarMapChecks();
+	ok = rowAppBarMapOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -1408,6 +1486,9 @@ int main() {
 	}
 	if (rowOpsOk) {
 		std::printf("ROW OPS OK\n");
+	}
+	if (rowAppBarMapOk) {
+		std::printf("ROW APPBAR MAP OK\n");
 	}
 	return 0;
 }
