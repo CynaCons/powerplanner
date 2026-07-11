@@ -192,6 +192,76 @@ def sweep_powerplanner_windows() -> List[Dict[str, Any]]:
     return found
 
 
+def _foreground_fullscreen_app() -> Optional[str]:
+    """Return the exe name of the foreground window's process when that window
+    covers its whole monitor and is not PowerPoint/our harness — i.e. the user
+    is in a fullscreen app (game, video). Harness runs pop TOPMOST overlay
+    windows over EVERYTHING (host-active override bypasses SR-LIFE gating for
+    testability), so starting a run in that state paints chart chrome over the
+    user's screen (live user report 2026-07-11). Windows-only; returns None on
+    any failure (fail-open)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        monitor = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(mi)):
+            return None
+        m = mi.rcMonitor
+        if not (rect.left <= m.left and rect.top <= m.top
+                and rect.right >= m.right and rect.bottom >= m.bottom):
+            return None
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        kernel32 = ctypes.windll.kernel32
+        h = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return "unknown-fullscreen-app"
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            size = wintypes.DWORD(260)
+            if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                exe = buf.value.rsplit("\\", 1)[-1].lower()
+            else:
+                exe = "unknown-fullscreen-app"
+        finally:
+            kernel32.CloseHandle(h)
+        if exe in ("powerpnt.exe", "ppappbarshot.exe", "explorer.exe"):
+            return None
+        return exe
+    except Exception:
+        return None
+
+
+def _wait_while_user_fullscreen(max_wait_s: int = 1800, poll_s: int = 20) -> None:
+    """Block harness launches while the user is in a fullscreen app; give up
+    (and proceed) after max_wait_s so unattended runs can't hang forever."""
+    waited = 0
+    while waited < max_wait_s:
+        app = _foreground_fullscreen_app()
+        if not app:
+            if waited:
+                print(f"[driver] fullscreen app gone; starting run after {waited}s wait")
+            return
+        if waited == 0:
+            print(f"[driver] foreground fullscreen app detected ({app}); "
+                  f"waiting up to {max_wait_s}s before borrowing the desktop")
+        time.sleep(poll_s)
+        waited += poll_s
+    print(f"[driver] WARNING: fullscreen app still foreground after {max_wait_s}s; proceeding")
+
+
 def run_harness(
     exe_name: str,
     args: Optional[List[str]] = None,
@@ -212,6 +282,7 @@ def run_harness(
         )
 
     cmd = [str(exe_path)] + [str(a) for a in args]
+    _wait_while_user_fullscreen()
     start = time.time()
     last_rc, last_out = -1, ""
     max_attempts = retries + 1
