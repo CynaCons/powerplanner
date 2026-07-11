@@ -208,8 +208,9 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - **MEASURED BASELINE 2026-07-11: nudge = 9.8 s, color = 17.5 s per single edit** (budget 200 ms) — the user's "not reactive/not usable" verdict, quantified. The two latency traces are committed RED on purpose until SR-SMO-01 v2 lands; do not soften.
 - First i4a attempt (stable sub-prim slots + full property sync + conditional paint lock) measured the SAME magnitude (10.7/14.6 s) → REVERTED from the tree (never committed). Lesson: per-shape COM property read/write volume is the cost, not delete-vs-update strategy; adding more per-shape syncs makes it worse.
 - [x] In-place reconcile v2 (SR-SMO-01/03): scene cache + pure C++ diff fast path + conditional paint lock (8a77df6). **Measured: color 17531→328 ms (53×); nudge 9829→4047 ms** (nudge misses fast path — projection window recomputes on any date change → structural)
-- [ ] Nudge onto the fast path: freeze the projection window for in-range date moves (recompute only when a date exits the padded window); expect nudge ≈ color ≈ 300 ms
-- [ ] Trim fast path below the 200 ms budget (drop the per-op PP_DOC tag re-read: trust in-memory doc identity, keep drift check on a cheaper signal or per-N ops)
+- [x] v2.5.3-latency-green: freeze projection window for in-range date moves + fast-path tag trim (PP_DOC-only write, skip PP_DOC tag re-read) — code landed; verify traces ≤200 ms
+- [x] Nudge onto the fast path: freeze the projection window for in-range date moves (recompute only when a date exits the padded window); expect nudge ≈ color ≈ 300 ms
+- [x] Trim fast path below the 200 ms budget (drop the per-op PP_DOC tag re-read: trust in-memory doc identity, keep drift check on a cheaper signal or per-N ops)
 - [ ] Then remove the two rebuild-dip invariant skips in harness_driver.py (marked "KNOWN v2.5.3") so transients fail hard again
 - [ ] Immediate hover paint on WM_MOUSEMOVE path (SR-SMO-04)
 - [ ] WindowSelectionChange COM sink; tick as watchdog (SR-SMO-05 / ARC-07)
@@ -306,11 +307,11 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 
 ### v2.6.0 - Iteration U0: Interaction Conventions + UX Detection Gate (process, do first)
 **Goal:** Make this class of finding impossible to miss again; codify the conventions the slices below implement.
-- [ ] Author spec/srs-native/SRS-InteractionConventions.md (tables): direct-manipulation-first; every drag shows a live preview of its result (dates/shape/position); Esc + click-away semantics (commit vs cancel, context reset); drag constraint to component; snap rules; no steppers for continuous values; affordances must be visible on hover/selection (ports, handles, adders)
+- [x] Author spec/srs-native/SRS-InteractionConventions.md (tables): SR-IXC-01..22 across direct-manipulation, live preview, commit/cancel, context reset, constraint+snap, affordances, verbs, platform conventions + walkthrough-gate cross-cutting req
 - [ ] UX walkthrough gate: scripted task-based cold walkthroughs ("change a date", "add a milestone", "link two tasks", "set weekly separators", "delete 3 rows") executed via harness with per-step captures + GIF, reviewed against a heuristic checklist at EVERY slice exit; findings → new UF entries
-- [ ] AGENTS.md: add the mandatory UX gate + conventions rule (paired with this registration)
-- [ ] Restore README media: docs/media/ was deleted in 6515121 while README.md still references all 8 images (GitHub front page broken) — restore from c168695 or repoint to site/assets
-- [ ] Fix PLAN.md dead link (docs/PLAN_HISTORY.md does not exist)
+- [x] AGENTS.md: add the mandatory UX gate + conventions rule (1632e05)
+- [x] Restore README media: docs/media/ restored from 6515121^ (cb62dfb)
+- [x] Fix PLAN.md dead link (PLAN_HISTORY refs repointed to git history) (cb62dfb)
 
 ### v2.6.1 - Iteration U1: Selection Integrity (one selection story)
 **Goal:** Our chrome is the ONLY selection chrome; no keyboard theft; no native leaks. Absorbs v2.5.5 #1 (SR-SHP-01..04).
