@@ -29,6 +29,10 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <fstream>
+#include <sstream>
+#include <utility>
+#include <memory>
 
 #pragma comment(lib, "gdiplus.lib")
 
@@ -398,6 +402,666 @@ static bool CaptureRectToPng(const RECT& rc, const wchar_t* path) {
 	return ok;
 }
 
+// ============================================================================
+// Cold UX walkthrough runner (v2.6.0 gate; SR-IXC-01..22 / SR-IXC-22).
+//
+// Executes a real user GOAL from native/tools/walkthroughs/<name>.json through
+// REAL posted input to the overlay/app-bar windows (WM_MOUSEMOVE/LBUTTONDOWN/
+// UP/DBLCLK + Overlay_SetCursorPosOverrideForTest for the physical-cursor reads,
+// WM_HOTKEY for the registered Delete/arrow accelerators, WM_KEYDOWN/WM_CHAR to
+// the focused inline/card editor) -- NOT the Overlay_SelectForTest / perform
+// seams, which are reserved here strictly for read-only target resolution. A
+// PNG is captured after every step so a reviewer can judge discoverability and
+// convention adherence; where the UI lacks an affordance the natural gesture is
+// still attempted and the capture documents the outcome -- that is the point of
+// the gate.
+// ----------------------------------------------------------------------------
+
+// --- minimal JSON value + recursive-descent parser (schema subset) ----------
+struct WJson {
+	enum Type { TNull, TBool, TNum, TStr, TArr, TObj } type = TNull;
+	bool b = false;
+	double num = 0.0;
+	std::string str;
+	std::vector<WJson> arr;
+	std::vector<std::pair<std::string, WJson>> obj;
+	const WJson* Find(const char* key) const {
+		for (const auto& kv : obj) if (kv.first == key) return &kv.second;
+		return nullptr;
+	}
+	std::string Str(const char* key) const {
+		const WJson* v = Find(key);
+		return (v && v->type == TStr) ? v->str : std::string();
+	}
+};
+
+struct WJsonParser {
+	const char* p;
+	const char* end;
+	bool ok = true;
+	explicit WJsonParser(const std::string& s) : p(s.c_str()), end(s.c_str() + s.size()) {}
+	void ws() { while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) ++p; }
+	bool parse(WJson& out) { ws(); bool r = value(out); ws(); return r && ok; }
+	bool value(WJson& out) {
+		ws();
+		if (p >= end) { ok = false; return false; }
+		char c = *p;
+		if (c == '"') return string(out);
+		if (c == '{') return object(out);
+		if (c == '[') return array(out);
+		if (c == 't' || c == 'f') return boolean(out);
+		if (c == 'n') return null(out);
+		return number(out);
+	}
+	bool string(WJson& out) {
+		out.type = WJson::TStr;
+		out.str.clear();
+		if (p >= end || *p != '"') { ok = false; return false; }
+		++p;
+		while (p < end && *p != '"') {
+			char c = *p++;
+			if (c == '\\' && p < end) {
+				char e = *p++;
+				switch (e) {
+				case 'n': out.str += '\n'; break;
+				case 't': out.str += '\t'; break;
+				case 'r': out.str += '\r'; break;
+				case 'b': out.str += '\b'; break;
+				case 'f': out.str += '\f'; break;
+				case '/': out.str += '/'; break;
+				case '\\': out.str += '\\'; break;
+				case '"': out.str += '"'; break;
+				case 'u': for (int i = 0; i < 4 && p < end; ++i) ++p; out.str += '?'; break;
+				default: out.str += e; break;
+				}
+			} else {
+				out.str += c;
+			}
+		}
+		if (p < end && *p == '"') { ++p; return true; }
+		ok = false;
+		return false;
+	}
+	bool object(WJson& out) {
+		out.type = WJson::TObj;
+		++p; ws();
+		if (p < end && *p == '}') { ++p; return true; }
+		while (p < end) {
+			ws();
+			WJson key;
+			if (!string(key)) { ok = false; return false; }
+			ws();
+			if (p >= end || *p != ':') { ok = false; return false; }
+			++p;
+			WJson val;
+			if (!value(val)) { ok = false; return false; }
+			out.obj.emplace_back(key.str, std::move(val));
+			ws();
+			if (p < end && *p == ',') { ++p; continue; }
+			if (p < end && *p == '}') { ++p; return true; }
+			ok = false;
+			return false;
+		}
+		ok = false;
+		return false;
+	}
+	bool array(WJson& out) {
+		out.type = WJson::TArr;
+		++p; ws();
+		if (p < end && *p == ']') { ++p; return true; }
+		while (p < end) {
+			WJson val;
+			if (!value(val)) { ok = false; return false; }
+			out.arr.push_back(std::move(val));
+			ws();
+			if (p < end && *p == ',') { ++p; continue; }
+			if (p < end && *p == ']') { ++p; return true; }
+			ok = false;
+			return false;
+		}
+		ok = false;
+		return false;
+	}
+	bool boolean(WJson& out) {
+		out.type = WJson::TBool;
+		if (end - p >= 4 && strncmp(p, "true", 4) == 0) { out.b = true; p += 4; return true; }
+		if (end - p >= 5 && strncmp(p, "false", 5) == 0) { out.b = false; p += 5; return true; }
+		ok = false;
+		return false;
+	}
+	bool null(WJson& out) {
+		out.type = WJson::TNull;
+		if (end - p >= 4 && strncmp(p, "null", 4) == 0) { p += 4; return true; }
+		ok = false;
+		return false;
+	}
+	bool number(WJson& out) {
+		out.type = WJson::TNum;
+		const char* s = p;
+		while (p < end && (*p == '-' || *p == '+' || *p == '.' || *p == 'e' || *p == 'E' || (*p >= '0' && *p <= '9'))) ++p;
+		if (p == s) { ok = false; return false; }
+		out.num = atof(std::string(s, p).c_str());
+		return true;
+	}
+};
+
+// --- date helpers (calibrated date <-> x for cell:/days: targets) -----------
+static long WalkDaysFromCivil(int y, unsigned m, unsigned d) {
+	y -= (m <= 2);
+	const int era = (y >= 0 ? y : y - 399) / 400;
+	const unsigned yoe = (unsigned)(y - era * 400);
+	const unsigned doy = (153u * (m + (m > 2 ? (unsigned)-3 : 9u)) + 2u) / 5u + d - 1u;
+	const unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+	return (long)era * 146097L + (long)doe - 719468L;
+}
+static bool WalkParseDateSerial(const std::string& s, long* out) {
+	int y = 0, m = 0, d = 0;
+	if (sscanf_s(s.c_str(), "%d-%d-%d", &y, &m, &d) == 3 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+		*out = WalkDaysFromCivil(y, (unsigned)m, (unsigned)d);
+		return true;
+	}
+	return false;
+}
+
+// Full screen rect of a task body (mirrors FindTaskBodyCenter; used to
+// self-calibrate pixels-per-day and the date->x anchor from actual geometry).
+static bool FindTaskBodyRect(PowerPoint::_ApplicationPtr& app, const char* taskId, RECT* out) {
+	if (!out || !taskId || !*taskId) return false;
+	try {
+		PowerPoint::DocumentWindowPtr w = app->GetActiveWindow();
+		PowerPoint::_SlidePtr sl = w->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shs = sl->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			PowerPoint::ShapePtr root = shs->Item(_variant_t(ii));
+			_bstr_t rk = root->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!rk.length() || std::string((const char*)_bstr_t(rk)) != "CHART_ROOT") continue;
+			PowerPoint::GroupShapesPtr items = root->GetGroupItems();
+			long n = items->GetCount();
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (!k.length() || std::string((const char*)_bstr_t(k)) != "TASK") continue;
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				if (!id.length() || std::string((const char*)_bstr_t(id)) != taskId) continue;
+				float l = ch->GetLeft(), t = ch->GetTop(), ww = ch->GetWidth(), h = ch->GetHeight();
+				out->left = w->PointsToScreenPixelsX(l);
+				out->top = w->PointsToScreenPixelsY(t);
+				out->right = w->PointsToScreenPixelsX(l + ww);
+				out->bottom = w->PointsToScreenPixelsY(t + h);
+				return true;
+			}
+		}
+	} catch (...) {}
+	return false;
+}
+
+// Parse a named "<key>":{"left":..,"top":..,"right":..,"bottom":..} rect out of
+// the read-only chrome dump (used for sel:center). Never drives the gesture.
+static bool ParseNamedRectFromDump(const char* json, const char* key, RECT* out) {
+	if (!json || !key || !out) return false;
+	const char* p = ::strstr(json, key);
+	if (!p) return false;
+	const char* lk = ::strstr(p, "\"left\":");
+	const char* tk = ::strstr(p, "\"top\":");
+	const char* rk = ::strstr(p, "\"right\":");
+	const char* bk = ::strstr(p, "\"bottom\":");
+	long l = 0, t = 0, r = 0, b = 0;
+	if (lk && tk && rk && bk && lk < tk && tk < rk && rk < bk
+		&& ::sscanf_s(lk, "\"left\":%ld", &l) == 1
+		&& ::sscanf_s(tk, "\"top\":%ld", &t) == 1
+		&& ::sscanf_s(rk, "\"right\":%ld", &r) == 1
+		&& ::sscanf_s(bk, "\"bottom\":%ld", &b) == 1) {
+		out->left = l; out->top = t; out->right = r; out->bottom = b;
+		return true;
+	}
+	return false;
+}
+
+struct WalkCtx {
+	PowerPoint::_ApplicationPtr* app = nullptr;
+	HWND ov = NULL;
+	HWND ab = NULL;
+	PpDocument doc;
+	bool calib = false;
+	long anchorSerial = 0;
+	double anchorX = 0.0;
+	double pxPerDay = 0.0;
+};
+
+// Self-calibrate pixels-per-day + a date->x anchor from the first showcase task
+// whose bar rect resolves on screen (so cell:/days: targets track real layout).
+static void CalibrateWalk(WalkCtx& c) {
+	for (const auto& t : c.doc.tasks) {
+		long s = 0, e = 0;
+		if (!WalkParseDateSerial(t.start, &s) || !WalkParseDateSerial(t.end, &e)) continue;
+		if (e <= s) continue;
+		RECT r{};
+		if (!FindTaskBodyRect(*c.app, t.id.c_str(), &r)) continue;
+		double widthPx = (double)(r.right - r.left);
+		if (widthPx < 2.0) continue;
+		c.pxPerDay = widthPx / (double)(e - s);
+		c.anchorSerial = s;
+		c.anchorX = (double)r.left;
+		c.calib = true;
+		break;
+	}
+}
+
+static bool WalkLabelEq(const std::string& a, const char* b) {
+	size_t n = ::strlen(b);
+	if (a.size() != n) return false;
+	for (size_t i = 0; i < n; ++i) {
+		char x = a[i]; if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
+		char y = b[i]; if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
+		if (x != y) return false;
+	}
+	return true;
+}
+
+// Map an app-bar button label to candidate command ids (ambiguous labels like
+// "Delete"/"Note" list several; the caller picks whichever is laid out now).
+static std::vector<int> AppBarCmdCandidates(const std::string& label) {
+	std::vector<int> v;
+	if (WalkLabelEq(label, "rename")) v = { HtCmd_Rename };
+	else if (WalkLabelEq(label, "edit")) v = { HtCmd_Edit };
+	else if (WalkLabelEq(label, "milestone")) v = { HtCmd_InsertMilestone };
+	else if (WalkLabelEq(label, "task")) v = { HtCmd_InsertTask };
+	else if (WalkLabelEq(label, "row")) v = { HtCmd_AddRow };
+	else if (WalkLabelEq(label, "marker")) v = { HtCmd_InsertMarker };
+	else if (WalkLabelEq(label, "note")) v = { HtCmd_AddNote, HtCmd_InsertNote };
+	else if (WalkLabelEq(label, "link")) v = { HtCmd_Link };
+	else if (WalkLabelEq(label, "unlink")) v = { HtCmd_Unlink };
+	else if (WalkLabelEq(label, "delete")) v = { HtCmd_Delete, HtCmd_DeleteRow };
+	else if (WalkLabelEq(label, "above")) v = { HtCmd_AddRowAbove };
+	else if (WalkLabelEq(label, "below")) v = { HtCmd_AddRowBelow };
+	else if (WalkLabelEq(label, "indent")) v = { HtCmd_IndentRow };
+	else if (WalkLabelEq(label, "outdent")) v = { HtCmd_OutdentRow };
+	else if (WalkLabelEq(label, "+1d")) v = { HtCmd_NudgePlus1 };
+	else if (WalkLabelEq(label, "-1d")) v = { HtCmd_NudgeMinus1 };
+	else if (WalkLabelEq(label, "+10%")) v = { HtCmd_PercentPlus10 };
+	else if (WalkLabelEq(label, "-10%")) v = { HtCmd_PercentMinus10 };
+	else if (WalkLabelEq(label, "labels")) v = { HtCmd_ToggleRailLabels };
+	else if (WalkLabelEq(label, "grid")) v = { HtCmd_CycleGrid };
+	return v;
+}
+
+// Resolve a target token to a SCREEN point. `hasStart`/`startPt` support the
+// relative "to" forms (days:+N, point:+dx,+dy). *isAppBar is set for appbar:
+// targets so the caller posts to the app-bar window instead of the overlay.
+static bool ResolveWalkTarget(WalkCtx& c, const std::string& target,
+	bool hasStart, POINT startPt, POINT* out, bool* isAppBar) {
+	if (isAppBar) *isAppBar = false;
+	if (target.empty() || !out) return false;
+	size_t colon = target.find(':');
+	std::string kind = (colon == std::string::npos) ? target : target.substr(0, colon);
+	std::string arg = (colon == std::string::npos) ? std::string() : target.substr(colon + 1);
+
+	if (kind == "task") {
+		POINT pt{};
+		if (FindTaskBodyCenter(*c.app, arg.c_str(), &pt)) { *out = pt; return true; }
+		return false;
+	}
+	if (kind == "taskL" || kind == "taskR") {
+		RECT r{};
+		if (!FindTaskBodyRect(*c.app, arg.c_str(), &r)) return false;
+		out->y = (r.top + r.bottom) / 2;
+		out->x = (kind == "taskL") ? (r.left + 4) : (r.right - 4);
+		return true;
+	}
+	if (kind == "row") {
+		RECT band{};
+		if (!ParseRowBandFromDump(Overlay_DumpChromeStateForTest(), arg.c_str(), &band)) return false;
+		out->x = (band.left + band.right) / 2;
+		out->y = (band.top + band.bottom) / 2;
+		return true;
+	}
+	if (kind == "cell") {
+		size_t at = arg.find('@');
+		if (at == std::string::npos) return false;
+		std::string rowId = arg.substr(0, at);
+		std::string date = arg.substr(at + 1);
+		RECT band{};
+		if (!ParseRowBandFromDump(Overlay_DumpChromeStateForTest(), rowId.c_str(), &band)) return false;
+		long serial = 0;
+		if (!c.calib || !WalkParseDateSerial(date, &serial)) return false;
+		out->x = (long)::lround(c.anchorX + (double)(serial - c.anchorSerial) * c.pxPerDay);
+		out->y = (band.top + band.bottom) / 2;
+		return true;
+	}
+	if (kind == "sel") {
+		RECT r{};
+		if (!ParseNamedRectFromDump(Overlay_DumpChromeStateForTest(), "selScreenRect", &r)) return false;
+		if (r.right <= r.left || r.bottom <= r.top) return false;
+		out->x = (r.left + r.right) / 2;
+		out->y = (r.top + r.bottom) / 2;
+		return true;
+	}
+	if (kind == "appbar") {
+		if (isAppBar) *isAppBar = true;
+		for (int cmd : AppBarCmdCandidates(arg)) {
+			RECT r{};
+			if (OverlayAppBarButtonRectForTest(cmd, &r)) {
+				out->x = (r.left + r.right) / 2;
+				out->y = (r.top + r.bottom) / 2;
+				return true;
+			}
+		}
+		return false;
+	}
+	if (kind == "days") {
+		if (!hasStart || !c.calib) return false;
+		double nDays = atof(arg.c_str());
+		out->x = startPt.x + (long)::lround(nDays * c.pxPerDay);
+		out->y = startPt.y;
+		return true;
+	}
+	if (kind == "point") {
+		size_t comma = arg.find(',');
+		if (comma == std::string::npos) return false;
+		bool rel = (!arg.empty() && (arg[0] == '+' || arg[0] == '-'));
+		double xv = atof(arg.substr(0, comma).c_str());
+		double yv = atof(arg.substr(comma + 1).c_str());
+		if (rel) {
+			if (!hasStart) return false;
+			out->x = startPt.x + (long)::lround(xv);
+			out->y = startPt.y + (long)::lround(yv);
+		} else {
+			POINT cp = { (long)::lround(xv), (long)::lround(yv) };
+			if (c.ov) ::ClientToScreen(c.ov, &cp);
+			*out = cp;
+		}
+		return true;
+	}
+	return false;
+}
+
+// --- real input posting (mirrors overlay-test.cpp / PostTaskBodyDrag idioms) -
+static void WalkHover(HWND w, POINT screenPt, DWORD ms) {
+	if (!w) return;
+	Overlay_SetCursorPosOverrideForTest(true, screenPt);
+	POINT cp = screenPt; ::ScreenToClient(w, &cp);
+	::PostMessageW(w, WM_MOUSEMOVE, 0, MAKELPARAM((short)cp.x, (short)cp.y));
+	PumpFor(ms > 0 ? ms : 600);
+}
+static void WalkClick(HWND w, POINT screenPt, WPARAM extraMk) {
+	if (!w) return;
+	Overlay_SetCursorPosOverrideForTest(true, screenPt);
+	POINT cp = screenPt; ::ScreenToClient(w, &cp);
+	LPARAM lp = MAKELPARAM((short)cp.x, (short)cp.y);
+	::PostMessageW(w, WM_MOUSEMOVE, 0, lp);
+	PumpFor(60);
+	::PostMessageW(w, WM_LBUTTONDOWN, MK_LBUTTON | extraMk, lp);
+	PumpFor(40);
+	::PostMessageW(w, WM_LBUTTONUP, extraMk, lp);
+	PumpFor(280);
+}
+static void WalkDblClick(HWND w, POINT screenPt) {
+	if (!w) return;
+	Overlay_SetCursorPosOverrideForTest(true, screenPt);
+	POINT cp = screenPt; ::ScreenToClient(w, &cp);
+	LPARAM lp = MAKELPARAM((short)cp.x, (short)cp.y);
+	::PostMessageW(w, WM_MOUSEMOVE, 0, lp);
+	::PostMessageW(w, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+	::PostMessageW(w, WM_LBUTTONUP, 0, lp);
+	PumpFor(30);
+	::PostMessageW(w, WM_LBUTTONDBLCLK, MK_LBUTTON, lp);
+	::PostMessageW(w, WM_LBUTTONUP, 0, lp);
+	PumpFor(320);
+}
+static void WalkDrag(HWND w, POINT fromPt, POINT toPt) {
+	if (!w) return;
+	Overlay_SetCursorPosOverrideForTest(true, fromPt);
+	POINT fc = fromPt; ::ScreenToClient(w, &fc);
+	::PostMessageW(w, WM_MOUSEMOVE, 0, MAKELPARAM((short)fc.x, (short)fc.y));
+	PumpFor(50);
+	::PostMessageW(w, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((short)fc.x, (short)fc.y));
+	PumpFor(60);
+	const int steps = 8;
+	for (int s = 1; s <= steps; ++s) {
+		POINT sp = { fromPt.x + (toPt.x - fromPt.x) * s / steps,
+			fromPt.y + (toPt.y - fromPt.y) * s / steps };
+		Overlay_SetCursorPosOverrideForTest(true, sp);
+		POINT sc = sp; ::ScreenToClient(w, &sc);
+		::PostMessageW(w, WM_MOUSEMOVE, 0, MAKELPARAM((short)sc.x, (short)sc.y));
+		PumpFor(35);
+	}
+	Overlay_SetCursorPosOverrideForTest(true, toPt);
+	POINT tc = toPt; ::ScreenToClient(w, &tc);
+	::PostMessageW(w, WM_LBUTTONUP, 0, MAKELPARAM((short)tc.x, (short)tc.y));
+	PumpFor(420);
+}
+
+// Return the focused inline/card editor control if one is open (keys route to
+// it); else NULL so registered accelerators go to the overlay via WM_HOTKEY.
+static HWND WalkKeyEditorTarget() {
+	HWND card = ::FindWindowW(L"PowerPlannerCardEditor", nullptr);
+	HWND inl = ::FindWindowW(L"PowerPlannerInlineEditor", nullptr);
+	HWND ed = (card && ::IsWindowVisible(card)) ? card
+		: ((inl && ::IsWindowVisible(inl)) ? inl : NULL);
+	if (!ed) return NULL;
+	HWND f = ::GetFocus();
+	if (f && (f == ed || ::IsChild(ed, f))) return f;
+	return ed;
+}
+static WORD WalkVkFromChar(char ch) {
+	if (ch >= 'a' && ch <= 'z') return (WORD)(ch - 32);
+	if ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) return (WORD)ch;
+	if (ch == ' ') return VK_SPACE;
+	return 0;
+}
+static WORD WalkVkFromKeyName(const std::string& k) {
+	if (k == "enter" || k == "return") return VK_RETURN;
+	if (k == "escape" || k == "esc") return VK_ESCAPE;
+	if (k == "tab") return VK_TAB;
+	if (k == "f2") return VK_F2;
+	if (k == "delete" || k == "del") return VK_DELETE;
+	if (k == "left") return VK_LEFT;
+	if (k == "right") return VK_RIGHT;
+	if (k == "up") return VK_UP;
+	if (k == "down") return VK_DOWN;
+	if (k == "space") return VK_SPACE;
+	if (k == "backspace") return VK_BACK;
+	if (k.size() == 1) return WalkVkFromChar(k[0]);
+	return 0;
+}
+static void WalkKey(WalkCtx& c, const std::string& key) {
+	if (key.rfind("type:", 0) == 0) {
+		std::string text = key.substr(5);
+		HWND target = WalkKeyEditorTarget();
+		if (!target) target = c.ov;
+		for (char ch : text) {
+			WORD vk = WalkVkFromChar(ch);
+			::PostMessageW(target, WM_KEYDOWN, (WPARAM)vk, 0);
+			::PostMessageW(target, WM_CHAR, (WPARAM)(unsigned char)ch, 0);
+			::PostMessageW(target, WM_KEYUP, (WPARAM)vk, 0);
+			PumpFor(45);
+		}
+		PumpFor(180);
+		return;
+	}
+	std::string k = key;
+	for (auto& ch : k) if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + 32);
+	HWND editor = WalkKeyEditorTarget();
+	if (!editor && (k == "delete" || k == "del")) {
+		::PostMessageW(c.ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+	} else if (!editor && k == "left") {
+		::PostMessageW(c.ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_LEFT_FOR_TEST, 0);
+	} else if (!editor && k == "right") {
+		::PostMessageW(c.ov, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_RIGHT_FOR_TEST, 0);
+	} else {
+		HWND target = editor ? editor : c.ov;
+		WORD vk = WalkVkFromKeyName(k);
+		::PostMessageW(target, WM_KEYDOWN, (WPARAM)vk, 0);
+		::PostMessageW(target, WM_KEYUP, (WPARAM)vk, 0);
+	}
+	PumpFor(320);
+}
+
+// Capture the chart + docked app bar into walkthrough_<name>_<NN>_<kind>.png,
+// and print a driver-parseable artifact marker (forward-slash relative path).
+static bool WalkCapture(const std::string& name, int idx, const std::string& kind, HWND ov, HWND ab) {
+	RECT lr{ 0, 0, 0, 0 };
+	bool have = false;
+	if (ov && ::IsWindowVisible(ov)) { ::GetWindowRect(ov, &lr); have = true; }
+	if (ab && ::IsWindowVisible(ab)) {
+		RECT ar{}; ::GetWindowRect(ab, &ar);
+		if (have) {
+			lr.left = min(lr.left, ar.left); lr.top = min(lr.top, ar.top);
+			lr.right = max(lr.right, ar.right); lr.bottom = max(lr.bottom, ar.bottom);
+		} else { lr = ar; have = true; }
+	}
+	RECT scr{ 0, 0, ::GetSystemMetrics(SM_CXSCREEN), ::GetSystemMetrics(SM_CYSCREEN) };
+	if (!have) lr = scr;
+	lr.left -= 180; lr.top -= 120; lr.right += 90; lr.bottom += 40;
+	if (lr.left < scr.left) lr.left = scr.left;
+	if (lr.top < scr.top) lr.top = scr.top;
+	if (lr.right > scr.right) lr.right = scr.right;
+	if (lr.bottom > scr.bottom) lr.bottom = scr.bottom;
+	wchar_t wname[128] = {}, wkind[64] = {};
+	::MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, wname, 128);
+	::MultiByteToWideChar(CP_UTF8, 0, kind.c_str(), -1, wkind, 64);
+	wchar_t path[320];
+	::swprintf_s(path, 320, L"native\\build\\walkthrough_%ls_%02d_%ls.png", wname, idx, wkind);
+	bool ok = CaptureRectToPng(lr, path);
+	char apath[400];
+	::snprintf(apath, sizeof(apath), "native/build/walkthrough_%s_%02d_%s.png", name.c_str(), idx, kind.c_str());
+	wprintf(L"WALKTHROUGH ARTIFACT %02d: %hs\n", idx, apath);
+	return ok;
+}
+
+// Load + run a walkthrough JSON. Returns process rc (0 on reaching COMPLETE).
+static int RunWalkthrough(PowerPoint::_ApplicationPtr& app, const wchar_t* jsonPath) {
+	std::string content;
+	{
+		std::ifstream f(jsonPath, std::ios::binary);
+		if (f) { std::ostringstream ss; ss << f.rdbuf(); content = ss.str(); }
+	}
+	if (content.empty()) {
+		wprintf(L"WALKTHROUGH FAIL: cannot read %ls\n", jsonPath ? jsonPath : L"(null)");
+		return 3;
+	}
+	WJson root;
+	WJsonParser parser(content);
+	if (!parser.parse(root) || root.type != WJson::TObj) {
+		wprintf(L"WALKTHROUGH FAIL: JSON parse error in %ls\n", jsonPath);
+		return 3;
+	}
+	std::string name = root.Str("name");
+	std::string goal = root.Str("goal");
+	if (name.empty()) name = "walk";
+	const WJson* steps = root.Find("steps");
+	const int nSteps = (steps && steps->type == WJson::TArr) ? (int)steps->arr.size() : 0;
+
+	Overlay_SetHostActiveOverrideForTest(1);
+	// Raise the PowerPoint window before any step/capture: overlay windows are
+	// NOTOPMOST under harness override, and the walkthrough PNGs must show the
+	// CHART behind the chrome — the first review round captured the app bar
+	// floating over an unrelated terminal window because PPT was never raised.
+	try {
+		HWND ppRoot = ::GetAncestor((HWND)(INT_PTR)app->GetHWND(), GA_ROOT);
+		if (ppRoot) {
+			::ShowWindow(ppRoot, SW_SHOWMAXIMIZED);
+			::SetForegroundWindow(ppRoot);
+			::BringWindowToTop(ppRoot);
+		}
+	} catch (...) {}
+	PumpFor(1400); // several ticks: overlay + docked app bar show + first paint
+
+	WalkCtx c;
+	c.app = std::addressof(app);
+	c.ov = OverlayHwnd();
+	c.ab = OverlayAppBarHwnd();
+	c.doc = MakeShowcaseDocument();
+	CalibrateWalk(c);
+
+	wprintf(L"WALKTHROUGH BEGIN %hs steps=%d calib=%hs pxPerDay=%.2f\n",
+		name.c_str(), nSteps, c.calib ? "yes" : "no", c.pxPerDay);
+	wprintf(L"WALKTHROUGH GOAL: %hs\n", goal.c_str());
+	::fflush(stdout);
+
+	int idx = 0, okCount = 0, failCount = 0;
+	if (steps && steps->type == WJson::TArr) {
+		for (const auto& st : steps->arr) {
+			++idx;
+			std::string kind = st.Str("kind");
+			std::string target = st.Str("target");
+			std::string to = st.Str("to");
+			std::string keyv = st.Str("key");
+			std::string note = st.Str("note");
+			std::string mods = st.Str("mods");
+			bool stepOk = true;
+			std::string detail;
+
+			// Windows can be recreated across ops; re-resolve each step.
+			c.ov = OverlayHwnd();
+			c.ab = OverlayAppBarHwnd();
+
+			if (kind == "hover" || kind == "click" || kind == "dblclick" || kind == "drag") {
+				POINT pt{};
+				bool isAB = false;
+				if (!ResolveWalkTarget(c, target, false, POINT{ 0, 0 }, &pt, &isAB)) {
+					stepOk = false;
+					detail = "unresolved target [" + target + "]";
+				} else {
+					HWND w = isAB ? c.ab : c.ov;
+					if (!w) {
+						stepOk = false;
+						detail = "no target window";
+					} else if (kind == "hover") {
+						WalkHover(w, pt, 0);
+					} else if (kind == "click") {
+						WPARAM mk = (mods == "ctrl") ? MK_CONTROL : (mods == "shift") ? MK_SHIFT : 0;
+						WalkClick(w, pt, mk);
+					} else if (kind == "dblclick") {
+						WalkDblClick(w, pt);
+					} else if (kind == "drag") {
+						POINT toPt{};
+						bool isAB2 = false;
+						if (!ResolveWalkTarget(c, to, true, pt, &toPt, &isAB2)) {
+							stepOk = false;
+							detail = "unresolved to [" + to + "]";
+						} else {
+							WalkDrag(w, pt, toPt);
+						}
+					}
+				}
+			} else if (kind == "key") {
+				if (keyv.empty()) { stepOk = false; detail = "missing key"; }
+				else WalkKey(c, keyv);
+			} else if (kind == "wait") {
+				PumpFor(700);
+			} else if (kind == "capture") {
+				// capture-only documentation frame (handled below)
+			} else {
+				stepOk = false;
+				detail = "unknown kind [" + kind + "]";
+			}
+
+			PumpFor(150); // let chrome settle before the frame
+			c.ov = OverlayHwnd();
+			c.ab = OverlayAppBarHwnd();
+			bool capOk = WalkCapture(name, idx, kind.empty() ? "step" : kind, c.ov, c.ab);
+			if (!capOk) {
+				stepOk = false;
+				detail = detail.empty() ? "capture failed" : (detail + "; capture failed");
+			}
+			if (stepOk) ++okCount; else ++failCount;
+
+			// note is passed as an ARGUMENT (its '%'/text is data, never a format).
+			wprintf(L"WALKTHROUGH STEP %02d %hs %hs%hs%hs\n",
+				idx, stepOk ? "OK" : "FAIL", note.c_str(),
+				detail.empty() ? "" : " | ", detail.c_str());
+			::fflush(stdout);
+		}
+	}
+
+	wprintf(L"WALKTHROUGH SUMMARY %hs ok=%d findings=%d total=%d\n", name.c_str(), okCount, failCount, idx);
+	wprintf(L"WALKTHROUGH COMPLETE %hs\n", name.c_str());
+	::fflush(stdout);
+	return 0;
+}
+
 int wmain(int argc, wchar_t** argv) {
 	SetHarnessDpiAwareness();
 
@@ -502,6 +1166,26 @@ int wmain(int argc, wchar_t** argv) {
 			if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
 			::CoUninitialize();
 			return reportOk ? 0 : 1;
+		}
+
+		// --walkthrough <path.json> : v2.6.0 cold UX walkthrough gate. Executes a
+		// real user goal through real posted gestures (see RunWalkthrough above),
+		// capturing a PNG per step for reviewer judgment of discoverability +
+		// interaction conventions (SR-IXC-01..22). Reserves the select/perform
+		// seams for read-only target resolution only, never for the gesture.
+		const wchar_t* walkPath = nullptr;
+		for (int i = 1; i < argc; ++i) {
+			if (wcscmp(argv[i], L"--walkthrough") == 0 && i + 1 < argc) {
+				walkPath = argv[i + 1];
+				break;
+			}
+		}
+		if (walkPath) {
+			int wrc = RunWalkthrough(app, walkPath);
+			OverlayStop();
+			if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
+			::CoUninitialize();
+			return wrc;
 		}
 
 		// --trace <op> : v2.4.0 operation trace for before/immediate/delayed observation.

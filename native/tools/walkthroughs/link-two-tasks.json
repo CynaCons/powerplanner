@@ -1,0 +1,62 @@
+{
+  "name": "link-two-tasks",
+  "goal": "Create a dependency link from Discovery to Interviews.",
+  "steps": [
+    {
+      "kind": "hover",
+      "target": "task:discovery",
+      "note": "Hover the first (source) task and look for link ports on its left/right ends that would let me start a connection (SR-IXC-13)."
+    },
+    {
+      "kind": "click",
+      "target": "task:discovery",
+      "note": "Select the source task."
+    },
+    {
+      "kind": "capture",
+      "note": "With the task selected, are visible left/right link ports shown on the bar ends (SR-IXC-13)? A first-time user expects a dedicated port to drag from."
+    },
+    {
+      "kind": "drag",
+      "target": "taskR:discovery",
+      "to": "task:interviews",
+      "note": "Naive attempt: drag from the right end of task 1 onto task 2 to connect them. If the right end is only a resize handle, this will resize dates instead of linking, documenting the missing link port (SR-IXC-13)."
+    },
+    {
+      "kind": "capture",
+      "note": "Did a dependency arrow appear from the drag, or did the gesture resize the bar / do nothing (finding on drag-to-link discoverability)?"
+    },
+    {
+      "kind": "click",
+      "target": "task:discovery",
+      "note": "Re-select the source task (the previous drag may have changed the date or selection)."
+    },
+    {
+      "kind": "click",
+      "target": "appbar:Link",
+      "note": "Fall back to the Link button in the app bar, the documented path to start a dependency."
+    },
+    {
+      "kind": "capture",
+      "note": "Is link mode armed with a clear, discoverable prompt telling me to pick the target task (SR-IXC-13)?"
+    },
+    {
+      "kind": "click",
+      "target": "task:interviews",
+      "note": "Click the second task to complete the link."
+    },
+    {
+      "kind": "capture",
+      "note": "Was the finish-to-start dependency created between Discovery and Interviews?"
+    },
+    {
+      "kind": "key",
+      "key": "Escape",
+      "note": "Esc should reliably cancel link mode / deselect as an escape hatch (SR-IXC-09). If link mode was already committed, Esc should at least return to the default context."
+    },
+    {
+      "kind": "capture",
+      "note": "Confirm link mode has exited and the surface is neutral (no sticky link cursor or half-started connection)."
+    }
+  ]
+}

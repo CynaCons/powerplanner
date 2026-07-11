@@ -312,7 +312,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 ### v2.6.0 - Iteration U0: Interaction Conventions + UX Detection Gate (process, do first)
 **Goal:** Make this class of finding impossible to miss again; codify the conventions the slices below implement.
 - [x] Author spec/srs-native/SRS-InteractionConventions.md (tables): SR-IXC-01..22 across direct-manipulation, live preview, commit/cancel, context reset, constraint+snap, affordances, verbs, platform conventions + walkthrough-gate cross-cutting req
-- [ ] UX walkthrough gate: scripted task-based cold walkthroughs ("change a date", "add a milestone", "link two tasks", "set weekly separators", "delete 3 rows") executed via harness with per-step captures + GIF, reviewed against a heuristic checklist at EVERY slice exit; findings → new UF entries
+- [x] UX walkthrough gate: --walkthrough runner in appbar-shot (real posted gestures, no test seams) + `harness_driver.py walkthrough <name|all>` + 5 definitions (change-a-date, add-a-milestone, link-two-tasks, delete-3-rows, rename-a-task) with per-step PNGs + report.json; PPT window raised before captures so chart+chrome are in frame. First review round already caught: no drag date pill (→U2), duplicated stale SCALE fragment + global INSERT/SCALE in task context (→U3)
 - [x] AGENTS.md: add the mandatory UX gate + conventions rule (1632e05)
 - [x] Restore README media: docs/media/ restored from 6515121^ (cb62dfb)
 - [x] Fix PLAN.md dead link (PLAN_HISTORY refs repointed to git history) (cb62dfb)

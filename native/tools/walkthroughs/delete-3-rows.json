@@ -1,0 +1,58 @@
+{
+  "name": "delete-3-rows",
+  "goal": "Delete three rows from the plan (the Implementation, QA and Launch rows).",
+  "steps": [
+    {
+      "kind": "click",
+      "target": "row:impl",
+      "note": "Click the first unwanted row (Implementation) to select it."
+    },
+    {
+      "kind": "capture",
+      "note": "Row selected: does the app bar show the ROW context with a visibly labelled Delete action (SR-IXC-13, SR-IXC-19)?"
+    },
+    {
+      "kind": "click",
+      "target": "row:qa",
+      "mods": "ctrl",
+      "note": "Ctrl+click a second row (QA) to add it to the selection, exactly as an Office user expects multi-select to work (SR-IXC-18)."
+    },
+    {
+      "kind": "capture",
+      "note": "Did the selection accumulate to two rows (Office Ctrl+click), or did selection simply move to QA? This documents whether platform multi-select is supported yet."
+    },
+    {
+      "kind": "key",
+      "key": "Delete",
+      "note": "Press Del expecting to delete every selected row at once (SR-IXC-19)."
+    },
+    {
+      "kind": "capture",
+      "note": "How many rows did one Del press remove: both rows I tried to select, or only the last-selected one (finding on multi-delete)?"
+    },
+    {
+      "kind": "click",
+      "target": "row:impl",
+      "note": "Recover: directly select the next unwanted row (Implementation)."
+    },
+    {
+      "kind": "key",
+      "key": "Delete",
+      "note": "Del to delete the selected row (SR-IXC-19)."
+    },
+    {
+      "kind": "click",
+      "target": "row:launch",
+      "note": "Select the last unwanted row (Launch)."
+    },
+    {
+      "kind": "key",
+      "key": "Delete",
+      "note": "Del to delete it."
+    },
+    {
+      "kind": "capture",
+      "note": "Are all three target rows now gone via select+Del? Note how many discrete gestures a first-time user needed versus the single multi-select+Del they attempted."
+    }
+  ]
+}

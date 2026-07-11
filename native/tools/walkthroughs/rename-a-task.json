@@ -1,0 +1,74 @@
+{
+  "name": "rename-a-task",
+  "goal": "Rename the Visual design task to a new label.",
+  "steps": [
+    {
+      "kind": "click",
+      "target": "task:visual",
+      "note": "Select the task I want to rename."
+    },
+    {
+      "kind": "capture",
+      "note": "TASK context: is there a clearly labelled Rename verb, distinct from Edit (SR-IXC-16, SR-IXC-17)?"
+    },
+    {
+      "kind": "dblclick",
+      "target": "task:visual",
+      "note": "Naive first attempt: double-click the bar to edit its name in place (SR-IXC-20)."
+    },
+    {
+      "kind": "capture",
+      "note": "Did an inline in-place label editor open, or did the properties card open instead? Double-clicking the body opening a card (not an inline rename) is a finding against the Rename/Edit verb split (SR-IXC-16, SR-IXC-17)."
+    },
+    {
+      "kind": "key",
+      "key": "Escape",
+      "note": "Press Esc to cancel whatever opened and restore the prior state (SR-IXC-07 uniform cancel)."
+    },
+    {
+      "kind": "capture",
+      "note": "Was the editor dismissed with no change committed?"
+    },
+    {
+      "kind": "click",
+      "target": "task:visual",
+      "note": "Make sure the task is still selected before using the app bar verb."
+    },
+    {
+      "kind": "click",
+      "target": "appbar:Rename",
+      "note": "Use the Rename button: per the consistent-verb rule it must start an inline in-place edit on the label, never a card (SR-IXC-16)."
+    },
+    {
+      "kind": "capture",
+      "note": "Is an inline editor now open directly on the task label?"
+    },
+    {
+      "kind": "key",
+      "key": "type:Kickoff",
+      "note": "Type a new name for the task."
+    },
+    {
+      "kind": "capture",
+      "note": "Does the inline editor show the typed text live?"
+    },
+    {
+      "kind": "key",
+      "key": "Enter",
+      "note": "Enter commits the change, matching commit semantics used by every editor surface (SR-IXC-07)."
+    },
+    {
+      "kind": "capture",
+      "note": "Was the label renamed and committed on the bar?"
+    },
+    {
+      "kind": "key",
+      "key": "Escape",
+      "note": "Esc to deselect and return to the default context (SR-IXC-09)."
+    },
+    {
+      "kind": "capture",
+      "note": "Confirm a neutral default state with the rename persisted."
+    }
+  ]
+}

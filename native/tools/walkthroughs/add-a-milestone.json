@@ -1,0 +1,43 @@
+{
+  "name": "add-a-milestone",
+  "goal": "Add a milestone (a dated diamond) to the plan and place it on a target date.",
+  "steps": [
+    {
+      "kind": "capture",
+      "note": "Nothing is selected. A first-time user scans the docked app bar for how to add a milestone: is there a visibly labelled Milestone affordance in the INSERT group (SR-IXC-13)?"
+    },
+    {
+      "kind": "click",
+      "target": "appbar:Milestone",
+      "note": "Click the Milestone button in the app bar INSERT group to create one."
+    },
+    {
+      "kind": "capture",
+      "note": "Was a milestone created and auto-selected so I can immediately place it (the app bar should switch to the MILESTONE context)?"
+    },
+    {
+      "kind": "hover",
+      "target": "sel:center",
+      "note": "Hover the freshly created milestone: is a move/drag affordance or drag cursor shown so I know I can reposition it directly (SR-IXC-13)?"
+    },
+    {
+      "kind": "drag",
+      "target": "sel:center",
+      "to": "days:+7",
+      "note": "Drag the milestone about a week to the right to place it on the target date. Expect a date pill following the drag live (SR-IXC-04) and the date snapping to whole days (SR-IXC-12)."
+    },
+    {
+      "kind": "capture",
+      "note": "Did the milestone move to the new date by direct dragging, with no numeric date stepper required (SR-IXC-01)?"
+    },
+    {
+      "kind": "key",
+      "key": "Escape",
+      "note": "Press Esc to deselect and return to the default context (SR-IXC-09)."
+    },
+    {
+      "kind": "capture",
+      "note": "Confirm the surface is back to a neutral default state."
+    }
+  ]
+}

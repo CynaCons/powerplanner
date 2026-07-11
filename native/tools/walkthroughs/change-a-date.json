@@ -1,0 +1,39 @@
+{
+  "name": "change-a-date",
+  "goal": "Reschedule the Discovery task about a week later by dragging its bar to the right.",
+  "steps": [
+    {
+      "kind": "hover",
+      "target": "task:discovery",
+      "note": "First-time user moves the pointer over the Discovery bar to see what it affords (SR-IXC-13): is a move grip, resize end handles, or a drag cursor shown on hover?"
+    },
+    {
+      "kind": "click",
+      "target": "task:discovery",
+      "note": "Click the bar to select the task I want to reschedule."
+    },
+    {
+      "kind": "capture",
+      "note": "Selected state: does the TASK app bar appear docked below, and are direct-manipulation affordances (move grip / resize handles) visible on the bar so I know I can drag it (SR-IXC-13)?"
+    },
+    {
+      "kind": "drag",
+      "target": "task:discovery",
+      "to": "days:+5",
+      "note": "Grab the bar body and drag it about 5 days to the right. Expect a floating date pill under the pointer updating live (SR-IXC-03), the value snapping to whole days (SR-IXC-12), and the drag staying inside the chart bounds (SR-IXC-11)."
+    },
+    {
+      "kind": "capture",
+      "note": "Result: did the bar move about 5 days and the start/end dates update? The date change must have been made purely by dragging, with no numeric stepper (SR-IXC-01, SR-IXC-02)."
+    },
+    {
+      "kind": "key",
+      "key": "Escape",
+      "note": "Press Esc to deselect and return the app bar and cursor to the default/component context (SR-IXC-09, SR-IXC-10)."
+    },
+    {
+      "kind": "capture",
+      "note": "Confirm the surface returned to a neutral default state after Esc (no sticky move cursor or contextual mode)."
+    }
+  ]
+}

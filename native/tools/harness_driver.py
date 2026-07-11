@@ -46,6 +46,7 @@ REPO_ROOT = NATIVE_ROOT.parent
 BUILD_DIR = NATIVE_ROOT / "build"
 GOLDENS_DIR = NATIVE_ROOT / "tools" / "goldens"
 SCENARIOS_DIR = NATIVE_ROOT / "tools" / "scenarios"
+WALKTHROUGHS_DIR = NATIVE_ROOT / "tools" / "walkthroughs"
 
 KNOWN_EXES = {
     "ppoverlay": "ppoverlay.exe",
@@ -1057,12 +1058,190 @@ def run_trace_with_golden(profile: str, golden_name: Optional[str] = None, updat
 
 
 # ------------------------------------------------------------------
+# Cold UX walkthrough gate (v2.6.0) — SR-IXC-22
+# ------------------------------------------------------------------
+# Runs a scripted task-based cold walkthrough (native/tools/walkthroughs/<name>.json)
+# through the harness. The exe performs the goal via REAL posted gestures and
+# captures a PNG per step; this driver collects the step markers + PNG paths into
+# a report so a reviewer can judge discoverability + interaction conventions. It
+# does NOT auto-judge UX — the per-step PNGs + notes ARE the reviewer artifact.
+# Exit status reflects marker completeness (COMPLETE marker + captures on disk),
+# not whether individual steps flagged UX findings (a "STEP NN FAIL" is a
+# documented finding, expected wherever the UI lacks an affordance).
+
+WALK_STEP_RE = re.compile(r"WALKTHROUGH STEP (\d+) (OK|FAIL)\s?(.*)")
+WALK_ARTIFACT_RE = re.compile(r"WALKTHROUGH ARTIFACT (\d+):\s*(\S+)")
+WALK_BEGIN_RE = re.compile(
+    r"WALKTHROUGH BEGIN (\S+) steps=(\d+) calib=(\S+) pxPerDay=([-\d.]+)"
+)
+WALK_COMPLETE_RE = re.compile(r"WALKTHROUGH COMPLETE (\S+)")
+
+
+def list_walkthroughs() -> List[str]:
+    if not WALKTHROUGHS_DIR.exists():
+        return []
+    return sorted(p.stem for p in WALKTHROUGHS_DIR.glob("*.json"))
+
+
+def run_walkthrough(name: str, retries: int = 1, timeout: int = 300) -> Dict[str, Any]:
+    """Run one cold UX walkthrough and return a structured report dict.
+
+    Writes native/build/walkthrough_<name>_report.json. status is PASS when the
+    COMPLETE marker is present and the expected per-step capture PNGs exist on
+    disk (>= min(3, nsteps)); otherwise FAIL.
+    """
+    json_path = WALKTHROUGHS_DIR / f"{name}.json"
+    if not json_path.exists():
+        avail = ", ".join(list_walkthroughs()) or "(none)"
+        report = {
+            "name": name,
+            "status": "ERROR",
+            "notes": f"walkthrough not found: {json_path}. Available: {avail}",
+            "steps": [],
+            "artifacts": [],
+        }
+        (BUILD_DIR / f"walkthrough_{name}_report.json").write_text(
+            json.dumps(report, indent=2), encoding="utf-8"
+        )
+        return report
+
+    # Definition (also serves as the parse-only smoke: raises on malformed JSON).
+    definition = json.loads(json_path.read_text(encoding="utf-8"))
+    def_steps = definition.get("steps", []) if isinstance(definition, dict) else []
+    n_expected = len(def_steps)
+
+    base = run_harness(
+        "ppappbarshot",
+        ["--walkthrough", str(json_path)],
+        timeout=timeout,
+        retries=retries,
+        required_markers=["WALKTHROUGH COMPLETE"],
+        kill_ppt=True,
+    )
+    stdout = getattr(base, "full_stdout", "") or base.stdout_tail
+
+    complete = bool(WALK_COMPLETE_RE.search(stdout or ""))
+    begin = WALK_BEGIN_RE.search(stdout or "")
+    calib = begin.group(3) if begin else None
+    px_per_day = float(begin.group(4)) if begin else None
+
+    # step index -> parsed marker + captured artifact path
+    markers: Dict[int, Dict[str, Any]] = {}
+    for m in WALK_STEP_RE.finditer(stdout or ""):
+        n = int(m.group(1))
+        markers.setdefault(n, {})
+        markers[n]["status"] = m.group(2)
+        markers[n]["marker_note"] = m.group(3).strip()
+    artifacts_by_step: Dict[int, str] = {}
+    for m in WALK_ARTIFACT_RE.finditer(stdout or ""):
+        artifacts_by_step[int(m.group(1))] = m.group(2)
+
+    steps: List[Dict[str, Any]] = []
+    artifacts: List[str] = []
+    n_captured = 0
+    n_ok = 0
+    n_fail = 0
+    for i, ds in enumerate(def_steps, start=1):
+        art = artifacts_by_step.get(i)
+        exists = bool(art) and (REPO_ROOT / art).exists()
+        if exists:
+            n_captured += 1
+            artifacts.append(art)
+        mk = markers.get(i, {})
+        st_status = mk.get("status", "MISSING")
+        if st_status == "OK":
+            n_ok += 1
+        elif st_status == "FAIL":
+            n_fail += 1
+        steps.append(
+            {
+                "n": i,
+                "kind": ds.get("kind", ""),
+                "target": ds.get("target", ""),
+                "to": ds.get("to", ""),
+                "key": ds.get("key", ""),
+                "note": ds.get("note", ""),
+                "status": st_status,          # OK = gesture+capture ran; FAIL = documented finding / capture issue
+                "artifact": art or "",
+                "artifact_exists": exists,
+            }
+        )
+
+    threshold = min(3, n_expected) if n_expected else 1
+    captures_ok = n_captured >= threshold
+    status = "PASS" if (complete and captures_ok) else "FAIL"
+
+    notes = []
+    if not complete:
+        notes.append("missing WALKTHROUGH COMPLETE marker")
+    if not captures_ok:
+        notes.append(f"only {n_captured}/{n_expected} step captures on disk (need >= {threshold})")
+    if n_captured < n_expected:
+        notes.append(f"warning: {n_expected - n_captured} step capture(s) missing")
+    if n_fail:
+        notes.append(f"{n_fail} step(s) flagged UX findings (see per-step notes / PNGs)")
+
+    report = {
+        "name": definition.get("name", name) if isinstance(definition, dict) else name,
+        "goal": definition.get("goal", "") if isinstance(definition, dict) else "",
+        "status": status,
+        "complete": complete,
+        "calib": calib,
+        "pxPerDay": px_per_day,
+        "steps_expected": n_expected,
+        "steps_captured": n_captured,
+        "steps_ok": n_ok,
+        "steps_findings": n_fail,
+        "returncode": base.returncode,
+        "harness_status": base.status,
+        "duration_s": base.duration_s,
+        "definition": str(json_path.relative_to(REPO_ROOT)),
+        "artifacts": artifacts,
+        "steps": steps,
+        "notes": "; ".join(notes),
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    (BUILD_DIR / f"walkthrough_{name}_report.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8"
+    )
+    return report
+
+
+def run_all_walkthroughs(retries: int = 1) -> Dict[str, Any]:
+    names = list_walkthroughs()
+    results = [run_walkthrough(n, retries=retries) for n in names]
+    overall = "PASS" if results and all(r.get("status") == "PASS" for r in results) else "FAIL"
+    summary = {
+        "status": overall,
+        "count": len(results),
+        "passed": sum(1 for r in results if r.get("status") == "PASS"),
+        "walkthroughs": [
+            {
+                "name": r.get("name"),
+                "status": r.get("status"),
+                "steps_captured": r.get("steps_captured"),
+                "steps_expected": r.get("steps_expected"),
+                "steps_findings": r.get("steps_findings"),
+                "notes": r.get("notes"),
+            }
+            for r in results
+        ],
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    (BUILD_DIR / "walkthrough_all_report.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    return summary
+
+
+# ------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Native harness driver for agent feedback loops.")
     sub = parser.add_subparsers(dest="cmd")
+
 
     p_run = sub.add_parser("run", help="Run a harness exe")
     p_run.add_argument("exe")
@@ -1083,6 +1262,10 @@ if __name__ == "__main__":
     p_tr.add_argument("profile", help="e.g. row-add-below, row-rename, row-scale, task-nudge-latency, task-color-latency")
     p_tr.add_argument("--retries", type=int, default=1)
     p_tr.add_argument("--check-invariants", action="store_true")
+
+    p_wt = sub.add_parser("walkthrough", help="Run cold UX walkthrough(s) (v2.6.0 gate, SR-IXC-22)")
+    p_wt.add_argument("name", help="walkthrough name (e.g. change-a-date) or 'all'")
+    p_wt.add_argument("--retries", type=int, default=1)
 
     args = parser.parse_args()
 
@@ -1119,6 +1302,13 @@ if __name__ == "__main__":
         if bad or tr.status not in ("PASS",):
             sys.exit(4)
         sys.exit(0)
+    elif args.cmd == "walkthrough":
+        if args.name == "all":
+            rep = run_all_walkthroughs(retries=args.retries)
+        else:
+            rep = run_walkthrough(args.name, retries=args.retries)
+        print(json.dumps(rep, indent=2))
+        sys.exit(0 if rep.get("status") == "PASS" else 1)
     else:
         parser.print_help()
         sys.exit(2)
