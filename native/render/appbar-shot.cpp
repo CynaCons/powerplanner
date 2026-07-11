@@ -148,6 +148,55 @@ static void SelectChartRootNatively(PowerPoint::_SlidePtr& slide) {
 	} catch (...) {}
 }
 
+// v2.6.1 component-shape-protection: natively select a chart CHILD (a TASK bar
+// inside the CHART_ROOT group) so the overlay's suppression path (Tick poll /
+// COM sink via Overlay_OnNativeSelectionChanged) can be exercised. Returns the
+// observed native selection PP_KIND immediately after Select() (before any tick
+// suppresses it), or "" on failure — logged by the caller as honest evidence
+// that a child really was selected before suppression cleared it.
+static std::string SelectTaskChildNatively(PowerPoint::_SlidePtr& slide, const char* taskId) {
+	try {
+		PowerPoint::ShapesPtr shs = slide->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			PowerPoint::ShapePtr root = shs->Item(_variant_t(ii));
+			_bstr_t rk = root->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!rk.length() || std::string((const char*)_bstr_t(rk)) != "CHART_ROOT") continue;
+			PowerPoint::GroupShapesPtr items = root->GetGroupItems();
+			long n = items->GetCount();
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (!k.length() || std::string((const char*)_bstr_t(k)) != "TASK") continue;
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				if (taskId && *taskId && (!id.length() || std::string((const char*)_bstr_t(id)) != taskId)) continue;
+				try { ch->Select(Office::msoTrue); } catch (...) { return ""; }
+				return std::string((const char*)_bstr_t(k));
+			}
+		}
+	} catch (...) {}
+	return "";
+}
+
+// Read the current native selection's first-shape PP_KIND (""/"CHART_ROOT"/child)
+// and count, for honest before/after logging in the protection trace.
+static std::string CurrentNativeSelKind(PowerPoint::_ApplicationPtr& app, long* outCount) {
+	if (outCount) *outCount = 0;
+	try {
+		PowerPoint::DocumentWindowPtr w = app->GetActiveWindow();
+		if (!w) return "";
+		PowerPoint::SelectionPtr sel = w->GetSelection();
+		if (!sel || sel->GetType() != PowerPoint::ppSelectionShapes) return "";
+		PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
+		if (!sr || sr->GetCount() < 1) return "";
+		if (outCount) *outCount = sr->GetCount();
+		PowerPoint::ShapePtr sh = sr->Item(_variant_t(1L));
+		_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+		return k.length() ? std::string((const char*)_bstr_t(k)) : "";
+	} catch (...) {}
+	return "";
+}
+
 static AppBarSel AppBarSelFromKind(const char* kind) {
 	if (!kind || !*kind) return AppBarSel::None;
 	if (strcmp(kind, "TASK") == 0) return AppBarSel::Task;
@@ -1335,6 +1384,7 @@ int wmain(int argc, wchar_t** argv) {
 				wcscmp(traceProfile, L"row-label-select") == 0 ||
 				wcscmp(traceProfile, L"row-then-overall") == 0 ||
 				wcscmp(traceProfile, L"task-select-progress") == 0 ||
+				wcscmp(traceProfile, L"component-shape-protection") == 0 ||
 				wcsstr(traceProfile, L"overall-"));
 			if (traceCleanStart) {
 				Overlay_SelectForTest("", ""); // clean start: the branch drives selection itself
@@ -1631,6 +1681,71 @@ int wmain(int argc, wchar_t** argv) {
 				Overlay_InvalidateAppBarForTest();
 				PumpFor(400);
 				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"component-shape-protection") == 0) {
+				// v2.6.1 U1 selection integrity (SR-SHP-01..03 / SR-IXC-19/21 /
+				// UF-07 / SR-IXC-09). Three sub-tests in one profile:
+				//   (6a) a native pick of a chart CHILD is suppressed within one
+				//        tick and the overlay ownSel mirrors it (no child stays
+				//        PowerPoint-selected);
+				//   (6b) Delete/arrow hotkeys are only registered while the slide
+				//        view is focused, and a Delete delivered while focus is
+				//        off does NOT mutate the chart (anti-theft, B1);
+				//   (6c) deselect resets the app bar to the component (SCALE)
+				//        context and clears ownSel.
+				Overlay_SelectForTest("", "");
+				Overlay_SetSlideFocusOverrideForTest(-1); // real gate (host-active shortcut => focus OK)
+				PumpFor(300);
+				captureStep("pre", traceProfile);          // ownSel empty, component context
+
+				// (6a) SR-SHP-02: model a native pick of a chart CHILD. A real COM
+				// Select() on a grouped child collapses to selecting the CHART_ROOT
+				// group (logged below as honest evidence), so ALSO drive the SAME
+				// shared handler the Tick poll and the Connect sink call, to
+				// exercise the suppression decision + ownSel mirror deterministically.
+				std::string kindAtSelect = SelectTaskChildNatively(slide, "discovery");
+				long cntAfter = 0;
+				std::string kindAfter = CurrentNativeSelKind(app, &cntAfter);
+				int act = Overlay_OnNativeSelectionChanged("TASK", "discovery", true);
+				wprintf(L"PROTECT afterSelect: comSelectKind=%hs nativeNow=%hs count=%ld handlerAction=%d(1=suppress)\n",
+					kindAtSelect.empty() ? "(none)" : kindAtSelect.c_str(),
+					kindAfter.empty() ? "(none)" : kindAfter.c_str(), cntAfter, act);
+				PumpFor(220);                               // real ticks re-observe the actual native sel
+				captureStep("child-immed", traceProfile);
+				PumpFor(500);                               // settle (a few ticks)
+				captureStep("child-settled", traceProfile);
+				{
+					long cntSettled = 0;
+					std::string kindSettled = CurrentNativeSelKind(app, &cntSettled);
+					wprintf(L"PROTECT settled: nativeSelKind=%hs count=%ld ownSelKind=%d\n",
+						kindSettled.empty() ? "(none)" : kindSettled.c_str(), cntSettled,
+						Overlay_GetSelectedKindForTest());
+				}
+
+				// (6b) SR-IXC-19/21 hotkey scope. Task still selected: registration
+				// gate must register when slide-view focused and DROP when focus
+				// leaves it; a Delete delivered while focus is off must NOT mutate.
+				Overlay_SetSlideFocusOverrideForTest(1);    // focus on the slide view
+				PumpFor(240);
+				captureStep("hk-focus", traceProfile);       // hotkeysActive true
+				Overlay_SetSlideFocusOverrideForTest(0);     // focus elsewhere (Notes/ribbon)
+				PumpFor(240);                                 // tick unregisters
+				HWND ovH = OverlayHwnd();
+				if (ovH) {
+					// Deliver Delete directly (simulating "the key reached us"):
+					// the handler's B1 scope check must still no-op it.
+					::PostMessageW(ovH, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+					PumpFor(220);
+					::PostMessageW(ovH, WM_HOTKEY, (WPARAM)OVERLAY_HOTKEY_DELETE_FOR_TEST, 0);
+					PumpFor(220);
+				}
+				captureStep("hk-offfocus", traceProfile);     // hotkeysActive false; taskCount unchanged
+				Overlay_SetSlideFocusOverrideForTest(-1);     // restore real gate
+
+				// (6c) UF-07 / SR-IXC-09: deselect -> component/default context.
+				Overlay_SelectForTest("", "");
+				Overlay_InvalidateAppBarForTest();
+				PumpFor(450);
+				captureStep("reset", traceProfile);           // ownSel empty, SCALE present
 			} else {
 				// default: just exercise select + a row op
 				Overlay_PerformAppBarCommandForTest(HtCmd_AddRowBelow);

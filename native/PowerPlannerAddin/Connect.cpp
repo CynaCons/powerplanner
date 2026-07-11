@@ -138,6 +138,111 @@ static void DefaultTaskDates(const PpDocument& doc, const std::string& rowId, co
 	end = "2026-01-08";
 }
 
+// ---- WindowSelectionChange COM sink (SR-SMO-05 / ARC-07) -------------------
+// PowerPoint fires EApplication::WindowSelectionChange whenever the slide
+// selection changes. We subscribe (IConnectionPointContainer on the Application)
+// so a native pick of a suppressed chart CHILD is unselected INSTANTLY — killing
+// the up-to-150ms window in which the Tick poll would otherwise let a child stay
+// natively selected (the M6 delete-desync race). The suppression/mirror/clear
+// decision itself lives in Overlay_OnNativeSelectionChanged, the SAME handler
+// the Tick poll calls, so the poll-only harness (which never loads this add-in)
+// behaves identically and the poll remains a watchdog fallback here.
+//
+// A minimal hand-rolled IDispatch sink: the connection point invokes us by the
+// event dispid, so no type info is needed. WindowSelectionChange is dispid 2001
+// (frozen in the PowerPoint EApplication contract across versions).
+namespace {
+const DISPID DISPID_EAPP_WINDOWSELECTIONCHANGE = 2001;
+
+class PpSelectionSink : public IDispatch {
+public:
+	PpSelectionSink() : m_ref(1) {}
+
+	// IUnknown
+	STDMETHOD(QueryInterface)(REFIID riid, void** ppv) override {
+		if (!ppv) return E_POINTER;
+		if (riid == IID_IUnknown || riid == IID_IDispatch ||
+			riid == __uuidof(PowerPoint::EApplication)) {
+			*ppv = static_cast<IDispatch*>(this);
+			AddRef();
+			return S_OK;
+		}
+		*ppv = nullptr;
+		return E_NOINTERFACE;
+	}
+	STDMETHOD_(ULONG, AddRef)() override { return (ULONG)::InterlockedIncrement(&m_ref); }
+	STDMETHOD_(ULONG, Release)() override {
+		LONG r = ::InterlockedDecrement(&m_ref);
+		if (r == 0) delete this;
+		return (ULONG)r;
+	}
+
+	// IDispatch — type-info-less; the source calls Invoke with the event dispid.
+	STDMETHOD(GetTypeInfoCount)(UINT* pctinfo) override { if (pctinfo) *pctinfo = 0; return S_OK; }
+	STDMETHOD(GetTypeInfo)(UINT, LCID, ITypeInfo** ppTInfo) override { if (ppTInfo) *ppTInfo = nullptr; return E_NOTIMPL; }
+	STDMETHOD(GetIDsOfNames)(REFIID, LPOLESTR*, UINT, LCID, DISPID*) override { return E_NOTIMPL; }
+	STDMETHOD(Invoke)(DISPID dispIdMember, REFIID, LCID, WORD, DISPPARAMS* pDispParams,
+		VARIANT*, EXCEPINFO*, UINT*) override {
+		if (dispIdMember == DISPID_EAPP_WINDOWSELECTIONCHANGE && pDispParams && pDispParams->cArgs >= 1) {
+			HandleWindowSelectionChange(pDispParams->rgvarg[pDispParams->cArgs - 1]);
+		}
+		return S_OK;
+	}
+
+private:
+	// Sel is the last positional arg (event args are pushed in reverse in
+	// rgvarg; WindowSelectionChange has a single arg, so index cArgs-1).
+	void HandleWindowSelectionChange(const VARIANT& selArg) {
+		try {
+			// Extract the Selection via an EXPLICIT QueryInterface (no reliance on
+			// _com_ptr_t's IDispatch* assignment overload) so we always hold a
+			// genuine Selection vtable regardless of how PowerPoint marshals the
+			// arg (VT_DISPATCH, VT_DISPATCH|VT_BYREF, or VT_UNKNOWN).
+			IUnknown* unk = nullptr;
+			if (selArg.vt == VT_DISPATCH) unk = selArg.pdispVal;
+			else if ((selArg.vt == (VT_DISPATCH | VT_BYREF)) && selArg.ppdispVal) unk = *selArg.ppdispVal;
+			else if (selArg.vt == VT_UNKNOWN) unk = selArg.punkVal;
+			else if ((selArg.vt == (VT_UNKNOWN | VT_BYREF)) && selArg.ppunkVal) unk = *selArg.ppunkVal;
+			if (!unk) return;
+
+			PowerPoint::SelectionPtr sel;
+			{
+				PowerPoint::Selection* raw = nullptr;
+				if (FAILED(unk->QueryInterface(__uuidof(PowerPoint::Selection), reinterpret_cast<void**>(&raw))) || !raw)
+					return;
+				sel.Attach(raw);   // take ownership of the QI ref (released on scope exit)
+			}
+
+			std::string kind, id;
+			bool hasShapeSel = false;
+			if (sel->GetType() == PowerPoint::ppSelectionShapes) {
+				PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
+				if (sr && sr->GetCount() >= 1) {
+					hasShapeSel = true;
+					PowerPoint::ShapePtr sh = sr->Item(_variant_t(1L));
+					_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+					kind = k.length() ? Narrow((const wchar_t*)k) : "";
+					_bstr_t i = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
+					id = i.length() ? Narrow((const wchar_t*)i) : "";
+				}
+			}
+
+			int action = Overlay_OnNativeSelectionChanged(kind.c_str(), id.c_str(), hasShapeSel);
+			if (action == OVERLAY_NATIVE_SEL_SUPPRESS_CHILD) {
+				// Instant equivalent of the Tick poll's Unselect(). Re-fires this
+				// event with an empty/CHART_ROOT selection, which resolves to
+				// NONE next dispatch — bounded, no recursion.
+				try { sel->Unselect(); } catch (...) {}
+			}
+		} catch (...) {
+			// Never let an event-sink exception escape into PowerPoint.
+		}
+	}
+
+	LONG m_ref;
+};
+} // namespace
+
 // The Fluent ribbon: a "PowerPlanner" tab with one "Insert Gantt" button.
 // onLoad caches the IRibbonUI; the button's onAction reaches DoInsertGantt().
 static const wchar_t* kRibbonXml =
@@ -188,11 +293,13 @@ STDMETHODIMP CConnect::OnConnection(IDispatch* Application,
 	m_pApp = Application;  // PowerPoint.Application — used from N2 onward
 	PpLog(L"OnConnection — add-in loaded into PowerPoint");
 	OverlayStart(m_pApp);  // N4: on-slide selection overlay (polling timer)
+	AdviseSelectionSink(); // SR-SMO-05: instant WindowSelectionChange suppression
 	return S_OK;
 }
 
 STDMETHODIMP CConnect::OnDisconnection(AddInDesignerObjects::ext_DisconnectMode /*RemoveMode*/, SAFEARRAY** /*custom*/)
 {
+	UnadviseSelectionSink();
 	OverlayStop();
 	m_pRibbon.Release();
 	m_pApp.Release();
@@ -312,6 +419,57 @@ STDMETHODIMP CConnect::Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD 
 		return S_OK;
 	}
 	return ExtBase::Invoke(dispIdMember, riid, lcid, wFlags, pDispParams, pVarResult, pExcepInfo, puArgErr);
+}
+
+// ---- WindowSelectionChange sink advise / unadvise --------------------------
+
+void CConnect::AdviseSelectionSink()
+{
+	if (!m_pApp || m_pSelSink) return;
+	try {
+		CComQIPtr<IConnectionPointContainer> cpc(m_pApp);
+		if (!cpc) { PpLog(L"selection sink: no IConnectionPointContainer"); return; }
+		CComPtr<IConnectionPoint> cp;
+		HRESULT hr = cpc->FindConnectionPoint(__uuidof(PowerPoint::EApplication), &cp);
+		if (FAILED(hr) || !cp) {
+			wchar_t buf[96];
+			::swprintf_s(buf, 96, L"selection sink: FindConnectionPoint failed hr=0x%08lX", (unsigned long)hr);
+			PpLog(buf);
+			return;
+		}
+		IDispatch* sink = new PpSelectionSink();   // ref = 1 (ours)
+		DWORD cookie = 0;
+		hr = cp->Advise(sink, &cookie);            // connection point AddRefs on success
+		if (FAILED(hr)) {
+			wchar_t buf[96];
+			::swprintf_s(buf, 96, L"selection sink: Advise failed hr=0x%08lX", (unsigned long)hr);
+			PpLog(buf);
+			sink->Release();                       // ref = 0, deleted
+			return;
+		}
+		m_pSelSink = sink;
+		m_selCp = cp;
+		m_selSinkCookie = cookie;
+		PpLog(L"selection sink: advised on EApplication.WindowSelectionChange");
+	}
+	catch (const _com_error&) { PpLog(L"selection sink: COM error during advise"); }
+	catch (...) { PpLog(L"selection sink: exception during advise"); }
+}
+
+void CConnect::UnadviseSelectionSink()
+{
+	try {
+		if (m_selCp && m_selSinkCookie) {
+			m_selCp->Unadvise(m_selSinkCookie);    // connection point releases its ref
+		}
+	}
+	catch (...) {}
+	m_selSinkCookie = 0;
+	m_selCp.Release();
+	if (m_pSelSink) {
+		m_pSelSink->Release();                     // release our ref (ref -> 0, deleted)
+		m_pSelSink = nullptr;
+	}
 }
 
 // ---- Actions ---------------------------------------------------------------

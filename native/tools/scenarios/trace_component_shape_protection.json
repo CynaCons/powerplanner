@@ -1,9 +1,13 @@
 {
   "name": "trace_component_shape_protection",
-  "description": "E2E feedback #1: Click task body, row label, milestone via simulated hit. Verify ownSel set, no child shape remains natively selected (suppressed), CHART_ROOT or empty is the PP selection. Check no native grips appear on internals in state/screenshots.",
-  "exe": "ppappbarshot",
-  "args": ["--trace", "component-shape-protection"],
-  "timeout": 120,
+  "description": "v2.6.1 U1 selection integrity (SR-SHP-01..03 / SR-IXC-19/21 / UF-07). Natively selects a chart CHILD (task bar) and asserts it is suppressed within one tick with CHART_ROOT/nothing left as PowerPoint's real selection while the overlay ownSel mirrors the item (no_child_shape_selected). Then checks Delete/arrow hotkeys are scoped to slide-view focus and a Delete delivered while focus is off does not mutate (hotkey_scope_respected). Finally deselects and asserts the app bar reverts to the component/SCALE context (context_reset_to_component).",
+  "trace_profile": "component-shape-protection",
+  "timeout": 180,
   "retries": 2,
-  "check_invariants": true
+  "check_invariants": true,
+  "invariants": [
+    "no_child_shape_selected",
+    "hotkey_scope_respected",
+    "context_reset_to_component"
+  ]
 }

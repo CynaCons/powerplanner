@@ -51,7 +51,7 @@ brackets unreachable; task Rename hunt.
   unconfirmed (likely still ignored — NAT-14).
 - R2 collapse chevron: `PpRow.collapsed` exists; NO toggle interaction.
 - R5 marker delete: spec says missing — actually CLOSED (spec doc stale).
-- SRS_ProgressEditing "no percent controls in TASK bar" — CLOSED
+- spec/srs-native/SRS-RowAndTaskSelection.md "Progress Editing" no percent controls in TASK bar — CLOSED
   (−10%/+10% exist; spec doc stale).
 - Dependencies: only FS creatable; no per-edge delete; no type picker
   (AddDependency supports 4 types in GanttOps).

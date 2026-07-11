@@ -98,8 +98,19 @@ private:
 	void DoCtxScaleYear();
 	void MutateChart(const std::function<bool(PpDocument&, std::string& outSelectId)>& op);
 
+	// SR-SMO-05 / ARC-07: PowerPoint Application (EApplication) event sink for
+	// WindowSelectionChange, so a native selection change is handled INSTANTLY
+	// (no 150ms poll latency). Best-effort: if Advise fails, the overlay's Tick
+	// poll remains the suppression watchdog. Shared decision lives in
+	// Overlay_OnNativeSelectionChanged so the poll-only harness behaves the same.
+	void AdviseSelectionSink();
+	void UnadviseSelectionSink();
+
 	CComPtr<IDispatch> m_pApp;     // PowerPoint.Application
 	CComPtr<IDispatch> m_pRibbon;  // Office.IRibbonUI (from onLoad)
+	IDispatch* m_pSelSink = nullptr;          // EApplication event sink (our owning ref)
+	CComPtr<IConnectionPoint> m_selCp;        // connection point we advised on
+	DWORD m_selSinkCookie = 0;                // Advise cookie for Unadvise
 	std::string m_ctxKind;
 	std::string m_ctxId;
 	bool m_ctxSuppressNoChangeMessage = false;

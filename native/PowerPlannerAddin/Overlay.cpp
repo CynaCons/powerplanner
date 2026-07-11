@@ -100,6 +100,25 @@ bool  g_cursorOverrideAltDown = false;
 // call. See Overlay_SetHostActiveOverrideForTest in Overlay.h.
 int g_hostActiveOverrideMode = -1;
 
+// B1 (v2.6.1): keyboard-focus scope for hotkey REGISTRATION. -1 (production) =
+// use the real GetGUIThreadInfo/GetFocus class-name check
+// (IsSlideViewFocusedForHotkeys); 0 = force "focus NOT in slide view"; 1 =
+// force "focus in slide view". The hotkey-scope harness flips this to 0 to
+// prove the registration gate drops when focus leaves the slide view (Notes /
+// outline / ribbon edit control) WITHOUT sending real keystrokes. Default -1
+// keeps poll-only harnesses that force host-active behaving as before (see the
+// host-active shortcut in IsSlideViewFocusedForHotkeys).
+int g_slideFocusOverrideMode = -1;
+
+// COM-free mirror (consumed by the component-shape-protection harness's dump)
+// of the PowerPoint-native selection PP_KIND that Tick() / the COM sink most
+// recently OBSERVED for the FIRST selected shape: "" (nothing selected, or a
+// foreign non-chart shape), "CHART_ROOT", or a chart-child kind (e.g. "TASK").
+// The dump surfaces it as "nativeSelKind" so no_child_shape_selected can assert
+// that, once settled, no chart CHILD remains PowerPoint's real selection (only
+// "" or CHART_ROOT are allowed). Written from the COM side; read COM-free.
+std::string g_lastNativeSelKindForTest;
+
 // Single choke point for "where is the physical cursor": everything in this
 // file that used to call ::GetCursorPos directly now calls this instead, so
 // the harness's cursor override (once enabled) is consulted EVERYWHERE, not
@@ -318,6 +337,10 @@ HtHit g_lastHit;
 // natively even though the overlay now captures every chart click.
 RECT g_gripRect = {};
 bool g_gripValid = false;
+// M6 (v2.6.1): true while the cursor hovers the move grip, so PaintOverlay can
+// surface a "Move chart" tooltip (SR-IXC-15 — the move affordance must be
+// discoverable without relying on the Alt+click escape hatch alone).
+bool g_gripHover = false;
 // GRIP_SIZE (DPI-scaled) is declared with the other chrome metrics above.
 
 std::string g_hoverRowId;
@@ -502,6 +525,7 @@ LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK CardFieldProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 void UpdateHotkeyRegistration();
 void UnregisterAllHotkeys(const wchar_t* caller = L"?");
+bool IsSlideViewFocusedForHotkeys();
 void HandleHotkeyDelete();
 void HandleHotkeyNudge(long deltaDays);
 void ClearLinkMode();
@@ -2897,6 +2921,11 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			UpdateDragGesture(pt);
 		} else if (!(::GetKeyState(VK_LBUTTON) & 0x8000)) {
 			// SR-SMO-04: repaint hover wash/affordances on target change only.
+			// M6: track move-grip hover so PaintOverlay can surface the "Move
+			// chart" tooltip (recomputed each move; also re-derived in Tick so
+			// it clears when the pointer leaves the overlay entirely).
+			bool overGrip = GripFromClientPoint(pt);
+			if (overGrip != g_gripHover) { g_gripHover = overGrip; RequestOverlayRepaint(); }
 			if (UpdateHoverFromCursor()) RequestOverlayRepaint();
 		}
 		return 0;
@@ -3460,6 +3489,33 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		g.DrawLine(&glyph, cx, cy - g4, cx + g2, cy - g2);
 		g.DrawLine(&glyph, cx, cy + g4, cx - g2, cy + g2);
 		g.DrawLine(&glyph, cx, cy + g4, cx + g2, cy + g2);
+
+		// M6 (v2.6.1, SR-IXC-15): "Move chart" tooltip on hover makes the move
+		// affordance discoverable and documents the Alt+click drill escape
+		// hatch, so Alt+click is no longer the sole discovery path. Themed pill
+		// (ink bg / surface text, per SR-THEME-01), positioned just below the
+		// grip and right-aligned to it so it stays inside the overlay.
+		if (g_gripHover) {
+			const wchar_t* tip = L"Move chart  \u00B7  Alt+click";
+			Gdiplus::Font tipFont(L"Segoe UI", g_tooltipFontPx, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+			Gdiplus::RectF tb;
+			g.MeasureString(tip, -1, &tipFont, Gdiplus::PointF(0, 0), &tb);
+			const int pad = g_tooltipPad;
+			const int tw = (int)tb.Width + pad * 2;
+			const int th = (int)tb.Height + pad * 2;
+			int tx = g_gripRect.right - tw;          // right-aligned to grip
+			int ty = g_gripRect.bottom + Scale(4);   // just below the grip chip
+			if (tx < INFL) tx = INFL;                // keep inside the overlay
+			Gdiplus::GraphicsPath tipPath;
+			AddRoundRect(tipPath, (Gdiplus::REAL)tx, (Gdiplus::REAL)ty, (Gdiplus::REAL)tw, (Gdiplus::REAL)th, 3.0f);
+			Gdiplus::SolidBrush tipBg(GpToken(255, gt::ink));
+			g.FillPath(&tipBg, &tipPath);
+			Gdiplus::StringFormat tipFmt;
+			tipFmt.SetAlignment(Gdiplus::StringAlignmentCenter);
+			tipFmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			Gdiplus::SolidBrush tipText(GpToken(255, gt::surface));
+			g.DrawString(tip, -1, &tipFont, Gdiplus::RectF((Gdiplus::REAL)tx, (Gdiplus::REAL)ty, (Gdiplus::REAL)tw, (Gdiplus::REAL)th), &tipFmt, &tipText);
+		}
 	}
 
 	if (!g_hoverRowId.empty() && !::IsRectEmpty(&g_hoverBandRect) && !(::GetKeyState(VK_LBUTTON) & 0x8000)) {
@@ -5033,6 +5089,11 @@ void RebuildChart(PpDocument& doc, const std::string& selectId) {
 // WM_HOTKEY(Delete): delete the selected task/milestone/text and clear selection.
 void HandleHotkeyDelete() {
 	if (!g_app || g_mutating) { OvLog(L"hotkey Delete ignored: busy or no app"); return; }
+	// B1 (v2.6.1) defense-in-depth: the registration gate already prevents the
+	// OS from delivering Delete unless the slide view is focused, but re-check
+	// here so a stray/simulated WM_HOTKEY can never mutate the chart while the
+	// user's focus is in the Notes pane / outline / ribbon (SR-IXC-19/21).
+	if (!IsSlideViewFocusedForHotkeys()) { OvLog(L"hotkey Delete ignored: slide view not focused (B1 scope)"); return; }
 	const std::string selId = g_ownSelId;
 	const std::string selKind = g_ownSelKind;
 	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE" && selKind != "TEXT" && selKind != "ROW" && selKind != "MARKER")) {
@@ -5086,6 +5147,8 @@ void HandleHotkeyDelete() {
 // task spec), keeping the selection on the same item.
 void HandleHotkeyNudge(long deltaDays) {
 	if (!g_app || g_mutating) return;
+	// B1 (v2.6.1) defense-in-depth: same slide-view focus scope as Delete.
+	if (!IsSlideViewFocusedForHotkeys()) { OvLog(L"hotkey Nudge ignored: slide view not focused (B1 scope)"); return; }
 	const std::string selId = g_ownSelId;
 	const std::string selKind = g_ownSelKind;
 	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE")) return;
@@ -5165,9 +5228,63 @@ void RegisterAllHotkeys() {
 	OvLog(L"hotkeys registered");
 }
 
+// B1 (v2.6.1, SR-IXC-19/21): is the keyboard-input focus currently directed at
+// the PowerPoint slide-editing surface (or one of OUR overlay windows), as
+// opposed to the Notes pane / outline / ribbon edit control / another window?
+// This scopes hotkey REGISTRATION: RegisterHotKey steals Delete/arrows
+// SYSTEM-WIDE, so registering them while the user types in the Notes pane lets
+// those keys nudge/delete the selected chart item — the v2.6.1 data-loss BUG
+// (B1). We register ONLY while focus is on the slide surface, so anywhere else
+// the OS routes the key to whatever the user is actually editing.
+//
+// The focused window is read from the FOREGROUND thread's GUITHREADINFO
+// (hwndFocus), which works cross-thread unlike GetFocus(). Allowlist (verified
+// empirically via the window-probe tree): PowerPoint's slide document window is
+// "mdiClass" and its drawing surface "paneClassDC" (children of MDIClient); the
+// Notes pane / outline / ribbon are NetUIHWND under NUIPane/MsoWorkPane and
+// deliberately do NOT match. Our own overlay/app-bar/editor/card windows count
+// as "chart focus" too (e.g. right after a click, before focus settles).
+bool IsSlideViewFocusedForHotkeys() {
+	if (g_slideFocusOverrideMode >= 0) return g_slideFocusOverrideMode != 0;
+	// Poll-only harnesses force host-active but have no real slide view to
+	// focus; treat focus as satisfied there so their existing registration path
+	// is unaffected (the dedicated slide-focus override above drives the
+	// negative path without real keystrokes).
+	if (g_hostActiveOverrideMode >= 0) return true;
+
+	HWND fg = ::GetForegroundWindow();
+	if (!fg) return false;
+	DWORD fgTid = ::GetWindowThreadProcessId(fg, nullptr);
+
+	HWND focus = nullptr;
+	GUITHREADINFO gti = {};
+	gti.cbSize = sizeof(gti);
+	if (::GetGUIThreadInfo(fgTid, &gti)) {
+		focus = gti.hwndFocus ? gti.hwndFocus : gti.hwndActive;
+	}
+	if (!focus) focus = ::GetFocus();   // best-effort fallback (our thread only)
+	if (!focus) return false;
+
+	// Our own chrome windows are legitimate "chart focus".
+	if (focus == g_hwnd || focus == g_appBarHwnd || focus == g_editorHwnd || focus == g_cardHwnd) return true;
+	HWND focusRoot = ::GetAncestor(focus, GA_ROOT);
+	if (focusRoot == g_hwnd || focusRoot == g_appBarHwnd || focusRoot == g_editorHwnd || focusRoot == g_cardHwnd) return true;
+
+	// Otherwise the focused control must be the PowerPoint slide-editing
+	// surface. Case-insensitive substring so minor casing differences across
+	// Office builds still match (and Notes/ribbon NetUIHWND still does not).
+	wchar_t cls[128] = {};
+	::GetClassNameW(focus, cls, 128);
+	for (wchar_t* p = cls; *p; ++p) *p = (wchar_t)::towlower(*p);
+	if (::wcsstr(cls, L"paneclassdc") || ::wcsstr(cls, L"mdiclass")) return true;
+	return false;
+}
+
 // Evaluate shouldRegister = (internal selection is TASK/MILESTONE/TEXT) AND
-// (PowerPoint is the foreground app) AND (not mid-gesture/mutation/inline-
-// edit) and register/unregister on a TRANSITION only. Called every Tick().
+// (PowerPoint is the foreground app) AND (keyboard focus is on the slide
+// surface / our chrome, not Notes/outline/ribbon — B1) AND (not mid-gesture/
+// mutation/inline-edit) and register/unregister on a TRANSITION only. Called
+// every Tick().
 // TEXT is included so the Delete hotkey works on a selected text annotation
 // (HandleHotkeyDelete below); the Left/Right/Shift+Left/Right nudge handlers
 // already no-op for any selection kind other than TASK/MILESTONE, so
@@ -5204,14 +5321,19 @@ void UpdateHotkeyRegistration() {
 
 	bool notMidGesture = !g_gestureActive && !g_mutating && !IsEditSessionActive();
 
-	bool shouldRegister = selectionIsTaskOrMilestone && foregroundIsOurs && notMidGesture;
+	// B1 (v2.6.1): also require keyboard focus to be on the slide surface / our
+	// chrome — never register while the user is typing in the Notes pane,
+	// outline, or a ribbon edit control (SR-IXC-19/21).
+	bool focusInSlideView = IsSlideViewFocusedForHotkeys();
+
+	bool shouldRegister = selectionIsTaskOrMilestone && foregroundIsOurs && focusInSlideView && notMidGesture;
 
 	if (shouldRegister && !g_hotkeysActive) {
 		RegisterAllHotkeys();
 	} else if (!shouldRegister && g_hotkeysActive) {
-		wchar_t buf[192];
-		::swprintf_s(buf, 192, L"hotkey gate drop: sel=%hs/%hs fg=%d gesture=%d mutating=%d edit=%d",
-			g_ownSelKind.c_str(), g_ownSelId.c_str(), foregroundIsOurs ? 1 : 0,
+		wchar_t buf[224];
+		::swprintf_s(buf, 224, L"hotkey gate drop: sel=%hs/%hs fg=%d slideFocus=%d gesture=%d mutating=%d edit=%d",
+			g_ownSelKind.c_str(), g_ownSelId.c_str(), foregroundIsOurs ? 1 : 0, focusInSlideView ? 1 : 0,
 			g_gestureActive ? 1 : 0, g_mutating ? 1 : 0, IsEditSessionActive() ? 1 : 0);
 		OvLog(buf);
 		UnregisterAllHotkeys(L"gate");
@@ -5975,6 +6097,19 @@ void Tick() {
 		BuildRowBands(chart, win);
 		if (g_dragCommitEcho.active) ClearDragCommitEcho();
 		bool hoverChanged = UpdateHoverFromCursor();
+		// M6: re-derive move-grip hover from the cursor each tick so the "Move
+		// chart" tooltip clears when the pointer leaves the overlay (no
+		// WM_MOUSEMOVE fires once the cursor is outside our window). The grip
+		// rect is window-relative; convert the (screen) cursor accordingly.
+		{
+			POINT cur{};
+			bool overGrip = false;
+			if (g_gripValid && !g_gestureActive && OverlayGetCursorPos(&cur)) {
+				POINT winPt = { cur.x - g_windowOriginX, cur.y - g_windowOriginY };
+				overGrip = GripFromClientPoint(winPt);
+			}
+			if (overGrip != g_gripHover) { g_gripHover = overGrip; hoverChanged = true; }
+		}
 		// Transition-only (hidden<->shown), matching UpdateHoverFromCursor's
 		// own return-bool pattern above -- see UpdateEmptyCellHoverHint's
 		// comment for why re-deriving "due" separately here (as before) could
@@ -5983,61 +6118,59 @@ void Tick() {
 
 		ClearSelectionState();
 		bool chartRootNativelySelected = false;
+
+		// SINGLE-SELECTION CONTRACT (M3): resolve the FIRST shape of the current
+		// PowerPoint-native selection here (COM side), then hand the model
+		// decision to the shared Overlay_OnNativeSelectionChanged so this 150ms
+		// Tick poll (watchdog) and the Connect.cpp WindowSelectionChange sink
+		// (instant path) apply identical suppression / ownSel-mirror /
+		// clear-on-foreign logic. CHART_ROOT stays natively selectable (move
+		// grip, Alt+click escape hatch); its chrome is still driven from the
+		// native Selection geometry below. Chart CHILDREN are overlay-only
+		// selections — their native selection is suppressed (Unselect).
+		bool hasShapeSel = false;
+		std::string firstKind, firstId;
+		PowerPoint::ShapePtr firstShape;
 		PowerPoint::SelectionPtr sel = win->GetSelection();
 		if (sel && sel->GetType() == PowerPoint::ppSelectionShapes) {
 			PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
 			if (sr && sr->GetCount() >= 1) {
-				PowerPoint::ShapePtr sh = sr->Item(_variant_t(1L));
-				_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
-				if (kind.length()) {
-					std::string kindStr = Narrow((const wchar_t*)kind);
-					// The CHART_ROOT group itself must stay natively selectable
-					// (move grip, Alt+click escape hatch) — only chart CHILDREN
-					// get their PowerPoint-native selection suppressed. Its
-					// chrome is still driven directly from PowerPoint's
-					// Selection (old path), independent of the internal model.
-					bool isEditingThisShape = IsEditSessionActive();
-					if (kindStr != "CHART_ROOT" && !g_mutating && !isEditingThisShape) {
-						_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
-						g_suppressedKind = kindStr;
-						g_suppressedId = Narrow((const wchar_t*)id);
-						try {
-							win->GetSelection()->Unselect();
-						} catch (const _com_error&) {
-							OvLog(L"COM error unselecting suppressed chart child");
-						}
-						OvLog((L"suppressed native selection of chart child PP_KIND=" + Widen(kindStr)).c_str());
-						// Mirror the suppressed native pick into the internal
-						// selection model, then clear it (one-shot).
-						std::string mirrorKind = IsTaskKind(g_suppressedKind) ? "TASK" : g_suppressedKind;
-						if (mirrorKind == "TASK" || mirrorKind == "MILESTONE") {
-							SetOwnSelection(mirrorKind, g_suppressedId);
-						}
-						g_suppressedKind.clear();
-						g_suppressedId.clear();
-					} else if (kindStr == "CHART_ROOT") {
-						if (g_ownSelKind.empty()) {
-							// Only drive full-chart root chrome from native sel when no item is selected via overlay.
-							// This prevents intermittent "full component takeover" when clicking items (native often remains root group).
-							chartRootNativelySelected = true;
-							g_selKind = kindStr;
-							_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
-							g_selId = Narrow((const wchar_t*)id);
-							float left = sh->GetLeft(), top = sh->GetTop(), w = sh->GetWidth(), h = sh->GetHeight();
-							g_selScreenRect = {
-								win->PointsToScreenPixelsX(left),
-								win->PointsToScreenPixelsY(top),
-								win->PointsToScreenPixelsX(left + w),
-								win->PointsToScreenPixelsY(top + h)
-							};
-							NormalizeRect(g_selScreenRect);
-							g_hasSelectionChrome = true;
-						}
-						// else: have active item ownSel (from click); keep item chrome. Do not override with full root area.
-						// (Grip click explicitly clears ownSel before selecting root.)
-					}
-				}
+				hasShapeSel = true;
+				firstShape = sr->Item(_variant_t(1L));
+				_bstr_t kind = firstShape->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				firstKind = kind.length() ? Narrow((const wchar_t*)kind) : "";
+				_bstr_t id = firstShape->GetTags()->Item(_bstr_t(L"PP_ID"));
+				firstId = id.length() ? Narrow((const wchar_t*)id) : "";
 			}
+		}
+
+		int nativeAction = Overlay_OnNativeSelectionChanged(firstKind.c_str(), firstId.c_str(), hasShapeSel);
+		if (nativeAction == OVERLAY_NATIVE_SEL_SUPPRESS_CHILD) {
+			try {
+				win->GetSelection()->Unselect();
+			} catch (const _com_error&) {
+				OvLog(L"COM error unselecting suppressed chart child");
+			}
+			OvLog((L"suppressed native selection of chart child PP_KIND=" + Widen(firstKind)).c_str());
+		} else if (hasShapeSel && firstKind == "CHART_ROOT" && firstShape) {
+			if (g_ownSelKind.empty()) {
+				// Only drive full-chart root chrome from native sel when no item is selected via overlay.
+				// This prevents intermittent "full component takeover" when clicking items (native often remains root group).
+				chartRootNativelySelected = true;
+				g_selKind = firstKind;
+				g_selId = firstId;
+				float left = firstShape->GetLeft(), top = firstShape->GetTop(), w = firstShape->GetWidth(), h = firstShape->GetHeight();
+				g_selScreenRect = {
+					win->PointsToScreenPixelsX(left),
+					win->PointsToScreenPixelsY(top),
+					win->PointsToScreenPixelsX(left + w),
+					win->PointsToScreenPixelsY(top + h)
+				};
+				NormalizeRect(g_selScreenRect);
+				g_hasSelectionChrome = true;
+			}
+			// else: have active item ownSel (from click); keep item chrome. Do not override with full root area.
+			// (Grip click explicitly clears ownSel before selecting root.)
 		}
 
 		// Chrome for a chart CHILD (task/milestone/row) no longer requires
@@ -6114,6 +6247,69 @@ void Tick() {
 void CALLBACK TimerProc(HWND, UINT, UINT_PTR, DWORD) { Tick(); }
 
 } // namespace
+
+// ---- shared native-selection-change handler (SR-SMO-05 / ARC-07) -----------
+// SINGLE-SELECTION CONTRACT (M3): CHART_ROOT is the only real PowerPoint
+// selection a user is meant to see for the whole component. Every internal
+// primitive (task bars, progress fills, milestone diamonds, labels, connectors,
+// row bands, notes, ...) is a CHILD of that group and is an OVERLAY-ONLY
+// selection (ownSel) — its PowerPoint-native selection is suppressed. This
+// function is the ONE place that decision is made, so the 150ms Tick poll
+// (watchdog) and the Connect.cpp WindowSelectionChange COM sink (instant path,
+// which closes the M6 delete-desync race) apply identical logic. It is COM-free
+// on purpose: the CALLER resolves the current native selection via COM and
+// performs any Unselect() itself, so it is safe to call from both translation
+// units (Overlay is linked into the poll-only harness; Connect is not). Defined
+// OUTSIDE the anonymous namespace above so it has external linkage for Connect.
+int Overlay_OnNativeSelectionChanged(const char* firstShapeKind, const char* firstShapeId, bool hasShapeSelection) {
+	const std::string kind = firstShapeKind ? firstShapeKind : "";
+	const std::string id = firstShapeId ? firstShapeId : "";
+
+	// COM-free observation mirror for the harness dump ("nativeSelKind").
+	// Records the kind as OBSERVED this dispatch (a child kind here means the
+	// caller is ABOUT to Unselect it; the next dispatch will observe "" or
+	// CHART_ROOT once suppression settles).
+	g_lastNativeSelKindForTest = hasShapeSelection ? kind : "";
+
+	// Never mutate the selection model mid-mutation/inline-edit — the caller's
+	// own guards also cover this, but keep the handler self-safe.
+	if (g_mutating || IsEditSessionActive()) return OVERLAY_NATIVE_SEL_NONE;
+
+	if (hasShapeSelection && !kind.empty() && kind != "CHART_ROOT") {
+		// A chart CHILD is natively selected: mirror TASK/MILESTONE picks into
+		// ownSel (other child kinds are suppressed without a mirror, matching
+		// the historical Tick behavior), then tell the caller to Unselect it.
+		g_suppressedKind = kind;
+		g_suppressedId = id;
+		std::string mirrorKind = IsTaskKind(kind) ? "TASK" : kind;
+		if (mirrorKind == "TASK" || mirrorKind == "MILESTONE") {
+			SetOwnSelection(mirrorKind, id);
+		}
+		g_suppressedKind.clear();
+		g_suppressedId.clear();
+		return OVERLAY_NATIVE_SEL_SUPPRESS_CHILD;
+	}
+
+	if (hasShapeSelection && kind.empty()) {
+		// A FOREIGN (non-chart) shape got natively selected: the user started
+		// interacting with something else on the slide. Clear our internal
+		// selection so the app bar + hotkeys revert to the neutral/component
+		// context (B1 item 1 + UF-07 feed). CHART_ROOT and chart children are
+		// handled above; an EMPTY selection (hasShapeSelection==false) is
+		// deliberately NOT treated as a deselect here because it is also the
+		// transient state right after we Unselect() a suppressed child.
+		if (!g_ownSelKind.empty()) {
+			ClearOwnSelection();
+			g_appBarValid = false;   // force app-bar rebuild to component context
+			g_appBarModelDirty = true;
+		}
+		return OVERLAY_NATIVE_SEL_NONE;
+	}
+
+	// CHART_ROOT selected, or empty selection: no model change here (the Tick
+	// owns CHART_ROOT chrome geometry, and the empty case must not clear ownSel).
+	return OVERLAY_NATIVE_SEL_NONE;
+}
 
 void OverlayStart(IDispatch* app) {
 	g_inst = (HINSTANCE)::GetModuleHandleW(NULL);
@@ -6249,6 +6445,12 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "{";
 	s += "\"ownSelKind\":\"" + g_ownSelKind + "\",";
 	s += "\"ownSelId\":\"" + g_ownSelId + "\",";
+	// v2.6.1 selection integrity: the PowerPoint-native selection kind Tick/the
+	// COM sink most recently observed ("" / "CHART_ROOT" / a child kind), and
+	// whether the Delete/arrow hotkeys are currently registered. Consumed by the
+	// component-shape-protection scenario (no_child_shape_selected + hotkey scope).
+	s += "\"nativeSelKind\":\"" + g_lastNativeSelKindForTest + "\",";
+	s += "\"hotkeysActive\":" + std::string(g_hotkeysActive ? "true" : "false") + ",";
 	s += "\"linkMode\":" + std::string(g_linkMode ? "true" : "false") + ",";
 	s += "\"linkFromId\":\"" + g_linkFromId + "\",";
 	s += "\"rowCount\":" + std::to_string(g_rowBands.size()) + ",";
@@ -6311,6 +6513,10 @@ const char* Overlay_DumpChromeStateForTest() {
 
 void Overlay_SetHostActiveOverrideForTest(int mode) {
 	g_hostActiveOverrideMode = mode;
+}
+
+void Overlay_SetSlideFocusOverrideForTest(int mode) {
+	g_slideFocusOverrideMode = mode;
 }
 
 void Overlay_PerformAppBarCommandForTest(int cmd) {

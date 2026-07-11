@@ -22,6 +22,30 @@ void OverlayStop();
 // The overlay window handle (for tests/screen capture); NULL if not started.
 HWND OverlayHwnd();
 
+// ---- shared native-selection-change handler (SR-SMO-05 / ARC-07) -----------
+// Result of Overlay_OnNativeSelectionChanged: what COM action the CALLER must
+// take after the handler has updated the internal selection model. The handler
+// is COM-free so it can be shared by BOTH the 150ms Tick poll (watchdog) and
+// the Connect.cpp WindowSelectionChange COM sink (instant path). The caller
+// resolves the current native selection via COM and performs any Unselect()
+// itself. See the SINGLE-SELECTION CONTRACT comment in Overlay.cpp.
+enum OverlayNativeSelAction {
+	OVERLAY_NATIVE_SEL_NONE = 0,            // no COM action (CHART_ROOT / empty / foreign)
+	OVERLAY_NATIVE_SEL_SUPPRESS_CHILD = 1,  // caller should Unselect() a chart child
+};
+
+// Resolve a native-selection observation into internal-model updates.
+//   firstShapeKind    : PP_KIND of the FIRST selected shape, or "" when the
+//                       selection is empty OR the first shape has no PP_KIND
+//                       (a foreign, non-chart shape).
+//   firstShapeId      : PP_ID of that shape ("" if none).
+//   hasShapeSelection : true iff the native selection is a non-empty shape
+//                       selection (ppSelectionShapes, count >= 1).
+// Mirrors a TASK/MILESTONE child pick into the overlay's ownSel, clears ownSel
+// when a foreign shape becomes selected (feeds UF-07 context reset + B1), and
+// records the observed kind for the harness. Returns an OverlayNativeSelAction.
+int Overlay_OnNativeSelectionChanged(const char* firstShapeKind, const char* firstShapeId, bool hasShapeSelection);
+
 // Debug/test hook: the internally-selected element's id (task/milestone/row),
 // or empty if nothing is internally selected. Drives the harness's OWNSEL
 // stage assertion. Never touches COM.
@@ -80,6 +104,16 @@ void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altD
 // harness exercise host-scoping (the SCOPE stage) without ever calling
 // SetForegroundWindow on a real window.
 void Overlay_SetHostActiveOverrideForTest(int mode);
+
+// B1 (v2.6.1): keyboard-focus scope override for hotkey registration. mode:
+// -1 = off (use the real GetGUIThreadInfo/GetFocus class-name check); 0 = force
+// "focus NOT in the slide view" (as if the user were typing in the Notes pane /
+// outline / ribbon); 1 = force "focus in the slide view". Lets the hotkey-scope
+// harness prove that Delete/arrows are NOT registered (and the handlers no-op)
+// when focus is elsewhere — without sending real keystrokes. Defaults to -1;
+// while a host-active override is in effect and this is -1, focus is treated as
+// satisfied so existing poll-only stages are unaffected.
+void Overlay_SetSlideFocusOverrideForTest(int mode);
 
 // Test hook: force the internal selection so a screenshot/visual harness can
 // capture each app-bar context without simulating a click. kind is one of

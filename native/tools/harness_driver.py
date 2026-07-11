@@ -668,7 +668,9 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
 
     # 3. no_large_sel_drop_to_empty (ownSelKind should not go blank mid op for *item-specific* ops)
     # Overall move/resize legitimately clears item sel to avoid weird combined chrome.
-    if profile and not profile.startswith('overall-'):
+    # component-shape-protection intentionally deselects at its "reset" step (UF-07),
+    # so it is exempt too (its own no_child_shape_selected / context_reset checks cover it).
+    if profile and not profile.startswith('overall-') and profile != 'component-shape-protection':
         empty_mid = False
         for i, (step, kind) in enumerate(own_sel_seq):
             if i > 0 and not kind:
@@ -682,7 +684,7 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
         results.append({
             "rule": "no_large_sel_drop_to_empty",
             "passed": True,
-            "detail": "skipped for overall-* (intentional clear when selecting CHART_ROOT)",
+            "detail": "skipped for overall-* / component-shape-protection (intentional deselect)",
         })
 
     # 4. rowband count stable or increases (insert may +1)
@@ -886,6 +888,70 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
                 "passed": op_latency_ms <= 200,
                 "detail": detail,
             })
+
+    if profile == "component-shape-protection":
+        # v2.6.1 U1 selection integrity. Steps emitted by the appbar-shot
+        # "component-shape-protection" profile: pre, child-immed, child-settled,
+        # hk-focus, hk-offfocus, reset. Child kinds = any nativeSelKind that is
+        # not "" and not "CHART_ROOT".
+        by_step = {s.step: s.state for s in steps}
+
+        def _is_child_kind(k: str) -> bool:
+            return bool(k) and k != "CHART_ROOT"
+
+        # no_child_shape_selected (SR-SHP-02/03): once settled, the overlay
+        # reflects the item (ownSel TASK) and NO chart child remains PowerPoint's
+        # real selection (nativeSelKind is "" or CHART_ROOT).
+        settled = by_step.get("child-settled", {})
+        settled_native = settled.get("nativeSelKind", "")
+        settled_own = settled.get("ownSelKind", "")
+        no_child = (settled_own == "TASK") and (not _is_child_kind(settled_native))
+        results.append({
+            "rule": "no_child_shape_selected",
+            "passed": no_child,
+            "detail": (
+                f"child-settled ownSelKind={settled_own!r} nativeSelKind={settled_native!r} "
+                f"(want ownSel=TASK, native in ''/CHART_ROOT)"
+            ),
+        })
+
+        # hotkey_scope_respected (SR-IXC-19/21): hotkeys register when the slide
+        # view is focused, DROP when focus leaves it, and a Delete delivered
+        # while focus is off leaves taskCount unchanged (no theft/mutation).
+        hk_on = by_step.get("hk-focus", {})
+        hk_off = by_step.get("hk-offfocus", {})
+        on_active = bool(hk_on.get("hotkeysActive"))
+        off_active = bool(hk_off.get("hotkeysActive"))
+        on_tasks = hk_on.get("taskCount")
+        off_tasks = hk_off.get("taskCount")
+        tasks_unchanged = (on_tasks is not None and off_tasks is not None and on_tasks == off_tasks)
+        hk_ok = on_active and (not off_active) and tasks_unchanged
+        results.append({
+            "rule": "hotkey_scope_respected",
+            "passed": hk_ok,
+            "detail": (
+                f"hk-focus hotkeysActive={on_active} taskCount={on_tasks}; "
+                f"hk-offfocus hotkeysActive={off_active} taskCount={off_tasks} "
+                f"(want on=True, off=False, taskCount unchanged after Delete while off)"
+            ),
+        })
+
+        # context_reset_to_component (UF-07 / SR-IXC-09): after deselect the
+        # overlay selection clears and the app bar reverts to the component /
+        # default context (the global SCALE group is present).
+        reset = by_step.get("reset", {})
+        reset_own = reset.get("ownSelKind", "")
+        reset_groups = reset.get("appBarGroups", []) or []
+        reset_scale = ("SCALE" in reset_groups) or bool(reset.get("hasScaleGroup"))
+        ctx_ok = (reset_own == "") and reset_scale
+        results.append({
+            "rule": "context_reset_to_component",
+            "passed": ctx_ok,
+            "detail": (
+                f"reset ownSelKind={reset_own!r} appBarGroups={reset_groups} "
+                f"hasScaleGroup={reset.get('hasScaleGroup')} (want ownSel empty + SCALE present)"
+            ),
+        })
 
     tr.invariants = results
     # write back

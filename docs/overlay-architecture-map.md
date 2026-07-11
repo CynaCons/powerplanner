@@ -29,7 +29,7 @@ CHART_ROOT, all catch blocks).
 
 ## Confirmed defects (v2.5.0 targets)
 1. Ghosts on other monitors: no view-type guard + pid-based host-active +
-   blind GetActiveWindow tracking (details: docs/SRS_OverlayLifecycle.md §6).
+   blind GetActiveWindow tracking (details: spec/srs-native/SRS-OverlayLifecycle.md).
 2. Per-tick unconditional `SetWindowPos(HWND_TOPMOST)` in
    ShowOverlayForChartRect (~3690) — app bar shows the correct pattern (~4249).
 3. Redundant double repaint when chartChanged (~5571-5577).

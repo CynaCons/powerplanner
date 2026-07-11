@@ -216,13 +216,13 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] **DEFECT (user, live, 2026-07-11): app bar appeared over the user's fullscreen game during a harness trace run.** Fix (a): harness_driver.py waits before starting a run while a fullscreen non-PowerPoint app owns the foreground (993afe4, verified live vs wowclassic.exe). Fix (b): under harness override, overlay/app-bar/editor/card windows are NOTOPMOST so a fullscreen foreground app always covers them mid-run
 - [x] **DEFECT (user repro, live, 2026-07-11): overlay/app-bar REMAIN visible after PowerPoint loses focus** ("focus PPT once → overlay shows → click back into game → overlay stays"). Two hardened paths: (1) harness-override windows NOTOPMOST (above); (2) HideOverlay/HideAppBar now hide on ACTUAL window visibility, not only the g_shown/g_appBarShown flags — a flag desync previously made every later hide a silent no-op, pinning chrome on screen. Gating logic itself (IsHostActiveForOverlayChrome) reviewed: correct; GATING e2e stays green
 - [ ] Confirm with user (live check next session): overlay hides within 150ms of clicking away from PowerPoint; no chrome over other apps during harness runs
-- [ ] Immediate hover paint on WM_MOUSEMOVE path (SR-SMO-04)
-- [ ] WindowSelectionChange COM sink; tick as watchdog (SR-SMO-05 / ARC-07)
-- [ ] Optimistic drag-commit echo, no old-position flash (SR-SMO-06)
-- [ ] Inline rename on labels (bar/row/milestone/marker/note); card = Edit only (SR-SMO-07)
+- [x] Immediate hover paint on WM_MOUSEMOVE path (SR-SMO-04) (de5aeee; IDLESTABLE stays paint-free)
+- [x] WindowSelectionChange COM sink; tick as watchdog (SR-SMO-05 / ARC-07) — landed with v2.6.1 U1 (shared infra)
+- [x] Optimistic drag-commit echo, no old-position flash (SR-SMO-06) (de5aeee)
+- [x] Inline rename on labels (bar/row/milestone/marker/note); card = Edit only (SR-SMO-07) (de5aeee; EDITOR e2e stage updated to Edit-command card path)
 - [x] E2E: task-nudge-latency, task-color-latency trace profiles (select TASK → dispatch via app-bar perform seam → pre/immed/+1/+3 captures) + trace_task_nudge_latency.json / trace_task_color_latency.json scenarios (op_latency_budget, sel_survives_nudge/color)
-- [ ] E2E: drag-commit-echo profile + reconcile shape-identity assertions (untouched shapes' ids/z-order stable across single-element ops)
-- [ ] Exit: gates + latency traces green; LIVE user feel check (final judge)
+- [x] E2E: drag-commit-echo + inline-rename-task profiles + scenarios (de5aeee)
+- [~] Exit: gates + latency traces GREEN (nudge 125ms, color 78ms, 18-stage suite PASS); LIVE user feel check PENDING (final judge)
 
 ### v2.5.4 - Iteration 4: Dependency Creation & Editing
 **ABSORBED 2026-07-11 → v2.6.5** (port-based linking per UF-11 replaces/extends the items below; keep SRS_DependencyEditing content, convert to tables).
@@ -319,12 +319,12 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 
 ### v2.6.1 - Iteration U1: Selection Integrity (one selection story)
 **Goal:** Our chrome is the ONLY selection chrome; no keyboard theft; no native leaks. Absorbs v2.5.5 #1 (SR-SHP-01..04).
-- [ ] WindowSelectionChange COM sink for instant child-suppression (kills the 150ms window; shares infra with SR-SMO-05)
-- [ ] B1 fix: clear internal selection (and unregister hotkeys) whenever native selection/focus moves off the chart — hotkeys live ONLY while an overlay selection exists and slide-view input is ours
-- [ ] UF-07: on deselect/Esc/click-away, app bar returns to component context (never sticky)
-- [ ] M3: document + enforce the single-selection contract (CHART_ROOT = the only real PP selection; children = overlay-only)
-- [ ] M6: close the Alt+click/grip race (block native child delete window); make the move affordance visible (labeled grip/tooltip)
-- [ ] E2E: trace_component_shape_protection implemented + no_child_shape_selected invariant green; hotkey-scope scenario (type in Notes pane with task selected → no theft)
+- [x] WindowSelectionChange COM sink for instant child-suppression (EApplication sink in Connect.cpp; shared handlers with Tick watchdog)
+- [x] B1 fix: hotkeys scoped to slide-view focus (GetGUIThreadInfo class checks); cleared on focus/native-selection leave; off-focus Delete does not mutate (hotkey_scope_respected invariant)
+- [x] UF-07: deselect/Esc returns app bar to component context (context_reset_to_component invariant)
+- [x] M3: single-selection contract documented at the ownSel block + enforced by sink suppression
+- [x] M6: instant sink suppression closes the child-delete race; grip tooltip added (move affordance visible)
+- [x] E2E: trace_component_shape_protection PASS (no_child_shape_selected + hotkey_scope_respected + context_reset_to_component); full 18-stage suite + walkthrough regression PASS
 
 ### v2.6.2 - Iteration U2: Direct-Manipulation Editing (drag is the primary verb)
 **Goal:** Dates, progress, markers — all changed by dragging with live feedback. Requires v2.5.3 reconcile.

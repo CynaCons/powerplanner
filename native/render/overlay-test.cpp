@@ -2017,21 +2017,18 @@ int wmain(int argc, wchar_t** argv) {
 							::ScreenToClient(ov, &clientPt);
 							SetOverlayCursorOverride(screenPt);
 
-							LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
-							// A real double-click is DOWN,UP,DOWN,UP with the
-							// second DOWN carrying WM_LBUTTONDBLCLK instead of
-							// a plain WM_LBUTTONDOWN (matches CS_DBLCLKS
-							// window-class semantics, which the overlay uses).
-							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
-							::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
-							PumpFor(60);
-							::PostMessageW(ov, WM_LBUTTONDBLCLK, MK_LBUTTON, clickLp);
-							::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+							// v2.5.3 SR-SMO-07 / M1 one-verb convention: double-click on a
+							// label region now opens the INLINE rename editor (covered by
+							// the INPLACE stage); the CARD is reached via the explicit
+							// "Edit" command only. Open it exactly as the app bar would.
+							Overlay_SelectForTest("TASK", targetTaskId.c_str());
+							PumpFor(200);
+							Overlay_PerformAppBarCommandForTest((int)HtCmd_Edit);
 							PumpFor(500);
 
 							HWND card = ::FindWindowW(PP_CARD_EDITOR_CLASS, NULL);
 							if (!card || !::IsWindow(card)) {
-								wprintf(L"EDITOR: card editor window not found after double-click\n");
+								wprintf(L"EDITOR: card editor window not found after Edit command\n");
 							} else {
 								HWND startField = ::GetDlgItem(card, OVERLAY_CARD_ID_START_FOR_TEST);
 								HWND endField = ::GetDlgItem(card, OVERLAY_CARD_ID_END_FOR_TEST);
