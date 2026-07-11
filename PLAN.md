@@ -20,9 +20,11 @@
 - ✅ v2.4.0: full before/immed/delayed trace + invariants + rich dump (rowCount, hasScaleGroup, appBarGroups) + perform seam + proof that it flags v2.4.1 issues (e.g. hasScale while ROW)
 - Ongoing: extended trace for overall CHART_ROOT move/resize; LockWindowUpdate + flash detection; additional visual reflow hunt (graph/labels) 
 
-### Next Up
-- **v2.5.3** - DRASTIC: Direct-manipulation reactivity & smoothness (spec/srs-native/SRS_InteractionSmoothness.md) — user verdict 2026-07-11: "looks good but not usable; not reactive, not smooth, not intuitive" — STAYS FIRST
-- **v2.6.x** - UX Overhaul Program (Phase 11 below): 2026-07-11 UX audit (B1/B2, M1–M6, N1–N5) + user feedback round 2 (UF-01..UF-12). Absorbs v2.5.4 (dependency editing → v2.6.5) and the v2.5.5 feedback-round items (#1–#4 → v2.6.1/v2.6.3/v2.6.6); v2.5.5 architecture/spec-migration items → v2.6.8
+### Next Up (EXECUTION ORDER — confirmed by user 2026-07-11)
+1. **v2.5.3** — Direct-manipulation reactivity ≤200ms (spec/srs-native/SRS_InteractionSmoothness.md). FIRST: nothing UX lands well at 4s/op.
+2. **v2.6.0 → v2.6.8** — UX Overhaul Program (Phase 11 below), in slice order U0..U8: conventions+gate, selection integrity, direct-manipulation editing, app-bar docking/context, multi-select, linking+creation discoverability, theme-coherent surfaces, scale settings, cohesion/arch/spec migration. UX is the priority of the program.
+- Inputs: 2026-07-11 UX audit (B1/B2, M1–M6, N1–N5) + user feedback round 2 (UF-01..UF-12). Absorbs v2.5.4 (dependency editing → v2.6.5) and the v2.5.5 feedback-round items (#1–#4 → v2.6.1/v2.6.3/v2.6.6); v2.5.5 architecture/spec-migration items → v2.6.8
+- Delegation: coordinator (Claude) dispatches PowerSpawn subagents (cursor/copilot/grok/codex) per unit, validates gates itself, commits, ticks PLAN.md. Provider/model performance is logged in docs/on-slide-coordinator-log.md for the end-of-program comparison report.
 - (v2.5.2 complete; v2.5.0 and v2.5.1 complete — see detailed sections below)
 - Audit references: docs/overlay-architecture-map.md, docs/onslide-ux-inventory.md, spec/srs-native/ (new canonical location for native-only ASPICE SRS tables)
 - Continue to use `trace` + `check-invariants` on any chrome mutation work. Update docs/ *.md and PLAN.md recursively.
@@ -35,7 +37,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [README](README.md)
 - [Specification (concept layer)](spec/README.md)
 - [Native add-in notes](docs/native-addin.md)
-- [Implementation History](docs/PLAN_HISTORY.md) - Completed iterations (old web)
+- Implementation History: `git log` (web iterations v0–v2 closed in history)
 - [On-Slide UX Plan](docs/onslide-v4-plan.md)
 
 ---
@@ -388,4 +390,4 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - Touch, advanced theming, day-planning views
 - Print / export enhancements
 
-See git for full historical web iterations (v0–v2) and docs/PLAN_HISTORY.md if created.
+See git for full historical web iterations (v0–v2).
