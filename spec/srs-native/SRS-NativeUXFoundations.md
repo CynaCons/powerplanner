@@ -47,6 +47,6 @@ Reference impl: `native/PowerPlannerAddin/` (Overlay.cpp, GanttBuilder.cpp, Gant
 | SR-NUI-02 | Changes to app bar content rules, docking math, or suppression logic must re-run the full appbar_matrix + relevant trace profiles and pass invariants before considered done. | Protect against re-introducing flashes, wrong context, or detached UI. | Harness execution in the loop. | v2.4.0+ trace infrastructure |
 
 ## Open / Related
-- Convert and migrate legacy prose SRS files from docs/ (SRS_RowAndTaskSelection.md etc.) into proper tables here or shared.
+- Continue migrating remaining legacy prose SRS files from docs/ into proper tables here or shared; `spec/srs-native/SRS-RowAndTaskSelection.md` is the migrated selection example.
 - Implementation of fully custom menu and card surfaces may be staged (first make right-click custom, then card).
 - Ties to v2.5.2 (creation), v2.5.1 (calm chrome), v2.5.0 (lifecycle), v2.5.4 (structure + theme parity).

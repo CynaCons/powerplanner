@@ -31,6 +31,7 @@ IDs: `SR-<FEAT>-NNN` or `SRS-NAT-<FEAT>-NNN` (choose a stable short tag per file
 ## Current Files
 - SRS-NativeUXFoundations.md — covers 2026-07-11 user feedback points (component shape selectability, sticky appbar, context appbar, theme-coherent surfaces).
 - SRS-InteractionConventions.md — binding interaction-conventions requirements (direct manipulation, live preview, commit/cancel, affordances, platform conventions) for the native on-slide Gantt editor.
+- SRS-RowAndTaskSelection.md — native row/task selection, highlighting, progress editability, and emitted-shape stability requirements migrated from legacy prose in v2.6.8.
 - (Future) Split files by concern aligned with v2.5.x iterations and docs/onslide-ux-inventory.md.
 
 When a native SRS generalizes to both surfaces, move the requirement to `../srs/` and update traces.

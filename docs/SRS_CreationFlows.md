@@ -95,5 +95,5 @@ Known defects this SRS addresses (inventory 2026-07-11):
 - Brackets remain out of scope here (no on-slide bracket support yet —
   candidate for a later iteration; model support exists).
 - Collapse chevron toggle (spec R2) tracked separately in the plan.
-- Related: SRS_RowAndTaskSelection.md, SRS_ProgressEditing.md,
+- Related: spec/srs-native/SRS-RowAndTaskSelection.md, SRS_ProgressEditing.md,
   SRS_DependencyEditing.md.

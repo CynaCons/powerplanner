@@ -118,4 +118,4 @@ Defects observed in trace screenshots (2026-07-10/11) + user feedback:
   considered and rejected for now — native grips are the platform-familiar
   resize affordance for the whole object.
 - Related: SRS_OverlayLifecycle.md (when chrome may exist at all),
-  SRS_RowAndTaskSelection.md (selection semantics).
+  spec/srs-native/SRS-RowAndTaskSelection.md (selection semantics).

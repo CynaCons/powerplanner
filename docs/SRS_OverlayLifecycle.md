@@ -148,5 +148,5 @@ New/extended seams (all input-neutral, harness-only):
   (4) redundant double repaint per tick when chartChanged; (5) coarse
   LockWindowUpdate freezes; (6) app-bar full re-render per hover transition.
 - ARC-07 (WindowSelectionChange event sink) would reduce idle work further.
-- Related SRS: docs/SRS_RowAndTaskSelection.md (selection chrome states),
+- Related SRS: spec/srs-native/SRS-RowAndTaskSelection.md (selection chrome states),
   upcoming SRS_SelectionChromeVisuals.md (what chrome looks like).
