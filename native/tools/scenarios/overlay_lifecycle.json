@@ -1,0 +1,9 @@
+{
+  "name": "overlay_lifecycle",
+  "description": "v2.5.0 SR-LIFE gating + idle render stability (docs/SRS_OverlayLifecycle.md)",
+  "exe": "ppoverlay",
+  "args": [],
+  "timeout": 420,
+  "retries": 1,
+  "expected_markers": ["GATING PASS", "IDLESTABLE PASS", "INPUT NEUTRAL OK"]
+}

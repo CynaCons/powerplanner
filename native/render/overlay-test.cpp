@@ -156,6 +156,24 @@ static void SetOverlayCursorOverride(POINT screenPt, bool altDown = false) {
 	Overlay_SetCursorPosOverrideForTest(true, screenPt, altDown);
 }
 
+static bool JsonHasShown(const char* json, int want) {
+	if (!json) return false;
+	char pat[24];
+	::snprintf(pat, sizeof(pat), "\"shown\":%d", want);
+	return ::strstr(json, pat) != nullptr;
+}
+
+static bool JsonClsVisEquals(const char* json, const char* cls, int wantVis) {
+	if (!json || !cls) return false;
+	char needle[96];
+	::snprintf(needle, sizeof(needle), "\"cls\":\"%s\"", cls);
+	const char* p = ::strstr(json, needle);
+	if (!p) return false;
+	const char* vis = ::strstr(p, "\"vis\":");
+	if (!vis) return false;
+	return vis[6] == ('0' + wantVis);
+}
+
 static std::string NarrowFn(const wchar_t* w);
 
 static bool HarnessUndoOnce(IDispatch* app) {
@@ -3238,6 +3256,81 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"MARKERMGMT FAIL COM error 0x%08lX\n", (unsigned long)e.Error());
 				}
 				wprintf(pass ? L"MARKERMGMT PASS\n" : L"MARKERMGMT FAIL\n");
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 18: GATING -----------------------------------------------
+			// SR-LIFE gating: host-active override drives shown/vis state; dump
+			// JSON snapshots instead of probing individual hwnds like SCOPE.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				const char* failReason = "unknown";
+				try {
+					char snapA[2048] = {};
+					char snapB[2048] = {};
+
+					Overlay_SetHostActiveOverrideForTest(1);
+					PumpFor(400);
+					Overlay_DumpWindowStateForTest(snapA, (int)sizeof(snapA));
+
+					Overlay_SetHostActiveOverrideForTest(0);
+					PumpFor(400);
+					Overlay_DumpWindowStateForTest(snapB, (int)sizeof(snapB));
+
+					const bool aOk = JsonHasShown(snapA, 1)
+						&& JsonClsVisEquals(snapA, "PowerPlannerOverlay", 1);
+					const bool bOk = JsonHasShown(snapB, 0)
+						&& JsonClsVisEquals(snapB, "PowerPlannerOverlay", 0)
+						&& JsonClsVisEquals(snapB, "PowerPlannerAppBar", 0)
+						&& JsonClsVisEquals(snapB, "PowerPlannerInlineEditor", 0)
+						&& JsonClsVisEquals(snapB, "PowerPlannerCardEditor", 0);
+
+					pass = aOk && bOk;
+					if (!aOk) failReason = "snapshot A expected shown:1 and overlay vis:1";
+					else if (!bOk) failReason = "snapshot B expected shown:0 and all windows vis:0";
+
+					Overlay_SetHostActiveOverrideForTest(1);
+					PumpFor(400);
+				} catch (const _com_error& e) {
+					failReason = "COM error";
+					wprintf(L"GATING: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				if (pass) {
+					wprintf(L"GATING PASS\n");
+				} else {
+					wprintf(L"GATING FAIL: %hs\n", failReason);
+				}
+				if (!pass) rc = 1;
+			}
+
+			// ---- stage 19: IDLESTABLE -------------------------------------------
+			// Idle ticks must not repaint or SetWindowPos when nothing changed.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				long c0Ov = 0, c0Ab = 0, c0OvSwp = 0, c0AbSwp = 0;
+				long c1Ov = 0, c1Ab = 0, c1OvSwp = 0, c1AbSwp = 0;
+				try {
+					Overlay_SelectForTest("", "");
+					// Fixed screen point outside the chart so hover polling sees no change.
+					SetOverlayCursorOverride({ 10, 10 });
+					PumpFor(400);
+
+					Overlay_GetRenderCountersForTest(&c0Ov, &c0Ab, &c0OvSwp, &c0AbSwp);
+					PumpFor(900);
+					Overlay_GetRenderCountersForTest(&c1Ov, &c1Ab, &c1OvSwp, &c1AbSwp);
+
+					pass = (c1Ov == c0Ov && c1Ab == c0Ab && c1OvSwp == c0OvSwp && c1AbSwp == c0AbSwp);
+				} catch (const _com_error& e) {
+					wprintf(L"IDLESTABLE: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+				if (pass) {
+					wprintf(L"IDLESTABLE PASS\n");
+				} else {
+					wprintf(L"IDLESTABLE FAIL: paints %ld->%ld,%ld->%ld swp %ld->%ld,%ld->%ld\n",
+						c0Ov, c1Ov, c0Ab, c1Ab, c0OvSwp, c1OvSwp, c0AbSwp, c1AbSwp);
+				}
 				if (!pass) rc = 1;
 			}
 

@@ -116,6 +116,12 @@ void Overlay_PerformAppBarCommandForTest(int cmd);
 // Never touches COM. Safe for harnesses to call after steps.
 const char* Overlay_DumpChromeStateForTest();
 
+// Render/SWP counters and compact window-state dump for gate harnesses.
+// Never touches COM.
+void Overlay_GetRenderCountersForTest(long* overlayPaints, long* appBarPaints,
+                                      long* overlaySwp, long* appBarSwp);
+void Overlay_DumpWindowStateForTest(char* buf, int bufLen);
+
 // ---- floating card editor (double-click TaskBody/Milestone/Text) test hooks
 // The card is a real top-level window (WS_EX_TOOLWINDOW), registered under
 // this class name (mirrors Overlay.cpp's private kCardClass, kept in sync by

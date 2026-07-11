@@ -125,6 +125,17 @@ static bool CaptureRectToPng(const RECT& rc, const wchar_t* path) {
 
 int wmain(int argc, wchar_t** argv) {
 	SetHarnessDpiAwareness();
+
+	bool attach = false;
+	for (int i = 1; i < argc; ++i) {
+		if (wcscmp(argv[i], L"--attach") == 0) { attach = true; break; }
+	}
+	HWND existingPpt = ::FindWindowW(L"PPTFrameClass", nullptr);
+	if (existingPpt && !attach) {
+		wprintf(L"APPBARSHOT REFUSE: PowerPoint already running; close it or pass --attach\n");
+		return 2;
+	}
+
 	::CoInitialize(NULL);
 	Gdiplus::GdiplusStartupInput gsi;
 	ULONG_PTR gdiToken = 0;
@@ -311,11 +322,34 @@ int wmain(int argc, wchar_t** argv) {
 				return std::wstring(appPng);
 			};
 
-			// Pre setup depends on profile
-			if (traceProfile && (wcsstr(traceProfile, L"row-") || wcsstr(traceProfile, L"task-") || wcsstr(traceProfile, L"overall-"))) {
-				Overlay_SelectForTest("", ""); // clean start for these flows
+			// Pre setup depends on profile. Flows whose op IS the selection
+			// (row-label-select / row-then-overall / task-*) and the overall-*
+			// auto-clear flows start clean; the row op flows (row-add-below /
+			// row-rename / row-scale) run their op "while row selected", so
+			// select the row up front and simulate the common native state
+			// (CHART_ROOT stays natively selected after an item click because
+			// children are suppressed) so the op runs under the takeover guard.
+			bool traceCleanStart = traceProfile && (
+				wcscmp(traceProfile, L"row-label-select") == 0 ||
+				wcscmp(traceProfile, L"row-then-overall") == 0 ||
+				wcsstr(traceProfile, L"task-") ||
+				wcsstr(traceProfile, L"overall-"));
+			if (traceCleanStart) {
+				Overlay_SelectForTest("", ""); // clean start: the branch drives selection itself
 			} else {
 				Overlay_SelectForTest("ROW", "research");
+				try {
+					PowerPoint::ShapesPtr shs = slide->GetShapes();
+					long nn = shs->GetCount();
+					for (long ii = 1; ii <= nn; ++ii) {
+						auto s = shs->Item(_variant_t(ii));
+						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+							s->Select(Office::msoTrue);
+							break;
+						}
+					}
+				} catch (...) {}
 			}
 			PumpFor(300);
 			captureStep("pre", traceProfile);
@@ -477,6 +511,10 @@ int wmain(int argc, wchar_t** argv) {
 				PumpFor(300);
 				captureStep("+3", traceProfile);
 			}
+
+			// Completion marker: every other harness mode prints an OK marker; the
+			// driver classifies a marker-less rc==0 run as FLAKE (and retries it).
+			wprintf(L"TRACE COMPLETE OK\n");
 
 			OverlayStop();
 			if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);

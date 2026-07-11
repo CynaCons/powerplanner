@@ -138,6 +138,10 @@ UINT_PTR g_timer = 0;
 bool     g_shown = false;
 bool     g_mutating = false;
 bool     g_inTick = false;
+static bool g_lastHostActive = true;
+static bool g_lastViewOk = true;
+static long g_overlayPaintCount = 0, g_appBarPaintCount = 0;
+static long g_overlaySwpCount = 0, g_appBarSwpCount = 0;
 ULONG_PTR g_gdiplusToken = 0;
 
 // ---- bottom app bar (second layered chrome window) -------------------------
@@ -3621,7 +3625,8 @@ void RenderOverlay() {
 		POINT src = { 0, 0 };
 		SIZE  size = { w, h };
 		BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-		::UpdateLayeredWindow(g_hwnd, NULL, &dst, &size, g_bufDc, &src, 0, &bf, ULW_ALPHA);
+		if (::UpdateLayeredWindow(g_hwnd, NULL, &dst, &size, g_bufDc, &src, 0, &bf, ULW_ALPHA))
+			++g_overlayPaintCount;
 	}
 	catch (const std::exception&) {
 		OvLog(L"overlay render failed (std::exception)");
@@ -3687,9 +3692,15 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	RECT oldWindow = {};
 	bool wasShown = g_shown;
 	bool hadWindow = ::GetWindowRect(g_hwnd, &oldWindow) != FALSE;
-	::SetWindowPos(g_hwnd, HWND_TOPMOST, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	bool moved = hadWindow && (oldWindow.left != wx || oldWindow.top != wy);
+	bool resized = hadWindow && (oldWindow.right - oldWindow.left != ww || oldWindow.bottom - oldWindow.top != wh);
+	bool needUpdate = dpiChanged || !wasShown || !hadWindow || moved || resized;
+	if (needUpdate) {
+		::SetWindowPos(g_hwnd, HWND_TOPMOST, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		++g_overlaySwpCount;
+	}
 	g_shown = true;
-	if (dpiChanged || !wasShown || !hadWindow || oldWindow.left != wx || oldWindow.top != wy || oldWindow.right - oldWindow.left != ww || oldWindow.bottom - oldWindow.top != wh) {
+	if (needUpdate) {
 		RequestOverlayRepaint();
 	}
 }
@@ -4132,7 +4143,8 @@ void RenderAppBar() {
 		POINT src = { 0, 0 };
 		SIZE size = { w, h };
 		BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-		::UpdateLayeredWindow(g_appBarHwnd, NULL, &dst, &size, g_abDc, &src, 0, &bf, ULW_ALPHA);
+		if (::UpdateLayeredWindow(g_appBarHwnd, NULL, &dst, &size, g_abDc, &src, 0, &bf, ULW_ALPHA))
+			++g_appBarPaintCount;
 	}
 	catch (const std::exception&) {
 		OvLog(L"app-bar render failed (std::exception)");
@@ -4248,6 +4260,7 @@ void ShowAppBar(const RECT& slideRect) {
 	bool firstShow = !g_appBarShown;
 	if (geomChanged || firstShow) {
 		::SetWindowPos(g_appBarHwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		++g_appBarSwpCount;
 		g_appBarLastRect = want;
 		g_appBarGeomValid = true;
 	}
@@ -4301,7 +4314,6 @@ void HandleAppBarCommand(int cmd) {
 	}
 
 	if (g_ownSelKind == "ROW" && !g_ownSelId.empty()) {
-		if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(g_pptHwnd);  // freeze paint during row op (rename or add/delete row) to prevent label/graph flash
 		HtMenuOp op = MapRowAppBarCommand(cmd);
 		if (op.opKind == HtOpKind::RenameRow) {
 			for (const auto& region : g_editRegions) {
@@ -4309,12 +4321,10 @@ void HandleAppBarCommand(int cmd) {
 					try { OpenInlineEditor(region); } catch (...) { OvLog(L"row rename failed"); }
 					g_appBarValid = false;
 					RequestOverlayRepaint();
-					if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 					return;
 				}
 			}
 			OvLog(L"row rename: no ROW_LABEL edit region");
-			if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 			return;
 		}
 		if (op.opKind != HtOpKind::None) {
@@ -4324,10 +4334,8 @@ void HandleAppBarCommand(int cmd) {
 			HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
 			g_appBarValid = false;
 			RequestOverlayRepaint();
-			if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 			return;
 		}
-		if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 	}
 
 	if ((g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE") && !g_ownSelId.empty()) {
@@ -4521,7 +4529,20 @@ void CommitLinkTarget(const std::string& targetId) {
 // CHART_ROOT in place when possible (pure move/resize/retext never deletes
 // or regroups anything) and only falls back to a full delete+re-emit
 // (InsertGantt) internally if reconciliation itself fails.
+static int g_pptPaintLockDepth = 0;
+struct PptPaintLock {
+	bool locked = false;
+	PptPaintLock() {
+		if (g_pptPaintLockDepth++ == 0 && g_pptHwnd && ::IsWindow(g_pptHwnd))
+			locked = !!::LockWindowUpdate(g_pptHwnd);
+	}
+	~PptPaintLock() {
+		if (--g_pptPaintLockDepth == 0 && locked) ::LockWindowUpdate(NULL);
+	}
+};
+
 void RebuildChart(PpDocument& doc, const std::string& selectId) {
+	PptPaintLock paintLock;
 	StartNewUndoEntryIfPossible();
 	InvalidateHitSnapshot();
 	HRESULT hr = UpdateGantt(g_app, doc, selectId);
@@ -4788,10 +4809,9 @@ void HandleHoverInsertRow() {
 	const std::string afterRowId = g_hoverRowId;
 
 	g_mutating = true;
-	if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(g_pptHwnd);  // freeze to hide transient delete/add of labels+graph during row insert
 	try {
 		std::string json = ReadGanttFromSlide(g_app);
-		if (json.empty()) { g_mutating = false; goto unlock; }
+		if (json.empty()) { g_mutating = false; return; }
 
 		PpDocument doc = DocumentFromJson(json);
 		std::string rowId = AddRowBelow(doc, afterRowId, "New Row");
@@ -4813,8 +4833,6 @@ void HandleHoverInsertRow() {
 	catch (...) {
 		OvLog(L"unknown error during hover row insert");
 	}
-unlock:
-	if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 	g_mutating = false;
 }
 
@@ -5317,16 +5335,8 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 // PowerPoint's own root window, OR the foreground window is one of OUR
 // top-level windows (the overlay itself, the inline editor, or the card
 // editor — all legitimate "PowerPoint is active" states, e.g. right after a
-// click before focus returns to the main frame), OR the foreground window
-// belongs to the POWERPNT.EXE process (covers PowerPoint-owned dialogs and
-// flyouts that are themselves separate top-level windows).
-//
-// PID TRAP: compare against the pid that OWNS ppRoot (via
-// GetWindowThreadProcessId(ppRoot, &pid)), NOT GetCurrentProcessId(). In
-// production the overlay DLL runs in-process inside POWERPNT.EXE so the two
-// pids are identical, but this same Overlay.cpp is also linked into
-// ppoverlay.exe for the harness, where PowerPoint is a SEPARATE process —
-// GetCurrentProcessId() would always be wrong there.
+// click before focus returns to the main frame), OR the foreground window is an
+// owned popup of the tracked PowerPoint root (GA_ROOTOWNER).
 //
 // Also requires ppRoot to be non-iconic (not minimized) and visible.
 bool IsHostActiveForOverlayChrome(HWND ppRoot) {
@@ -5348,13 +5358,24 @@ bool IsHostActiveForOverlayChrome(HWND ppRoot) {
 	if (fg == g_hwnd || fg == g_editorHwnd || fg == g_cardHwnd || fg == g_appBarHwnd) return true;
 	if (fgRoot == g_hwnd || fgRoot == g_editorHwnd || fgRoot == g_cardHwnd || fgRoot == g_appBarHwnd) return true;
 
-	DWORD ppPid = 0;
-	::GetWindowThreadProcessId(ppRoot, &ppPid);
-	DWORD fgPid = 0;
-	::GetWindowThreadProcessId(fg, &fgPid);
-	if (ppPid != 0 && fgPid == ppPid) return true;
+	HWND fgRootOwner = ::GetAncestor(fg, GA_ROOTOWNER);
+	if (fgRootOwner == ppRoot) return true;
+	if (fgRootOwner == g_hwnd || fgRootOwner == g_editorHwnd || fgRootOwner == g_cardHwnd || fgRootOwner == g_appBarHwnd) return true;
 
 	return false;
+}
+
+static bool IsHostViewEditableForOverlay(PowerPoint::DocumentWindowPtr win) {
+	try {
+		if (!win) return false;
+		long vt = (long)win->GetViewType();           // PpViewType
+		if (vt != 9 /*ppViewNormal*/ && vt != 1 /*ppViewSlide*/) return false;
+		if (g_app) {
+			PowerPoint::SlideShowWindowsPtr ss = g_app->GetSlideShowWindows();
+			if (ss && ss->GetCount() >= 1) return false;   // presenting: hide
+		}
+		return true;
+	} catch (const _com_error&) { return false; } catch (...) { return false; }
 }
 
 // Poll the slide; keep the overlay over the chart while selection chrome follows
@@ -5428,7 +5449,8 @@ void Tick() {
 		// as the no-chart path below. Latency is bounded by one 150ms tick,
 		// which is acceptable per the task spec.
 		HWND ppRoot = ::GetAncestor(g_pptHwnd, GA_ROOT);
-		if (!IsHostActiveForOverlayChrome(ppRoot)) {
+		g_lastHostActive = IsHostActiveForOverlayChrome(ppRoot);
+		if (!g_lastHostActive) {
 			HideOverlay();
 			HideAppBar(true);
 			// The inline editor and card editor each already commit/cancel
@@ -5438,6 +5460,18 @@ void Tick() {
 			// possibly NULL. Only hide-if-still-visible here — never force a
 			// second commit/cancel (that would double-fire the editors' own
 			// teardown logic).
+			if (g_editorHwnd && ::IsWindow(g_editorHwnd)) ::ShowWindow(g_editorHwnd, SW_HIDE);
+			if (g_cardHwnd && ::IsWindow(g_cardHwnd)) ::ShowWindow(g_cardHwnd, SW_HIDE);
+			return;
+		}
+
+		// Harness override (>=1 forces active) also bypasses the view and
+		// host-rect fail-closed gates: the harness drives synthetic window
+		// states where real COM/GetWindowRect checks are meaningless.
+		g_lastViewOk = (g_hostActiveOverrideMode >= 1) ? true : IsHostViewEditableForOverlay(win);
+		if (!g_lastViewOk) {
+			HideOverlay();
+			HideAppBar(true);
 			if (g_editorHwnd && ::IsWindow(g_editorHwnd)) ::ShowWindow(g_editorHwnd, SW_HIDE);
 			if (g_cardHwnd && ::IsWindow(g_cardHwnd)) ::ShowWindow(g_cardHwnd, SW_HIDE);
 			return;
@@ -5461,6 +5495,17 @@ void Tick() {
 			win->PointsToScreenPixelsY(chartTop + chartHeight)
 		};
 		NormalizeRect(g_chartScreenRect);
+		if (g_hostActiveOverrideMode < 0) {
+			RECT hostRc{}; RECT inter{};
+			if (!::GetWindowRect(ppRoot, &hostRc) ||
+				!::IntersectRect(&inter, &g_chartScreenRect, &hostRc)) {
+				HideOverlay();
+				HideAppBar(true);
+				if (g_editorHwnd && ::IsWindow(g_editorHwnd)) ::ShowWindow(g_editorHwnd, SW_HIDE);
+				if (g_cardHwnd && ::IsWindow(g_cardHwnd)) ::ShowWindow(g_cardHwnd, SW_HIDE);
+				return;
+			}
+		}
 		g_chartProj = Narrow((const wchar_t*)chart->GetTags()->Item(_bstr_t(L"PP_PROJ")));
 		_bstr_t rowYTag = chart->GetTags()->Item(_bstr_t(L"PP_ROWY"));
 		g_chartRowY = rowYTag.length() ? Narrow((const wchar_t*)rowYTag) : "";
@@ -5568,10 +5613,6 @@ void Tick() {
 			}
 		} catch (...) { slideRect = g_chartScreenRect; }
 		ShowAppBar(slideRect);
-		if (chartChanged) {
-			// immediate follow for overall move/resize - reduces "laggy/weird" feel when user drags the CHART_ROOT group
-			RequestOverlayRepaint();
-		}
 		if (chartChanged || hoverChanged || mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
 			RequestOverlayRepaint();
 		}
@@ -5782,4 +5823,50 @@ void Overlay_PerformAppBarCommandForTest(int cmd) {
 	// After a mutation the appbar is usually dirtied inside handler paths; ensure rebuild on next tick.
 	g_appBarValid = false;
 	RequestOverlayRepaint();
+}
+
+void Overlay_GetRenderCountersForTest(long* overlayPaints, long* appBarPaints,
+                                      long* overlaySwp, long* appBarSwp) {
+	if (overlayPaints) *overlayPaints = g_overlayPaintCount;
+	if (appBarPaints) *appBarPaints = g_appBarPaintCount;
+	if (overlaySwp) *overlaySwp = g_overlaySwpCount;
+	if (appBarSwp) *appBarSwp = g_appBarSwpCount;
+}
+
+void Overlay_DumpWindowStateForTest(char* buf, int bufLen) {
+	if (!buf || bufLen <= 0) return;
+	auto windowFields = [](HWND hwnd, int& vis, long& l, long& t, long& r, long& b) {
+		vis = (hwnd && ::IsWindow(hwnd) && ::IsWindowVisible(hwnd)) ? 1 : 0;
+		l = t = r = b = 0;
+		if (hwnd && ::IsWindow(hwnd)) {
+			RECT wr{};
+			if (::GetWindowRect(hwnd, &wr)) {
+				l = wr.left; t = wr.top; r = wr.right; b = wr.bottom;
+			}
+		}
+	};
+	int ovVis = 0, abVis = 0, edVis = 0, cdVis = 0;
+	long ovL = 0, ovT = 0, ovR = 0, ovB = 0;
+	long abL = 0, abT = 0, abR = 0, abB = 0;
+	long edL = 0, edT = 0, edR = 0, edB = 0;
+	long cdL = 0, cdT = 0, cdR = 0, cdB = 0;
+	windowFields(g_hwnd, ovVis, ovL, ovT, ovR, ovB);
+	windowFields(g_appBarHwnd, abVis, abL, abT, abR, abB);
+	windowFields(g_editorHwnd, edVis, edL, edT, edR, edB);
+	windowFields(g_cardHwnd, cdVis, cdL, cdT, cdR, cdB);
+	::snprintf(buf, (size_t)bufLen,
+		"{\"hostActive\":%d,\"viewOk\":%d,\"shown\":%d,"
+		"\"windows\":["
+		"{\"cls\":\"PowerPlannerOverlay\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld},"
+		"{\"cls\":\"PowerPlannerAppBar\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld},"
+		"{\"cls\":\"PowerPlannerInlineEditor\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld},"
+		"{\"cls\":\"PowerPlannerCardEditor\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld}],"
+		"\"counters\":{\"overlayPaints\":%ld,\"appBarPaints\":%ld,\"overlaySwp\":%ld,\"appBarSwp\":%ld}}",
+		g_lastHostActive ? 1 : 0, g_lastViewOk ? 1 : 0, g_shown ? 1 : 0,
+		ovVis, ovL, ovT, ovR, ovB,
+		abVis, abL, abT, abR, abB,
+		edVis, edL, edT, edR, edB,
+		cdVis, cdL, cdT, cdR, cdB,
+		g_overlayPaintCount, g_appBarPaintCount, g_overlaySwpCount, g_appBarSwpCount);
+	buf[bufLen - 1] = '\0';
 }

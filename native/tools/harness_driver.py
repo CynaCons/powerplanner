@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import re
@@ -34,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import time
+from ctypes import wintypes
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,6 +75,7 @@ class HarnessReport:
     harness_report: Optional[Dict[str, Any]] = None
     retry_diags: int = 0
     retry_diag_lines: List[str] = field(default_factory=list)
+    orphan_windows: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -168,6 +171,26 @@ def _hash_file(p: Path) -> str:
     return h.hexdigest()
 
 
+def sweep_powerplanner_windows() -> List[Dict[str, Any]]:
+    """Return top-level windows whose class name starts with PowerPlanner."""
+    user32 = ctypes.windll.user32
+    found: List[Dict[str, Any]] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _enum_proc(hwnd: wintypes.HWND, _lparam: wintypes.LPARAM) -> bool:
+        buf = ctypes.create_unicode_buffer(256)
+        if user32.GetClassNameW(hwnd, buf, 256):
+            cls = buf.value
+            if cls.startswith("PowerPlanner"):
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                found.append({"cls": cls, "pid": int(pid.value)})
+        return True
+
+    user32.EnumWindows(_enum_proc, 0)
+    return found
+
+
 def run_harness(
     exe_name: str,
     args: Optional[List[str]] = None,
@@ -230,6 +253,25 @@ def run_harness(
     duration = time.time() - start
     artifacts = _find_recent_artifacts(start)
     retry_count, retry_lines = _parse_retry_diags(last_out)
+    if kill_ppt:
+        # Harness exes deliberately leave their spawned PowerPoint open, and
+        # the registered add-in inside it (LoadBehavior 3) owns live
+        # PowerPlanner* windows. Kill it once the run is over and give window
+        # teardown a moment so the sweep below only reports genuine leaks.
+        subprocess.run(
+            ["taskkill", "/f", "/im", "POWERPNT.EXE"],
+            capture_output=True,
+            text=True,
+        )
+        time.sleep(2.0)
+    orphan_windows = sweep_powerplanner_windows()
+    orphan_notes = ""
+    if orphan_windows:
+        status = "FAIL"
+        orphan_notes = (
+            "orphan PowerPlanner windows after run: "
+            + json.dumps(orphan_windows, separators=(",", ":"))
+        )
     report = HarnessReport(
         exe=exe_stem,
         args=args,
@@ -240,13 +282,18 @@ def run_harness(
         artifacts=artifacts,
         status=status,
         timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        notes=orphan_notes,
         harness_report=report_json,
         retry_diags=retry_count,
         retry_diag_lines=retry_lines,
+        orphan_windows=orphan_windows,
     )
 
     report_path = BUILD_DIR / f"{exe_stem}_report.json"
     report_path.write_text(report.to_json(), encoding="utf-8")
+    # In-process consumers (run_operation_trace) need the untruncated output:
+    # a single TRACE state line is longer than the persisted stdout_tail.
+    report.full_stdout = last_out
     return report
 
 
@@ -379,9 +426,10 @@ def run_operation_trace(
         ["--trace", profile],
         timeout=timeout,
         retries=retries,
+        required_markers=["TRACE COMPLETE OK"],
         kill_ppt=True,
     )
-    steps = _parse_trace_steps(base_report.stdout_tail)
+    steps = _parse_trace_steps(getattr(base_report, "full_stdout", "") or base_report.stdout_tail)
     # attach any late artifacts by mtime to the trace (best effort)
     recent = _find_recent_artifacts(start)
     for st in steps:
