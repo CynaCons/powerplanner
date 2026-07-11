@@ -201,6 +201,58 @@ static void PumpHoverQuickAddTask(HWND ov, const char* rowId) {
 	::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
 }
 
+static bool FindTaskBodyCenter(PowerPoint::_ApplicationPtr& app, const char* taskId, POINT* outScreen) {
+	if (!outScreen || !taskId || !*taskId) return false;
+	try {
+		PowerPoint::DocumentWindowPtr w = app->GetActiveWindow();
+		PowerPoint::_SlidePtr sl = w->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shs = sl->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			PowerPoint::ShapePtr root = shs->Item(_variant_t(ii));
+			_bstr_t rk = root->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!rk.length() || std::string((const char*)_bstr_t(rk)) != "CHART_ROOT") continue;
+			PowerPoint::GroupShapesPtr items = root->GetGroupItems();
+			long n = items->GetCount();
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (!k.length() || std::string((const char*)_bstr_t(k)) != "TASK") continue;
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				if (!id.length() || std::string((const char*)_bstr_t(id)) != taskId) continue;
+				float l = ch->GetLeft(), t = ch->GetTop(), ww = ch->GetWidth(), h = ch->GetHeight();
+				outScreen->x = w->PointsToScreenPixelsX(l + ww * 0.5f);
+				outScreen->y = w->PointsToScreenPixelsY(t + h * 0.5f);
+				return true;
+			}
+		}
+	} catch (...) {}
+	return false;
+}
+
+static void PostTaskBodyDrag(HWND ov, POINT screenCenter, int dragPx) {
+	if (!ov) return;
+	POINT clientPt = screenCenter;
+	::ScreenToClient(ov, &clientPt);
+	Overlay_SetCursorPosOverrideForTest(true, screenCenter);
+	LPARAM downLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+	::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, downLp);
+	PumpFor(60);
+	const int steps = 5;
+	for (int s = 1; s <= steps; ++s) {
+		int mx = clientPt.x + dragPx * s / steps;
+		POINT screenPt = { screenCenter.x + dragPx * s / steps, screenCenter.y };
+		Overlay_SetCursorPosOverrideForTest(true, screenPt);
+		::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)mx, (short)clientPt.y));
+		PumpFor(40);
+	}
+	int finalX = clientPt.x + dragPx;
+	POINT upScreen = { screenCenter.x + dragPx, screenCenter.y };
+	Overlay_SetCursorPosOverrideForTest(true, upScreen);
+	::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)clientPt.y));
+	PumpFor(400);
+}
+
 // Count pixels within per-channel tolerance 24 of legacy accent RGB(26,115,232).
 static double MeasureAccentPctInRect(const RECT& rc) {
 	int w = rc.right - rc.left, h = rc.bottom - rc.top;
@@ -830,6 +882,37 @@ int wmain(int argc, wchar_t** argv) {
 				// non-clean-start setup above -- this profile isn't in the
 				// traceCleanStart list either, so it goes through that same path).
 				Overlay_PerformHoverQuickAddForTest("research");
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"drag-commit-echo") == 0) {
+				// SR-SMO-06: drag-commit keeps echo geometry through rebuild.
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				HWND ov = OverlayHwnd();
+				POINT center{};
+				if (ov && FindTaskBodyCenter(app, "discovery", &center)) {
+					PostTaskBodyDrag(ov, center, 90);
+				}
+				captureStep("immed", traceProfile);
+				const char* immedDump = Overlay_DumpChromeStateForTest();
+				wprintf(L"DRAGCOMMITECHO marker=%hs\n",
+					(immedDump && ::strstr(immedDump, "\"hasCommitEcho\":true")) ? "echo-active" : "echo-cleared");
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"inline-rename-task") == 0) {
+				// SR-SMO-07: Rename on TASK opens inline editor (not card).
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				Overlay_PerformAppBarCommandForTest(HtCmd_Rename);
 				captureStep("immed", traceProfile);
 				PumpFor(150);
 				captureStep("+1", traceProfile);

@@ -1,0 +1,9 @@
+{
+  "name": "trace_inline_rename_task",
+  "description": "v2.5.3 trace: TASK Rename via app bar opens inline editor on the label (SR-SMO-07)",
+  "exe": "ppappbarshot",
+  "trace_profile": "inline-rename-task",
+  "timeout": 120,
+  "retries": 1,
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+}

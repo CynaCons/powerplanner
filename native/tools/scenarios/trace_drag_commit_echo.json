@@ -1,0 +1,9 @@
+{
+  "name": "trace_drag_commit_echo",
+  "description": "v2.5.3 trace: task body drag commit keeps optimistic echo geometry through rebuild (SR-SMO-06)",
+  "exe": "ppappbarshot",
+  "trace_profile": "drag-commit-echo",
+  "timeout": 120,
+  "retries": 1,
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+}
