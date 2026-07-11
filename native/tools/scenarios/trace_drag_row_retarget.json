@@ -1,0 +1,11 @@
+{
+  "name": "trace_drag_row_retarget",
+  "description": "v2.6.2-fix-round2 trace: vertical drag retargets interviews to design row; PP_ROWY rewritten",
+  "exe": "ppappbarshot",
+  "trace_profile": "drag-row-retarget",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["row_retarget_committed", "row_y_rewritten", "row_band_ids_unchanged"],
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+}

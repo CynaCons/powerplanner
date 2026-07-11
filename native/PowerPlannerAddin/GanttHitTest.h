@@ -33,6 +33,7 @@ struct HtItem {
 	HtItemKind kind = HtItemKind::Task;
 	std::string id;   // PP_ID (empty for TITLE)
 	HtRect rect;      // screen pixels
+	int progressPercent = -1; // 0..100 when kind==Task and a progress edge exists; else -1
 };
 
 struct HtRowBand {
@@ -71,6 +72,7 @@ enum class HtZone {
 	TaskBody,   // inside a task bar, away from its edges (id = task id)
 	TaskEdgeL,  // within +-kHtEdgePx of a task's left edge (id = task id)
 	TaskEdgeR,  // within +-kHtEdgePx of a task's right edge (id = task id)
+	TaskProgressEdge, // within +-edgeBandPx of a task's progress boundary (id = task id)
 	Milestone,  // inside a milestone marker rect (id = milestone id)
 	Label,      // inside a ROW_LABEL or TITLE text rect (kind + id)
 	Marker,     // within +-edgeBandPx of a vertical marker line (id = marker id);

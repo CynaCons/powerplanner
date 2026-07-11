@@ -623,6 +623,16 @@ def compute_op_latency_ms(tr: OperationTraceReport) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _row_bands_tops(state: Dict[str, Any]) -> Dict[str, int]:
+    bands = state.get("rowBands") or []
+    return {b.get("rowId"): b.get("top", 0) for b in bands if b.get("rowId")}
+
+
+def _row_band_ids(state: Dict[str, Any]) -> List[str]:
+    bands = state.get("rowBands") or []
+    return [b.get("rowId") for b in bands if b.get("rowId")]
+
+
 def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = None) -> List[Dict[str, Any]]:
     """Run core continuity checks. Returns list of {rule, passed, detail}."""
     results: List[Dict[str, Any]] = []
@@ -758,7 +768,7 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             'detail': 'labels seq: ' + str([s.state.get('rowLabelCount') for s in steps])
         })
     if profile and profile == 'task-select-progress':
-        # Task selection + progress edit must set TASK and keep labels visible.
+        # Task selection + progress edge drag keeps TASK selected.
         has_task = any(s.state.get('ownSelKind') == 'TASK' for s in steps)
         labels_stable = all(s.state.get('rowLabelCount') in (None, 4) for s in steps)  # 4 in showcase
         results.append({
@@ -953,6 +963,130 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             ),
         })
 
+    if profile == "drag-date-pill":
+        # Pill presence is asserted on the MID-DRAG dump ("mid" step emitted by
+        # the profile while the button is still down); the pill legitimately
+        # disappears at drop, so immed/+N no longer carry it.
+        mid = next((s.state for s in steps if s.step == "mid"), {})
+        pill = mid.get("dragPillText", "")
+        results.append({
+            "rule": "drag_pill_present",
+            # Two ISO dates in the live pill (arrow glyph varies by encoding).
+            "passed": bool(pill) and len(re.findall(r"\d{4}-\d{2}-\d{2}", pill)) >= 2,
+            "detail": f"mid dragPillText={pill!r}",
+        })
+        # Row bands may legitimately re-pack when a drag ends a lane overlap —
+        # what must hold: (a) band ORDER is unchanged, (b) at settle the moved
+        # task's chrome rect sits INSIDE its row band (shapes agree with the
+        # model; the v2.6.2 corruption had the bar painted over the axis).
+        pre = next((s.state for s in steps if s.step == "pre"), {})
+        settled3 = next((s.state for s in steps if s.step == "+3"), {})
+        def _band_order(st):
+            bands = st.get("rowBands", [])
+            return [b.get("rowId") for b in sorted(bands, key=lambda b: b.get("top", 0))]
+        order_ok = _band_order(pre) == _band_order(settled3) and bool(_band_order(pre))
+        results.append({
+            "rule": "row_band_order_stable",
+            "passed": order_ok,
+            "detail": f"pre={_band_order(pre)} +3={_band_order(settled3)}",
+        })
+        sel_rect = settled3.get("selScreenRect") or {}
+        bands3 = settled3.get("rowBands", [])
+        research = next((b for b in bands3 if b.get("rowId") == "research"), {})
+        inside = bool(sel_rect and research
+                      and sel_rect.get("top", -1) >= research.get("top", 1 << 30) - 2
+                      and sel_rect.get("bottom", 1 << 30) <= research.get("bottom", -1) + 2)
+        results.append({
+            "rule": "sel_rect_within_row_band",
+            "passed": inside,
+            "detail": f"selScreenRect={sel_rect} researchBand={research}",
+        })
+        settled = next((s.state for s in steps if s.step == "+3"), {})
+        target = settled.get("dragTargetRowId", "")
+        results.append({
+            "rule": "horizontal_drag_no_retarget",
+            "passed": target == "research",
+            "detail": f"dragTargetRowId={target!r} (want 'research' for horizontal-only drag)",
+        })
+
+    if profile == "drag-row-retarget":
+        settled = next((s.state for s in steps if s.step == "+3"), {})
+        target = settled.get("dragTargetRowId", "")
+        results.append({
+            "rule": "row_retarget_committed",
+            "passed": target == "design",
+            "detail": f"dragTargetRowId={target!r} (want 'design' after vertical retarget)",
+        })
+        opp = next((s.state for s in tr.steps if s.step == "OPPHASES"), {})
+        row_y_rewritten = opp.get("rowYRewritten") is True or str(opp.get("rowYRewritten", "")).lower() == "true"
+        # A bounds-changing retarget takes the FULL reconcile path (fastPath
+        # false), which always rewrites PP_ROWY via WriteChartRootTags — that
+        # satisfies the freshness requirement too.
+        fast_path = str(opp.get("fastPath", "")).lower() == "true" or opp.get("fastPath") is True
+        results.append({
+            "rule": "row_y_rewritten",
+            "passed": row_y_rewritten or not fast_path,
+            "detail": f"OPPHASES rowYRewritten={opp.get('rowYRewritten')} fastPath={opp.get('fastPath')}",
+        })
+        pre = next((s.state for s in steps if s.step == "pre"), {})
+        pre_ids = _row_band_ids(pre)
+        settled_ids = _row_band_ids(settled)
+        results.append({
+            "rule": "row_band_ids_unchanged",
+            "passed": bool(pre_ids) and pre_ids == settled_ids,
+            "detail": f"pre ids={pre_ids}; +3 ids={settled_ids}",
+        })
+
+    if profile == "create-preview-shape":
+        # Live preview rect exists only while the button is down — read "mid".
+        immed = next((s.state for s in steps if s.step == "mid"), {})
+        pre = next((s.state for s in steps if s.step == "pre"), {})
+        dpr = immed.get("dragPreviewRect") or {}
+        row_bands = pre.get("rowBands") or []
+        rb = next((b for b in row_bands if b.get("rowId") == "launch"), row_bands[0] if row_bands else {})
+        row_h = (rb.get("bottom", 0) - rb.get("top", 0)) if rb else 0
+        preview_h = (dpr.get("bottom", 0) - dpr.get("top", 0)) if dpr else 0
+        ratio = (preview_h / row_h) if row_h > 0 else 0
+        results.append({
+            "rule": "create_preview_bar_height",
+            "passed": row_h > 0 and preview_h > 0 and preview_h < row_h * 0.85,
+            "detail": f"rowBandH={row_h} previewH={preview_h} ratio={ratio:.2f}",
+        })
+
+    if profile == "progress-drag":
+        # Live candidate % exists only while the button is down — read "mid".
+        mid = next((s.state for s in steps if s.step == "mid"), {})
+        settled = next((s.state for s in steps if s.step == "+3"), mid)
+        live_pct = mid.get("dragCandidatePercent")
+        committed_pct = settled.get("ownSelTaskPercent")
+        live_ok = live_pct is not None and 45 <= int(live_pct) <= 75
+        commit_ok = committed_pct is not None and 45 <= int(committed_pct) <= 75
+        results.append({
+            "rule": "progress_drag_committed",
+            "passed": live_ok and commit_ok,
+            "detail": f"live dragCandidatePercent={live_pct} committed ownSelTaskPercent={committed_pct}",
+        })
+
+    if profile == "marker-snap":
+        # Pill + drag state exist only while the button is down — read "mid".
+        immed = next((s.state for s in steps if s.step == "mid"), {})
+        pill = immed.get("dragPillText", "")
+        has_drag = immed.get("hasDrag", False)
+        results.append({
+            "rule": "marker_snap_pill",
+            "passed": bool(has_drag and pill and len(pill) >= 8),
+            "detail": f"hasDrag={has_drag} dragPillText={pill!r}",
+        })
+
+    if profile == "card-commit-clickaway":
+        immed = next((s.state for s in steps if s.step == "immed"), {})
+        card_vis = immed.get("cardVisible", True)
+        results.append({
+            "rule": "card_commits_on_clickaway",
+            "passed": card_vis is False,
+            "detail": f"cardVisible after click-away={card_vis}",
+        })
+
     tr.invariants = results
     # write back
     (BUILD_DIR / f"trace_{tr.profile}_report.json").write_text(tr.to_json(), encoding="utf-8")
@@ -1032,6 +1166,8 @@ def run_scenario(name: str, update_goldens: bool = False, **overrides) -> Harnes
             if spec.get("invariants"):
                 allowed = set(spec["invariants"])
                 tr.invariants = [i for i in (tr.invariants or []) if i.get("rule") in allowed]
+            if any(not i.get("passed", True) for i in (tr.invariants or [])):
+                tr.status = "FAIL"
         shim = HarnessReport(
             exe=spec.get("exe", "ppappbarshot"),
             args=spec.get("args", []),

@@ -93,6 +93,9 @@ namespace {
 void WriteChartRootTags(PowerPoint::ShapePtr group, const PpDocument& doc, const std::string& minD,
 	long pad, float ptPerDay, float slideW);
 }
+// Global-scope helper (defined below, after the PP_ROWY anon-namespace block);
+// declared here so the fast path can rewrite PP_ROWY when row geometry changes.
+std::string RebaseRowYJson(const std::string& rowYJson, float left, float top, float w, float h);
 
 namespace {
 static void CommitSceneCacheFromGroup(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc,
@@ -231,6 +234,8 @@ static float g_cachePtPerDay = 0.0f;
 // cache invalidation (structural edit, fast-path miss) forces a refetch.
 static IDispatch* g_cacheSlideWApp = nullptr;
 static float g_cacheSlideW = 0.0f;
+static std::string g_cacheRowYJson;
+static std::string g_cacheRowYPreRebase; // BuildRowYJson output before rebase (pure-C++ change detector)
 static std::string g_lastAppliedSelectId;
 // Set by ReadGanttDocFromSlide when it resolves the active slide; consumed once
 // by UpdateGantt on the same op thread to skip a duplicate GetActiveWindow chain.
@@ -246,6 +251,7 @@ struct OpPhaseTimings {
 	uint64_t framePreserveMs = 0;
 	uint64_t reselectMs = 0;
 	bool fastPathHit = false;
+	bool rowYRewritten = false;
 	// Cost of obtaining the document(s) for the op in Overlay.cpp's dispatch
 	// path (op-path read + RebuildChart's structural read). Set by
 	// ReadGanttDocFromSlide BEFORE UpdateGantt runs, so ResetOpPhases (called
@@ -288,6 +294,8 @@ static void InvalidateSceneCache() {
 	g_cachePtPerDay = 0.0f;
 	g_cacheSlideWApp = nullptr;
 	g_cacheSlideW = 0.0f;
+	g_cacheRowYJson.clear();
+	g_cacheRowYPreRebase.clear();
 	GanttJson_InvalidateParsedCache();
 }
 
@@ -461,6 +469,12 @@ static void CommitSceneCache(PowerPoint::ShapePtr group, const Scene& sc, const 
 	g_cacheMaxD = maxD;
 	g_cachePad = pad;
 	g_cachePtPerDay = ptPerDay;
+	try {
+		_bstr_t rowYTag = group->GetTags()->Item(_bstr_t(L"PP_ROWY"));
+		g_cacheRowYJson = rowYTag.length() ? Narrow((const wchar_t*)rowYTag) : "";
+	} catch (...) {
+		g_cacheRowYJson.clear();
+	}
 	g_shapeMap.clear();
 	std::vector<MatchKey> primKeys = BuildScenePrimKeys(sc);
 	for (size_t p = 0; p < sc.prims.size() && p < shapesByPrimIndex.size(); ++p) {
@@ -520,8 +534,39 @@ static void WriteChartRootDocTag(PowerPoint::ShapePtr group, const std::string& 
 // §2 fast path: pure C++ scene diff + write-only COM deltas (~10 calls/edit).
 static bool TryApplySceneDiffFast(PowerPoint::ShapePtr group, const PpDocument& doc, const Scene& newSc,
 	const std::string& minD, const std::string& maxD, long pad, float ptPerDay,
-	const std::string& selectId) {
+	const std::string& selectId, float slideW) {
 	try {
+		// Scene-union bounds (pure C++). When the new scene's natural bounds
+		// differ from the old (e.g. a drag ends a lane overlap and rows
+		// re-pack), the child Y-writes below would move/resize the CHART_ROOT
+		// group's bounding box and the whole chart drifts on the slide
+		// (v2.6.2-fix-round2: chart crept upward after a lane-collapsing
+		// drag). In that case capture the group frame BEFORE the writes and
+		// re-pin it after — the COM cost is paid only by lane-changing ops;
+		// nudge/color keep zero extra calls.
+		auto sceneBounds = [](const Scene& s, float* l, float* t, float* r, float* b) {
+			*l = *t = 1e9f; *r = *b = -1e9f;
+			for (const auto& p : s.prims) {
+				if (p.x < *l) *l = p.x;
+				if (p.y < *t) *t = p.y;
+				if (p.x + p.w > *r) *r = p.x + p.w;
+				if (p.y + p.h > *b) *b = p.y + p.h;
+			}
+		};
+		float ol, ot, orr, ob, nl, nt, nr, nb;
+		sceneBounds(g_lastScene, &ol, &ot, &orr, &ob);
+		sceneBounds(newSc, &nl, &nt, &nr, &nb);
+		const bool boundsChanged = std::fabs(ol - nl) > 0.01f || std::fabs(ot - nt) > 0.01f
+			|| std::fabs(orr - nr) > 0.01f || std::fabs(ob - nb) > 0.01f;
+		if (boundsChanged) {
+			// Bail to the full reconcile: child writes that change the union
+			// bounds move/resize the CHART_ROOT group, and a write-only frame
+			// re-pin SCALES the children (PPT group semantics) — the slow path
+			// owns frame preservation + full tag rewrite for this op class.
+			// (Follow-up perf item registered in PLAN: fast-path lane changes.)
+			return false;
+		}
+
 		const ULONGLONG tPrim0 = ::GetTickCount64();
 		std::vector<MatchKey> newKeys = BuildScenePrimKeys(newSc);
 		std::map<ShapeMapKey, const Prim*> oldPrimByKey;
@@ -549,6 +594,20 @@ static bool TryApplySceneDiffFast(PowerPoint::ShapePtr group, const PpDocument& 
 		if (docJson.empty()) docJson = DocumentToJson(doc);
 		WriteChartRootDocTag(group, docJson);
 		g_lastOpPhases.docTagWriteMs = ElapsedMs(tDoc0);
+
+		// Same-bounds row-geometry drift (rare: lane redistribution with equal
+		// union bounds) still needs a fresh PP_ROWY. Pure C++ compare gates the
+		// COM reads + tag write.
+		{
+			std::string newRowY = BuildRowYJson(doc, slideW, minD);
+			if (!g_cacheRowYPreRebase.empty() && newRowY != g_cacheRowYPreRebase) {
+				std::string rebased = RebaseRowYJson(newRowY, group->GetLeft(), group->GetTop(), group->GetWidth(), group->GetHeight());
+				group->GetTags()->Add(_bstr_t(L"PP_ROWY"), _bstr_t(Widen(rebased).c_str()));
+				g_cacheRowYJson = rebased;
+				g_lastOpPhases.rowYRewritten = true;
+			}
+			g_cacheRowYPreRebase = newRowY;
+		}
 
 		std::vector<PowerPoint::ShapePtr> byPrim(newSc.prims.size());
 		for (size_t p = 0; p < newSc.prims.size(); ++p) {
@@ -1007,7 +1066,7 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 			g_lastOpPhases.keyCompareMs = ElapsedMs(tKey0);
 		}
 		if (fastPathEligible) {
-			if (TryApplySceneDiffFast(group, doc, newSc, minD, maxD, pad, ptPerDay, selectId)) {
+			if (TryApplySceneDiffFast(group, doc, newSc, minD, maxD, pad, ptPerDay, selectId, slideW)) {
 				g_lastOpPhases.fastPathHit = true;
 				g_cacheSlideId = activeSlideId; // keep group<->slide binding coherent
 				// Child-only deltas never move the CHART_ROOT frame — skip the
@@ -1333,6 +1392,7 @@ void WriteChartRootTags(PowerPoint::ShapePtr group, const PpDocument& doc, const
 	std::string rowY = BuildRowYJson(doc, slideW, minD);
 	rowY = RebaseRowYJson(rowY, group->GetLeft(), group->GetTop(), group->GetWidth(), group->GetHeight());
 	group->GetTags()->Add(_bstr_t(L"PP_ROWY"), _bstr_t(Widen(rowY).c_str()));
+	g_cacheRowYJson = rowY;
 }
 } // namespace
 
@@ -1584,6 +1644,7 @@ int Gantt_GetLastOpPhasesForTest(char* buf, int len) {
 	::sprintf_s(tmp, sizeof(tmp),
 		"{\"sceneBuild\":%llu,\"keyCompare\":%llu,\"primWrites\":%llu,\"primWriteCount\":%d,"
 		"\"docTagWrite\":%llu,\"framePreserve\":%llu,\"reselect\":%llu,\"fastPath\":%s,"
+		"\"rowYRewritten\":%s,"
 		"\"docRead\":%llu,\"docReadCached\":%s,\"dispatchTotal\":%llu}",
 		(unsigned long long)p.sceneBuildMs,
 		(unsigned long long)p.keyCompareMs,
@@ -1593,6 +1654,7 @@ int Gantt_GetLastOpPhasesForTest(char* buf, int len) {
 		(unsigned long long)p.framePreserveMs,
 		(unsigned long long)p.reselectMs,
 		p.fastPathHit ? "true" : "false",
+		p.rowYRewritten ? "true" : "false",
 		(unsigned long long)p.docReadMs,
 		p.docReadCached ? "true" : "false",
 		(unsigned long long)p.dispatchTotalMs);

@@ -328,16 +328,18 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 
 ### v2.6.2 - Iteration U2: Direct-Manipulation Editing (drag is the primary verb)
 **Goal:** Dates, progress, markers — all changed by dragging with live feedback. Requires v2.5.3 reconcile.
-- [ ] UF-01: drag task in-row with live start/end date pill; drop commits (drag IS the date editor)
-- [ ] UF-02: fix leftover/stale shape during task drag (progress fill ghost)
-- [ ] UF-08: constrain task drag to the component rect (clamp; no dragging off-slide/off-chart)
-- [ ] UF-09: marker drag = live date pill + snap to smallest visible scale unit
-- [ ] UF-05: drag-to-create preview renders the actual future task bar (real height/style), not a full-row block
-- [ ] UF-12: progress = draggable progress edge on the bar (+ % field in card); REMOVE ±10% buttons
-- [ ] B2: card editor commits on click-away (Esc = cancel) — same convention as inline editor everywhere
-- [ ] M1: one verb per action across contexts — "Rename" = inline text everywhere; "Edit…" = card everywhere; kill the duplicate task button
-- [ ] N1: date fields get format hint + validation message (picker optional/later)
-- [ ] E2E: drag-date-pill, marker-snap, create-preview-shape, progress-drag scenarios + captures
+- [x] UF-01: drag task in-row with live start/end date pill; drop commits (drag_pill_present asserts live pill mid-gesture)
+- [x] UF-02: stale-shape ghost fixed — drag ghost includes bar+progress+label; ClearDragCommitEcho now repaints (echo pixels used to persist on the paint-free idle overlay)
+- [x] UF-08: drag delta clamped to the projection window; row retarget only latches valid non-group task rows (group/summary rows rejected)
+- [x] UF-09: marker drag = live date pill + snap to visible scale unit (markers only; tasks/milestones stay day-precise — INPLACE e2e caught the over-applied snap)
+- [x] UF-05: drag-to-create preview renders the real future task bar (create_preview_bar_height asserts height < 0.85 row band)
+- [x] UF-12: progress = draggable edge with live % readout; ±10% steppers REMOVED from app bar (% field stays in card)
+- [x] B2: card editor commits on click-away/Enter, Esc cancels (card_commit_clickaway e2e)
+- [x] M1: Rename = inline everywhere, Edit = card everywhere; duplicate task button removed; EDITOR e2e stage moved to the Edit-command card path
+- [x] N1: card date fields get YYYY-MM-DD cue banners + inline validation message
+- [x] E2E: drag-date-pill, drag-row-retarget, marker-snap, create-preview-shape, progress-drag, card-commit-clickaway scenarios with MID-GESTURE state dumps + sel_rect_within_row_band shape-vs-model cross-check. Fast-path hardening en route: PP_ROWY conditional rewrite; bounds-changing commits (lane collapse) fall back to full reconcile — a write-only group frame re-pin SCALES children (PPT group semantics) and had scrambled the layout
+
+**U2 follow-up (perf, unscheduled):** lane-changing drag commits take the full reconcile (~2-4s) since the fast path bails on union-bounds changes; a future fast path for them must reposition children without group resize.
 
 ### v2.6.3 - Iteration U3: App Bar Docking + Context Purity
 **Goal:** The bar is part of the component and shows only what's relevant. Absorbs v2.5.5 #2/#3 (SR-DOCK, SR-BAR).

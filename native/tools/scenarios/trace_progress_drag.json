@@ -1,0 +1,11 @@
+{
+  "name": "trace_progress_drag",
+  "description": "v2.6.2 trace: progress edge drag with live % readout (SR-IXC-01/06)",
+  "exe": "ppappbarshot",
+  "trace_profile": "progress-drag",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["progress_drag_committed"],
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+}

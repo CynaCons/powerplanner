@@ -223,7 +223,7 @@ POINT g_mouseDownPt = {};
 // without ever early-returning (the ghost still needs to paint every tick).
 bool g_gestureActive = false;
 bool g_dragActive = false;
-enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, Milestone, Create, Marker, Text };
+enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, TaskProgress, Milestone, Create, Marker, Text };
 DragKind g_dragKind = DragKind::None;
 std::string g_dragId;          // task, milestone, marker, or text PP_ID being dragged
 RECT g_dragAnchorRect = {};    // original screen rect of the dragged item at gesture start
@@ -232,6 +232,10 @@ std::string g_dragOrigEnd;     // original ISO end date (task); empty for milest
 float g_dragPxPerDay = 0.0f;   // SCREEN pixels-per-day for this gesture (see ComputeDragPxPerDay)
 long g_dragDeltaDays = 0;      // current candidate day delta (updated on move)
 POINT g_dragLastPt = {};       // last client point seen during the drag
+int g_dragOrigPercent = 0;     // task percent at gesture start (TaskProgress only)
+int g_dragCandidatePercent = 0; // live percent preview (TaskProgress only)
+std::string g_dragPillText;    // last date/% pill text (harness dump, SR-IXC-03/06)
+RECT g_dragPreviewRect = {};   // screen rect of create/task ghost (harness dump)
 
 // ---- text-move gesture state -------------------------------------------------
 // A Text drag moves the PpText by a screen-pixel offset translated back into
@@ -263,6 +267,7 @@ float g_dragCandidateDy = 0.0f;
 std::string g_dragOrigRowId;    // task's row at gesture start
 std::string g_dragTargetRowId;  // row band currently under the pointer (may equal orig)
 RECT g_dragTargetRowRect = {};  // screen rect of that row band (for the ghost's y-position)
+std::string g_lastCommittedDragTargetRowId; // last TaskBody/Text drop row (harness dump)
 
 // ---- create-on-EmptyCell gesture state --------------------------------------
 // Started on WM_LBUTTONDOWN over an EmptyCell(rowId) hit. Reuses g_dragKind ==
@@ -418,6 +423,7 @@ HWND g_cardStartHwnd = NULL;
 HWND g_cardEndHwnd = NULL;
 HWND g_cardPercentHwnd = NULL;
 HWND g_cardOkHwnd = NULL;
+HWND g_cardDateErrorHwnd = NULL; // inline validation message (N1)
 HWND g_cardDeleteHwnd = NULL;   // TEXT mode only: label field + this button
 HWND g_cardSwatchHwnd[kCardSwatchCount] = {};
 WNDPROC g_oldCardFieldProc = NULL; // shared subclass proc for the 4 EDIT children
@@ -513,6 +519,8 @@ void CancelCardEdit();
 void CloseCardEditor();
 bool IsEditSessionActive();
 void CancelDragGesture();
+void ComputeDragCandidateDates(DragKind kind, const std::string& origStart, const std::string& origEnd,
+	long deltaDays, std::string& outStart, std::string& outEnd);
 void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId,
 	float candidateDx = 0.0f, float candidateDy = 0.0f);
 void CommitCreateGesture(const std::string& rowId, long startDay, long endDay);
@@ -1005,14 +1013,16 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		// walk (cheap: one more Tags lookup on the already-open chart shape).
 		PpProj proj;
 		bool haveProj = ParseProj(g_chartProj, &proj);
-		std::vector<PpMarker> markers;
+		PpDocument chartDoc;
+		bool haveDoc = false;
 		if (haveProj) {
 			_bstr_t docTag = chart->GetTags()->Item(_bstr_t(L"PP_DOC"));
 			if (docTag.length()) {
-				PpDocument markerDoc = DocumentFromJson(Narrow((const wchar_t*)docTag));
-				markers = markerDoc.markers;
+				chartDoc = DocumentFromJson(Narrow((const wchar_t*)docTag));
+				haveDoc = true;
 			}
 		}
+		const std::vector<PpMarker>& markers = chartDoc.markers;
 
 		for (long i = 1; i <= n; ++i) {
 			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
@@ -1081,7 +1091,19 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 				continue;
 			}
 			if (kindStr == "TASK") {
-				g_hitSnapshot.items.push_back({ HtItemKind::Task, idStr, ToHtRect(rr) });
+				HtItem item;
+				item.kind = HtItemKind::Task;
+				item.id = idStr;
+				item.rect = ToHtRect(rr);
+				if (haveDoc) {
+					for (const auto& t : chartDoc.tasks) {
+						if (t.id == idStr && t.percent > 0 && t.percent < 100) {
+							item.progressPercent = t.percent;
+							break;
+						}
+					}
+				}
+				g_hitSnapshot.items.push_back(item);
 				continue;
 			}
 			if (kindStr == "MILESTONE") {
@@ -1502,6 +1524,9 @@ void SetCardInvalid(bool invalid) {
 	g_cardInvalid = invalid;
 	if (g_cardStartHwnd) ::InvalidateRect(g_cardStartHwnd, NULL, TRUE);
 	if (g_cardEndHwnd) ::InvalidateRect(g_cardEndHwnd, NULL, TRUE);
+	if (g_cardDateErrorHwnd) {
+		::ShowWindow(g_cardDateErrorHwnd, invalid ? SW_SHOW : SW_HIDE);
+	}
 	if (invalid) ::MessageBeep(MB_ICONWARNING);
 }
 
@@ -1564,6 +1589,12 @@ void LayoutCardControls(bool isMilestone, bool isText) {
 	if (g_cardOkHwnd) {
 		::MoveWindow(g_cardOkHwnd, cardW - pad - okW, y, okW, okH, TRUE);
 	}
+	if (g_cardDateErrorHwnd) {
+		::ShowWindow(g_cardDateErrorHwnd, g_cardInvalid ? SW_SHOW : SW_HIDE);
+		if (!isText && !isMilestone) {
+			::MoveWindow(g_cardDateErrorHwnd, pad, y - okH - rowGap, cardW - pad * 2, rowH, TRUE);
+		}
+	}
 	y += okH + pad;
 
 	::SetWindowPos(g_cardHwnd, NULL, 0, 0, cardW, y, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1602,6 +1633,18 @@ void EnsureCardWindow() {
 	g_cardStartHwnd = makeEdit(CARD_ID_START, 0);
 	g_cardEndHwnd = makeEdit(CARD_ID_END, 0);
 	g_cardPercentHwnd = makeEdit(CARD_ID_PERCENT, ES_NUMBER);
+#ifndef EM_SETCUEBANNER
+#define EM_SETCUEBANNER (0x1500 + 1) // ECM_FIRST + 1 (commctrl.h not in this TU's include set)
+#endif
+	::SendMessageW(g_cardStartHwnd, EM_SETCUEBANNER, TRUE, (LPARAM)L"YYYY-MM-DD");
+	::SendMessageW(g_cardEndHwnd, EM_SETCUEBANNER, TRUE, (LPARAM)L"YYYY-MM-DD");
+
+	g_cardDateErrorHwnd = ::CreateWindowExW(0, L"STATIC", L"Use YYYY-MM-DD date format",
+		WS_CHILD | SS_LEFT, 0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)CARD_ID_DELETE + 100, g_inst, NULL);
+	if (g_cardDateErrorHwnd) {
+		::SendMessageW(g_cardDateErrorHwnd, WM_SETFONT, (WPARAM)font, TRUE);
+		::ShowWindow(g_cardDateErrorHwnd, SW_HIDE);
+	}
 
 	for (int i = 0; i < kCardSwatchCount; ++i) {
 		g_cardSwatchHwnd[i] = ::CreateWindowExW(0, L"BUTTON", FormatSwatchLabel(i).c_str(),
@@ -1630,6 +1673,7 @@ void CloseCardEditor() {
 		g_cardHwnd = NULL;
 	}
 	g_cardLabelHwnd = g_cardStartHwnd = g_cardEndHwnd = g_cardPercentHwnd = g_cardOkHwnd = g_cardDeleteHwnd = NULL;
+	g_cardDateErrorHwnd = NULL;
 	for (int i = 0; i < kCardSwatchCount; ++i) g_cardSwatchHwnd[i] = NULL;
 	g_oldCardFieldProc = NULL;
 	g_cardKind.clear();
@@ -2139,7 +2183,8 @@ bool HandleSetCursor(HWND hwnd) {
 	if (g_linkMode && !overChromeWidget && ::PtInRect(&g_chartScreenRect, screenPt)) {
 		HtHit hit = HitTestClientPoint(pt);
 		if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
-			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone) {
+			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::TaskProgressEdge ||
+			hit.zone == HtZone::Milestone) {
 			::SetCursor(::LoadCursor(NULL, IDC_CROSS));
 			return true;
 		}
@@ -2168,6 +2213,7 @@ void ApplyClickSelection(const HtHit& hit) {
 	case HtZone::TaskBody:
 	case HtZone::TaskEdgeL:
 	case HtZone::TaskEdgeR:
+	case HtZone::TaskProgressEdge:
 		SetOwnSelection("TASK", hit.id);
 		return;
 	case HtZone::Milestone:
@@ -2211,7 +2257,13 @@ void ApplyClickSelection(const HtHit& hit) {
 // WM_CAPTURECHANGED (including our own ReleaseCapture, which delivers it) as
 // well as from an explicit cancel.
 void ClearDragCommitEcho() {
+	// Idle ticks are paint-free (SR-LIFE), so clearing the echo STATE without
+	// a repaint leaves the ghost bar's pixels on the layered window forever
+	// (v2.6.2: task bar kept floating over the axis after a drag). Repaint
+	// exactly once when an active echo is cleared.
+	const bool wasActive = g_dragCommitEcho.active;
 	g_dragCommitEcho = {};
+	if (wasActive) RequestOverlayRepaint();
 }
 
 void ResetDragGestureState() {
@@ -2237,6 +2289,10 @@ void ResetDragGestureState() {
 	g_dragPxPerPt = 0.0f;
 	g_dragCandidateDx = 0.0f;
 	g_dragCandidateDy = 0.0f;
+	g_dragOrigPercent = 0;
+	g_dragCandidatePercent = 0;
+	g_dragPillText.clear();
+	::SetRectEmpty(&g_dragPreviewRect);
 }
 
 // PP_PROJ-based screen-pixel day<->point projection (SR-CRE-01). Used as a
@@ -2255,6 +2311,132 @@ static ProjPx ProjectionPx() {
 	r.originDay = proj.minDay - proj.pad; // day at originX (frozen PP_PROJ semantics)
 	r.ok = r.pxPerDay > 0.0;
 	return r;
+}
+
+// Bar height within a row band matches GanttScene ROW_HEIGHT/BAR_INSET (20/36).
+static constexpr float kRowBarHeightFrac = (36.0f - 8.0f * 2.0f) / 36.0f;
+
+static long ChartWindowLoDay() {
+	ProjPx p = ProjectionPx();
+	return p.ok ? p.originDay : 0;
+}
+
+static long ChartWindowHiDay() {
+	ProjPx p = ProjectionPx();
+	if (!p.ok) return LONG_MAX / 2;
+	return p.originDay + (long)::lround((double)(g_chartScreenRect.right - g_chartScreenRect.left) / p.pxPerDay);
+}
+
+static long SnapDayToScale(long day, const std::string& scale) {
+	if (scale.empty() || scale == "day") return day;
+	if (scale == "week") {
+		// Monday-aligned (1970-01-05 is Monday at day index 4).
+		const long epochMonday = 4;
+		long rel = day - epochMonday;
+		long mod = ((rel % 7) + 7) % 7;
+		if (mod <= 3) return day - mod;
+		return day + (7 - mod);
+	}
+	if (scale == "month") {
+		std::string iso = DaysToDate(day);
+		if (iso.size() >= 10) {
+			int y = std::stoi(iso.substr(0, 4));
+			int m = std::stoi(iso.substr(5, 2));
+			int d = std::stoi(iso.substr(8, 2));
+			if (d <= 15) return DateToDays(iso.substr(0, 8) + "01");
+			m++;
+			if (m > 12) { m = 1; ++y; }
+			char buf[16];
+			::snprintf(buf, sizeof(buf), "%04d-%02d-01", y, m);
+			return DateToDays(buf);
+		}
+		return day;
+	}
+	if (scale == "quarter") {
+		std::string iso = DaysToDate(day);
+		if (iso.size() >= 10) {
+			int y = std::stoi(iso.substr(0, 4));
+			int m = std::stoi(iso.substr(5, 2));
+			int qStart = ((m - 1) / 3) * 3 + 1;
+			char buf[16];
+			::snprintf(buf, sizeof(buf), "%04d-%02d-01", y, qStart);
+			long qDay = DateToDays(buf);
+			m += 3;
+			if (m > 12) { m -= 12; ++y; }
+			::snprintf(buf, sizeof(buf), "%04d-%02d-01", y, m);
+			long nextQ = DateToDays(buf);
+			return (day - qDay <= 45) ? qDay : nextQ;
+		}
+		return day;
+	}
+	if (scale == "year") {
+		std::string iso = DaysToDate(day);
+		if (iso.size() >= 4) {
+			int y = std::stoi(iso.substr(0, 4));
+			long jan1 = DateToDays(std::to_string(y) + "-01-01");
+			long nextJan = DateToDays(std::to_string(y + 1) + "-01-01");
+			return (day - jan1 <= 182) ? jan1 : nextJan;
+		}
+		return day;
+	}
+	return day;
+}
+
+static long SnapGestureDeltaDays(DragKind kind, const std::string& origStart, const std::string& origEnd,
+	long deltaDays, const std::string& scale) {
+	// UF-09 / SR-IXC-04: unit-snapping applies to MARKERS only (vertical date
+	// lines). Task bars and milestones stay day-precise at every zoom — a
+	// week/month-snapped task drag would make mid-week dates unreachable and
+	// silently move the drop by days (caught by the INPLACE e2e stage).
+	if (kind != DragKind::Marker) return deltaDays;
+	std::string cs, ce;
+	ComputeDragCandidateDates(kind, origStart, origEnd, deltaDays, cs, ce);
+	long sd = SnapDayToScale(DateToDays(cs), scale);
+	long ed = SnapDayToScale(DateToDays(ce), scale);
+	long origStartDay = DateToDays(origStart);
+	long origEndDay = origEnd.empty() ? origStartDay : DateToDays(origEnd);
+	switch (kind) {
+	case DragKind::TaskEdgeL:
+		return sd - origStartDay;
+	case DragKind::TaskEdgeR:
+		return ed - origEndDay;
+	default:
+		return sd - origStartDay;
+	}
+}
+
+static long ClampGestureDeltaDays(DragKind kind, const std::string& origStart, const std::string& origEnd, long deltaDays) {
+	long lo = ChartWindowLoDay();
+	long hi = ChartWindowHiDay();
+	long startDay = DateToDays(origStart);
+	long endDay = origEnd.empty() ? startDay : DateToDays(origEnd);
+	switch (kind) {
+	case DragKind::TaskEdgeL: {
+		long ns = startDay + deltaDays;
+		if (ns < lo) deltaDays -= (ns - lo);
+		if (ns > endDay) deltaDays -= (ns - endDay);
+		break;
+	}
+	case DragKind::TaskEdgeR: {
+		long ne = endDay + deltaDays;
+		if (ne > hi) deltaDays -= (ne - hi);
+		if (ne < startDay) deltaDays -= (ne - startDay);
+		break;
+	}
+	case DragKind::TaskBody:
+	case DragKind::Milestone:
+	case DragKind::Marker:
+	default: {
+		long span = endDay - startDay;
+		long ns = startDay + deltaDays;
+		long ne = endDay + deltaDays;
+		if (ns < lo) deltaDays += (lo - ns);
+		if (ne > hi) deltaDays -= (ne - hi);
+		(void)span;
+		break;
+	}
+	}
+	return deltaDays;
 }
 
 static long AnchorDayFromScreenX(long screenX) {
@@ -2334,7 +2516,8 @@ float ComputeDragPxPerDay(const RECT& anchorRect, long anchorSpanDays) {
 void StartDragGesture(const HtHit& hit, POINT downPt) {
 	ResetDragGestureState();
 	if (hit.zone != HtZone::TaskBody && hit.zone != HtZone::TaskEdgeL &&
-		hit.zone != HtZone::TaskEdgeR && hit.zone != HtZone::Milestone &&
+		hit.zone != HtZone::TaskEdgeR && hit.zone != HtZone::TaskProgressEdge &&
+		hit.zone != HtZone::Milestone &&
 		hit.zone != HtZone::Marker && hit.zone != HtZone::Text) {
 		return;
 	}
@@ -2433,29 +2616,38 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 	} else {
 		const PpTask* task = FindTask(doc, hit.id);
 		if (!task) return;
-		g_dragKind = (hit.zone == HtZone::TaskEdgeL) ? DragKind::TaskEdgeL
-			: (hit.zone == HtZone::TaskEdgeR) ? DragKind::TaskEdgeR : DragKind::TaskBody;
-		g_dragId = hit.id;
-		g_dragOrigStart = task->start;
-		g_dragOrigEnd = task->end;
-		long spanDays = DateToDays(task->end) - DateToDays(task->start) + 1;
-		g_dragPxPerDay = ComputeDragPxPerDay(anchorRect, spanDays);
-		if (g_dragKind == DragKind::TaskBody) {
-			// Row-reassign only applies to whole-bar (body) drags, not edge
-			// resizes: retarget the ghost's row using the row band under the
-			// CURRENT drag point, tracked from WM_MOUSEMOVE (see
-			// UpdateDragGesture). Seed both orig and target with the task's
-			// row at gesture start so a drag that never leaves the row is a
-			// no-op vertically.
-			g_dragOrigRowId = task->rowId;
-			g_dragTargetRowId = task->rowId;
-			g_dragTargetRowRect = anchorRect; // refined below if a band is found
-			for (const auto& band : g_rowBands) {
-				if (band.rowId == task->rowId) { g_dragTargetRowRect = band.screenRect; break; }
+		if (hit.zone == HtZone::TaskProgressEdge) {
+			g_dragKind = DragKind::TaskProgress;
+			g_dragId = hit.id;
+			g_dragOrigStart = task->start;
+			g_dragOrigEnd = task->end;
+			g_dragOrigPercent = task->percent;
+			g_dragCandidatePercent = task->percent;
+			g_dragPxPerDay = ComputeDragPxPerDay(anchorRect, DateToDays(task->end) - DateToDays(task->start) + 1);
+		} else {
+			g_dragKind = (hit.zone == HtZone::TaskEdgeL) ? DragKind::TaskEdgeL
+				: (hit.zone == HtZone::TaskEdgeR) ? DragKind::TaskEdgeR : DragKind::TaskBody;
+			g_dragId = hit.id;
+			g_dragOrigStart = task->start;
+			g_dragOrigEnd = task->end;
+			long spanDays = DateToDays(task->end) - DateToDays(task->start) + 1;
+			g_dragPxPerDay = ComputeDragPxPerDay(anchorRect, spanDays);
+			g_dragOrigPercent = task->percent;
+			if (g_dragKind == DragKind::TaskBody) {
+				g_dragOrigRowId = task->rowId;
+				g_dragTargetRowId = task->rowId;
+				g_dragTargetRowRect = anchorRect;
+				for (const auto& band : g_rowBands) {
+					if (band.rowId == task->rowId) { g_dragTargetRowRect = band.screenRect; break; }
+				}
 			}
 		}
 	}
-	if (g_dragPxPerDay <= 0.0f) { ResetDragGestureState(); return; }
+	if (g_dragKind != DragKind::TaskProgress && g_dragPxPerDay <= 0.0f) { ResetDragGestureState(); return; }
+	if (g_dragKind == DragKind::TaskProgress && (anchorRect.right - anchorRect.left) < 4) {
+		ResetDragGestureState();
+		return;
+	}
 
 	g_dragAnchorRect = anchorRect;
 	g_dragLastPt = downPt;
@@ -2516,6 +2708,48 @@ const RowBand* RowBandAtScreenY(long screenY) {
 	return nullptr;
 }
 
+static bool IsScreenYInRowBand(long screenY, const std::string& rowId) {
+	if (rowId.empty()) return false;
+	for (const auto& band : g_rowBands) {
+		if (band.rowId == rowId && screenY >= band.screenRect.top && screenY < band.screenRect.bottom)
+			return true;
+	}
+	return false;
+}
+
+// Group/summary rows (a row that is another row's groupId parent) are not
+// valid drop targets for task body / free-text drags (v2.6.2-fix-round2 H1).
+static bool IsValidTaskDropRow(const std::string& rowId) {
+	if (rowId.empty()) return false;
+	PpDocument doc;
+	if (!Gantt_TryPeekCachedDoc(&doc)) return true;
+	bool exists = false;
+	for (const auto& r : doc.rows) {
+		if (r.id == rowId) exists = true;
+		if (r.groupId == rowId) return false; // group/summary row: invalid target
+	}
+	return exists;
+}
+
+static void LatchDragTargetRow(long screenY) {
+	if (g_rowBands.empty()) return;
+	if (!g_dragOrigRowId.empty() && IsScreenYInRowBand(screenY, g_dragOrigRowId)) {
+		for (const auto& band : g_rowBands) {
+			if (band.rowId == g_dragOrigRowId) {
+				g_dragTargetRowId = g_dragOrigRowId;
+				g_dragTargetRowRect = band.screenRect;
+				return;
+			}
+		}
+	}
+	if (const RowBand* band = RowBandAtScreenY(screenY)) {
+		if (IsValidTaskDropRow(band->rowId)) {
+			g_dragTargetRowId = band->rowId;
+			g_dragTargetRowRect = band->screenRect;
+		}
+	}
+}
+
 // Recompute the candidate day delta from the total horizontal displacement
 // since the gesture anchor (not incremental per-move deltas, so rounding
 // never accumulates drift) and request a repaint if it changed the ghost.
@@ -2544,6 +2778,17 @@ void UpdateDragGesture(POINT pt) {
 		return;
 	}
 
+	if (g_dragKind == DragKind::TaskProgress) {
+		int barW = g_dragAnchorRect.right - g_dragAnchorRect.left;
+		if (barW >= 4) {
+			long relX = (long)(pt.x + g_windowOriginX) - g_dragAnchorRect.left;
+			int pct = (int)::lround(100.0 * (double)relX / (double)barW);
+			g_dragCandidatePercent = std::max(0, std::min(100, pct));
+		}
+		RequestOverlayRepaint();
+		return;
+	}
+
 	if (g_dragKind == DragKind::Text) {
 		// Points, not days: the total screen-pixel displacement since the
 		// gesture anchor converted back to slide points via g_dragPxPerPt (not
@@ -2560,30 +2805,19 @@ void UpdateDragGesture(POINT pt) {
 			// Free text: day-delta (for its new date) + row retarget, exactly
 			// like a TaskBody drag.
 			g_dragDeltaDays = (g_dragPxPerDay > 0.0f) ? (long)::lround((double)dx / (double)g_dragPxPerDay) : 0;
-			long screenY = pt.y + g_windowOriginY;
-			if (const RowBand* band = RowBandAtScreenY(screenY)) {
-				g_dragTargetRowId = band->rowId;
-				g_dragTargetRowRect = band->screenRect;
-			}
-			// Same "keep the last valid target" behavior as TaskBody when no
-			// band is under the pointer (above/below the chart).
+			LatchDragTargetRow(pt.y + g_windowOriginY);
 		}
 		RequestOverlayRepaint();
 		return;
 	}
 
 	long newDelta = (g_dragPxPerDay > 0.0f) ? (long)::lround((double)dx / (double)g_dragPxPerDay) : 0;
+	newDelta = ClampGestureDeltaDays(g_dragKind, g_dragOrigStart, g_dragOrigEnd, newDelta);
+	newDelta = SnapGestureDeltaDays(g_dragKind, g_dragOrigStart, g_dragOrigEnd, newDelta, g_lastScale);
 	g_dragDeltaDays = newDelta;
 
 	if (g_dragKind == DragKind::TaskBody) {
-		long screenY = pt.y + g_windowOriginY;
-		if (const RowBand* band = RowBandAtScreenY(screenY)) {
-			g_dragTargetRowId = band->rowId;
-			g_dragTargetRowRect = band->screenRect;
-		}
-		// If no band is under the pointer (above/below the chart), keep the
-		// last valid target — the ghost stays at the last row it was over
-		// rather than snapping away, and the horizontal shift still updates.
+		LatchDragTargetRow(pt.y + g_windowOriginY);
 	}
 
 	RequestOverlayRepaint(); // A2/task spec: repaint on each move (cheap)
@@ -2657,7 +2891,10 @@ void CancelDragGesture() {
 // WM_LBUTTONUP's Text-specific recompute); every other kind ignores them.
 void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId,
 	float candidateDx, float candidateDy) {
-	bool rowChangeRequested = (kind == DragKind::TaskBody || kind == DragKind::Text) && !targetRowId.empty();
+	std::string commitTargetRowId = targetRowId;
+	if (!commitTargetRowId.empty() && !IsValidTaskDropRow(commitTargetRowId))
+		commitTargetRowId.clear();
+	bool rowChangeRequested = (kind == DragKind::TaskBody || kind == DragKind::Text) && !commitTargetRowId.empty();
 	if (kind != DragKind::Text && deltaDays == 0 && !rowChangeRequested) return;
 	if (!g_app || g_mutating) return;
 
@@ -2673,6 +2910,7 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 				if (!changed) {
 					for (auto& ms : doc.milestones) {
 						if (ms.id == id) {
+							// Milestones stay day-precise (unit snap is markers-only, UF-09).
 							ms.date = DaysToDate(DateToDays(ms.date) + deltaDays);
 							changed = true;
 							break;
@@ -2686,7 +2924,8 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 				// go straight to GanttOps' dedicated marker-date setter.
 				for (const auto& mk : doc.markers) {
 					if (mk.id == id) {
-						std::string newDate = DaysToDate(DateToDays(mk.date) + deltaDays);
+						long snappedDay = SnapDayToScale(DateToDays(mk.date) + deltaDays, doc.scale);
+						std::string newDate = DaysToDate(snappedDay);
 						changed = SetMarkerDate(doc, id, newDate);
 						break;
 					}
@@ -2701,8 +2940,8 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 				bool rowChanged = false;
 				if (rowChangeRequested) {
 					if (const PpTask* task = FindTask(doc, id)) {
-						if (task->rowId != targetRowId) {
-							rowChanged = MoveTaskToRow(doc, id, targetRowId);
+						if (task->rowId != commitTargetRowId) {
+							rowChanged = MoveTaskToRow(doc, id, commitTargetRowId);
 						}
 					}
 				}
@@ -2730,7 +2969,7 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 						// date, with the residual dx/dy ZEROED (per the task spec —
 						// the new position IS the cell origin, no leftover offset).
 						std::string newDate = DaysToDate(DateToDays(txt->date) + deltaDays);
-						std::string rowId = rowChangeRequested ? targetRowId : txt->rowId;
+						std::string rowId = rowChangeRequested ? commitTargetRowId : txt->rowId;
 						bool cellChanged = (rowId != txt->rowId) || (newDate != txt->date);
 						bool residualChanged = (txt->dx != 0.0f) || (txt->dy != 0.0f);
 						if (cellChanged || residualChanged) changed = MoveText(doc, id, 0.0f, 0.0f, rowId, newDate);
@@ -2750,6 +2989,13 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 				selKind = "TASK";
 			}
 			if (changed) {
+				if (kind == DragKind::TaskBody) {
+					if (const PpTask* task = FindTask(doc, id))
+						g_lastCommittedDragTargetRowId = task->rowId;
+				} else if (kind == DragKind::Text) {
+					for (const auto& t : doc.texts)
+						if (t.id == id) { g_lastCommittedDragTargetRowId = t.rowId; break; }
+				}
 				RebuildChart(doc, id);
 				// A2: set the internal selection synchronously so it is never
 				// momentarily empty (avoiding a deselect-then-reselect flicker).
@@ -2776,6 +3022,32 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 	}
 	catch (...) {
 		OvLog(L"unknown error committing drag gesture");
+	}
+	g_mutating = false;
+}
+
+void CommitProgressGesture(const std::string& id, int percent) {
+	if (id.empty() || !g_app || g_mutating) return;
+	percent = std::max(0, std::min(100, percent));
+	g_mutating = true;
+	try {
+		PpDocument doc;
+		if (ReadGanttDocFromSlide(g_app, &doc)) {
+			if (SetTaskPercentValue(doc, id, percent)) {
+				RebuildChart(doc, id);
+				SetOwnSelection("TASK", id);
+				RequestOverlayRepaint();
+			}
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error committing progress drag");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error committing progress drag");
+	}
+	catch (...) {
+		OvLog(L"unknown error committing progress drag");
 	}
 	g_mutating = false;
 }
@@ -2884,7 +3156,14 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		return 0;
 	}
 	if (msg == WM_LBUTTONDOWN) {
-		// While an editor (inline or card) is open, the overlay itself must
+		// Card click-away (SR-IXC-07): overlay is MA_NOACTIVATE so clicking the
+		// chart does not steal focus from the card; commit explicitly instead
+		// of relying on WM_ACTIVATE WA_INACTIVE (which never fires here).
+		if (g_cardHwnd && ::IsWindowVisible(g_cardHwnd)) {
+			CommitCardEdit();
+			return 0;
+		}
+		// While an inline editor is open, the overlay itself must
 		// not start a new gesture/selection-change underneath it — the
 		// editor's own top-level window would lose activation anyway (which
 		// cancels it), but bouncing a click through to a drag/create gesture
@@ -2955,6 +3234,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		DragKind dragKind = g_dragKind;
 		std::string dragId = g_dragId;
 		long dragDeltaDays = g_dragDeltaDays;
+		std::string dragOrigStart = g_dragOrigStart;
+		std::string dragOrigEnd = g_dragOrigEnd;
+		int dragOrigPercent = g_dragOrigPercent;
+		int dragCandidatePercent = g_dragCandidatePercent;
 		std::string dragTargetRowId = g_dragTargetRowId;
 		std::string createRowId = g_createRowId;
 		long createAnchorDay = g_createAnchorDay;
@@ -2983,8 +3266,17 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		} else if (wasGestureActive && gesturePxPerDay > 0.0f) {
 			if (dragKind == DragKind::Create) {
 				createCurrentDay = createAnchorDay + (long)::lround((double)finalDx / (double)gesturePxPerDay);
-			} else {
+			} else if (dragKind != DragKind::TaskProgress) {
 				dragDeltaDays = (long)::lround((double)finalDx / (double)gesturePxPerDay);
+				dragDeltaDays = ClampGestureDeltaDays(dragKind, dragOrigStart, dragOrigEnd, dragDeltaDays);
+				dragDeltaDays = SnapGestureDeltaDays(dragKind, dragOrigStart, dragOrigEnd, dragDeltaDays, g_lastScale);
+			}
+		} else if (wasGestureActive && dragKind == DragKind::TaskProgress) {
+			int barW = dragAnchorRect.right - dragAnchorRect.left;
+			if (barW >= 4) {
+				long relX = (long)(pt.x + g_windowOriginX) - dragAnchorRect.left;
+				dragCandidatePercent = (int)::lround(100.0 * (double)relX / (double)barW);
+				dragCandidatePercent = std::max(0, std::min(100, dragCandidatePercent));
 			}
 		}
 		if (g_captureActive) {
@@ -3048,6 +3340,15 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 						OvLog(L"create gesture commit failed");
 					}
 				}
+			} else if (wasGestureActive && wasDragActive && dragKind == DragKind::TaskProgress) {
+				try {
+					if (dragCandidatePercent != dragOrigPercent) {
+						CommitProgressGesture(dragId, dragCandidatePercent);
+					}
+				} catch (...) {
+					OvLog(L"progress drag commit failed");
+				}
+				ResetDragGestureState();
 			} else if (wasGestureActive && wasDragActive) {
 				try {
 					bool rowChangeRequested = (dragKind == DragKind::TaskBody || dragKind == DragKind::Text) && !dragTargetRowId.empty();
@@ -3132,8 +3433,16 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			return 0;
 		}
 		HtHit hit = HitTestClientPoint(pt);
-		if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
-			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone || hit.zone == HtZone::Marker || hit.zone == HtZone::Text) {
+		if (hit.zone == HtZone::TaskBody) {
+			try {
+				if (TryOpenInlineRename("TASK", hit.id)) return 0;
+			} catch (...) {
+				OvLog(L"double-click task inline rename failed");
+			}
+		}
+		if (hit.zone == HtZone::TaskEdgeL || hit.zone == HtZone::TaskEdgeR ||
+			hit.zone == HtZone::TaskProgressEdge ||
+			hit.zone == HtZone::Milestone || hit.zone == HtZone::Marker || hit.zone == HtZone::Text) {
 			// The floating card editor (V2): double-clicking a bar, milestone,
 			// marker, or text annotation opens the richer editor instead of the
 			// simpler TITLE/ROW_LABEL inline box (TEXT uses the same card in a
@@ -3327,13 +3636,10 @@ LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 	}
 	// Losing activation (focus leaving the card entirely — clicking the
-	// slide, Alt+Tab, etc.) cancels per the task spec. Activation moving
-	// between the card's OWN child controls does NOT generate WM_ACTIVATE
-	// on the top-level window (only WM_KILLFOCUS on the child, which the
-	// subclass above deliberately ignores), so this only fires on a genuine
-	// focus-loss.
+	// slide, Alt+Tab, etc.) commits per SR-IXC-07 (same as inline editor
+	// click-away). Esc still cancels via CardFieldProc.
 	if (msg == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE && !g_cardClosing) {
-		CancelCardEdit();
+		CommitCardEdit();
 		return 0;
 	}
 	if (msg == WM_DESTROY && hwnd == g_cardHwnd) {
@@ -3364,7 +3670,30 @@ void EnsureWindow() {
 // ---- premultiplied-alpha painting (GDI+) -----------------------------------
 
 // Shared ghost renderer for live drags and the post-commit echo (SR-SMO-06).
-static void PaintDragGhostShape(Gdiplus::Graphics& g, DragKind kind, const RECT& anchorClient, const RECT& ghostClient) {
+static void PaintTaskBarGhost(Gdiplus::Graphics& g, const RECT& ghostClient, int progressPercent, bool livePreview) {
+	using namespace Gdiplus;
+	GraphicsPath ghostPath;
+	AddRoundRect(ghostPath, (REAL)ghostClient.left, (REAL)ghostClient.top,
+		(REAL)(ghostClient.right - ghostClient.left), (REAL)(ghostClient.bottom - ghostClient.top), 3.0f);
+	SolidBrush trackFill(GpColor(livePreview ? 110 : 140, ACCENT));
+	g.FillPath(&trackFill, &ghostPath);
+	if (progressPercent > 0) {
+		int barW = ghostClient.right - ghostClient.left;
+		int pw = barW * progressPercent / 100;
+		if (pw > 2) {
+			GraphicsPath progPath;
+			AddRoundRect(progPath, (REAL)ghostClient.left, (REAL)ghostClient.top,
+				(REAL)pw, (REAL)(ghostClient.bottom - ghostClient.top), 3.0f);
+			SolidBrush progFill(GpColor(livePreview ? 180 : 220, ACCENT));
+			g.FillPath(&progFill, &progPath);
+		}
+	}
+	Pen ghostPen(GpColor(livePreview ? 220 : 255, ACCENT), 1.5f);
+	g.DrawPath(&ghostPen, &ghostPath);
+}
+
+static void PaintDragGhostShape(Gdiplus::Graphics& g, DragKind kind, const RECT& anchorClient, const RECT& ghostClient,
+	int progressPercent = 0) {
 	using namespace Gdiplus;
 	if (kind == DragKind::Milestone) {
 		int cx = (ghostClient.left + ghostClient.right) / 2;
@@ -3385,6 +3714,10 @@ static void PaintDragGhostShape(Gdiplus::Graphics& g, DragKind kind, const RECT&
 		int cx = (ghostClient.left + ghostClient.right) / 2;
 		Pen ghostPen(GpColor(220, ACCENT), 2.0f);
 		g.DrawLine(&ghostPen, cx, anchorClient.top, cx, anchorClient.bottom);
+	} else if (kind == DragKind::TaskProgress) {
+		PaintTaskBarGhost(g, ghostClient, progressPercent, true);
+	} else if (kind == DragKind::TaskBody || kind == DragKind::TaskEdgeL || kind == DragKind::TaskEdgeR) {
+		PaintTaskBarGhost(g, ghostClient, progressPercent, true);
 	} else {
 		GraphicsPath ghostPath;
 		AddRoundRect(ghostPath, (REAL)ghostClient.left, (REAL)ghostClient.top,
@@ -3571,15 +3904,18 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		int ghostRight = baseX + (int)::lround((double)(highDay + 1 - g_createAnchorDay) * (double)g_dragPxPerDay);
 		if (ghostRight < ghostLeft + 2) ghostRight = ghostLeft + 2;
 
-		GraphicsPath ghostPath;
-		AddRoundRect(ghostPath, (REAL)ghostLeft, (REAL)band.top,
-			(REAL)(ghostRight - ghostLeft), (REAL)(band.bottom - band.top), 3.0f);
-		SolidBrush ghostFill(GpColor(90, ACCENT));
-		g.FillPath(&ghostFill, &ghostPath);
-		Pen ghostPen(GpColor(200, ACCENT), 1.5f);
-		g.DrawPath(&ghostPen, &ghostPath);
+		int bandH = band.bottom - band.top;
+		int barH = std::max(4, (int)::lround((double)bandH * (double)kRowBarHeightFrac));
+		int barTop = band.top + (bandH - barH) / 2;
+		RECT barGhost = { ghostLeft, barTop, ghostRight, barTop + barH };
+		g_dragPreviewRect = {
+			barGhost.left + g_windowOriginX, barGhost.top + g_windowOriginY,
+			barGhost.right + g_windowOriginX, barGhost.bottom + g_windowOriginY
+		};
+		PaintTaskBarGhost(g, barGhost, 0, true);
 
-		std::wstring tip = Widen(DaysToDate(lowDay)) + L" → " + Widen(DaysToDate(highDay));
+		std::wstring tip = Widen(DaysToDate(lowDay)) + L" \u2192 " + Widen(DaysToDate(highDay));
+		g_dragPillText = Narrow(tip.c_str());
 		Gdiplus::Font tipFont(L"Segoe UI", g_tooltipFontPx, FontStyleRegular, UnitPixel);
 		RectF tipBounds;
 		g.MeasureString(tip.c_str(), -1, &tipFont, PointF(0, 0), &tipBounds);
@@ -3642,6 +3978,9 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			ghost.right = anchor.right + shiftPx;
 			if (ghost.right < ghost.left + 2) ghost.right = ghost.left + 2;
 			break;
+		case DragKind::TaskProgress:
+			// Progress edge moves within the bar; bar rect stays anchored.
+			break;
 		case DragKind::TaskBody:
 			ghost.left = anchor.left + shiftPx;
 			ghost.right = anchor.right + shiftPx;
@@ -3663,6 +4002,27 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			ghost.right = anchor.right + shiftPx;
 			break;
 		}
+
+		// UF-02: hide the stale native progress fill behind a local wash, then
+		// paint the full task ghost (track + progress) at the candidate position.
+		if (g_dragKind == DragKind::TaskBody || g_dragKind == DragKind::TaskEdgeL ||
+			g_dragKind == DragKind::TaskEdgeR || g_dragKind == DragKind::TaskProgress) {
+			SolidBrush cover(GpColor(240, SURFACE));
+			g.FillRectangle(&cover, anchor.left, anchor.top, anchor.right - anchor.left, anchor.bottom - anchor.top);
+		}
+
+		int ghostProgress = g_dragOrigPercent;
+		if (g_dragKind == DragKind::TaskProgress) {
+			ghostProgress = g_dragCandidatePercent;
+		} else if (g_dragKind == DragKind::TaskEdgeL || g_dragKind == DragKind::TaskEdgeR) {
+			// Edge resize does not change percent visually during drag.
+			ghostProgress = g_dragOrigPercent;
+		}
+
+		g_dragPreviewRect = {
+			ghost.left + g_windowOriginX, ghost.top + g_windowOriginY,
+			ghost.right + g_windowOriginX, ghost.bottom + g_windowOriginY
+		};
 
 		if (g_dragKind == DragKind::Milestone) {
 			// Diamond shifted with the gesture, matching the milestone marker.
@@ -3688,39 +4048,39 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			int cx = (ghost.left + ghost.right) / 2;
 			Pen ghostPen(GpColor(220, ACCENT), 2.0f);
 			g.DrawLine(&ghostPen, cx, anchor.top, cx, anchor.bottom);
+		} else if (g_dragKind == DragKind::TaskBody || g_dragKind == DragKind::TaskEdgeL ||
+			g_dragKind == DragKind::TaskEdgeR || g_dragKind == DragKind::TaskProgress) {
+			PaintDragGhostShape(g, g_dragKind, anchor, ghost, ghostProgress);
 		} else {
-			GraphicsPath ghostPath;
-			AddRoundRect(ghostPath, (REAL)ghost.left, (REAL)ghost.top,
-				(REAL)(ghost.right - ghost.left), (REAL)(ghost.bottom - ghost.top), 3.0f);
-			SolidBrush ghostFill(GpColor(110, ACCENT));
-			g.FillPath(&ghostFill, &ghostPath);
-			Pen ghostPen(GpColor(220, ACCENT), 1.5f);
-			g.DrawPath(&ghostPen, &ghostPath);
+			PaintDragGhostShape(g, g_dragKind, anchor, ghost, 0);
 		}
 
-		// Tooltip: candidate dates near the cursor, plus the target row when
-		// a TaskBody drag has retargeted to a different row than it started.
-		// Text has no "dates" of its own to preview this way (an ANCHORED
-		// text's g_dragOrigStart is empty; a FREE text's IS a date, but the
-		// tooltip still reads more naturally as an offset/row than a bare
-		// date) — show the point offset instead, plus the target row for a
-		// FREE text row-reassign (mirrors TaskBody's row suffix).
+		// Tooltip: candidate dates / percent near the cursor (SR-IXC-03/04/06).
 		std::wstring tip;
-		if (g_dragKind == DragKind::Text) {
+		if (g_dragKind == DragKind::TaskProgress) {
+			wchar_t buf[32];
+			::swprintf_s(buf, 32, L"%d%%", g_dragCandidatePercent);
+			tip = buf;
+		} else if (g_dragKind == DragKind::Text) {
 			wchar_t buf[64];
 			::swprintf_s(buf, 64, L"dx %.0f, dy %.0f", g_dragCandidateDx, g_dragCandidateDy);
 			tip = buf;
 			if (!g_dragTextAnchored && !g_dragTargetRowId.empty() && g_dragTargetRowId != g_dragOrigRowId) {
 				tip += L"  (" + Widen(g_dragTargetRowId) + L")";
 			}
+		} else if (g_dragKind == DragKind::Marker || g_dragKind == DragKind::Milestone) {
+			std::string candStart, candEnd;
+			ComputeDragCandidateDates(candStart, candEnd);
+			tip = Widen(candStart);
 		} else {
 			std::string candStart, candEnd;
 			ComputeDragCandidateDates(candStart, candEnd);
-			tip = Widen(candStart) + L" → " + Widen(candEnd);
+			tip = Widen(candStart) + L" \u2192 " + Widen(candEnd);
 			if (g_dragKind == DragKind::TaskBody && !g_dragTargetRowId.empty() && g_dragTargetRowId != g_dragOrigRowId) {
 				tip += L"  (" + Widen(g_dragTargetRowId) + L")";
 			}
 		}
+		g_dragPillText = Narrow(tip.c_str());
 		Gdiplus::Font tipFont(L"Segoe UI", g_tooltipFontPx, FontStyleRegular, UnitPixel);
 		RectF tipBounds;
 		g.MeasureString(tip.c_str(), -1, &tipFont, PointF(0, 0), &tipBounds);
@@ -3750,7 +4110,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			g_dragCommitEcho.deltaDays, g_dragCommitEcho.pxPerDay, g_dragCommitEcho.targetRowScreen,
 			g_dragCommitEcho.textAnchored, g_dragCommitEcho.origDx, g_dragCommitEcho.origDy,
 			g_dragCommitEcho.candidateDx, g_dragCommitEcho.candidateDy, g_dragCommitEcho.pxPerPt);
-		PaintDragGhostShape(g, g_dragCommitEcho.kind, anchorClient, ghostClient);
+		PaintDragGhostShape(g, g_dragCommitEcho.kind, anchorClient, ghostClient, 0);
 	}
 
 	if (g_linkMode && g_appBarShown && g_appBarGeomValid) {
@@ -3839,6 +4199,37 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	} else {
 		Pen framePen(GpToken(255, gt::primary), ScaleF(gt::chromeItemFramePx));
 		g.DrawRectangle(&framePen, (INT)fx, (INT)fy, (INT)fw, (INT)fh);
+	}
+
+	// SR-IXC-06: progress drag handle at the percent boundary on selected tasks.
+	if (g_ownSelKind == "TASK" && !g_gestureActive && !g_dragActive) {
+		int pct = -1;
+		for (const auto& item : g_hitSnapshot.items) {
+			if (item.kind == HtItemKind::Task && item.id == g_ownSelId) {
+				pct = item.progressPercent;
+				break;
+			}
+		}
+		if (pct < 0) {
+			PpDocument cached;
+			if (Gantt_TryPeekCachedDoc(&cached)) {
+				for (const auto& t : cached.tasks) {
+					if (t.id == g_ownSelId) { pct = t.percent; break; }
+				}
+			}
+		}
+		if (pct >= 0 && pct <= 100 && fw > 6.0f) {
+			int hx = (INT)(fx + fw * (REAL)pct / 100.0f);
+			int hy = (INT)(fy + fh / 2.0f);
+			int hh = Scale(10);
+			int hw = Scale(4);
+			GraphicsPath handlePath;
+			AddRoundRect(handlePath, (REAL)(hx - hw / 2), (REAL)(hy - hh / 2), (REAL)hw, (REAL)hh, 2.0f);
+			SolidBrush handleFill(GpColor(255, SURFACE));
+			g.FillPath(&handleFill, &handlePath);
+			Pen handlePen(GpToken(255, gt::primary), 1.5f);
+			g.DrawPath(&handlePen, &handlePath);
+		}
 	}
 
 	// floating Material mini-toolbar
@@ -5794,6 +6185,7 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 	catch (...) {}
 
 	if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL || hit.zone == HtZone::TaskEdgeR
+		|| hit.zone == HtZone::TaskProgressEdge
 		|| hit.zone == HtZone::Milestone || hit.zone == HtZone::Marker || hit.zone == HtZone::Text) {
 		hitId = hit.id;
 	} else if (hit.zone == HtZone::Label && hit.kind == HtItemKind::RowLabel) {
@@ -6490,6 +6882,22 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"hasDrag\":" + std::string((g_dragActive || g_gestureActive) ? "true" : "false") + ",";
 	s += "\"hasCommitEcho\":" + std::string(g_dragCommitEcho.active ? "true" : "false") + ",";
 	s += "\"dragKind\":" + std::to_string(static_cast<int>(g_dragKind)) + ",";
+	s += "\"dragPillText\":\"" + g_dragPillText + "\",";
+	s += "\"dragPreviewRect\":{\"left\":" + std::to_string(g_dragPreviewRect.left) + ",\"top\":" + std::to_string(g_dragPreviewRect.top)
+		+ ",\"right\":" + std::to_string(g_dragPreviewRect.right) + ",\"bottom\":" + std::to_string(g_dragPreviewRect.bottom) + "},";
+	s += "\"dragCandidatePercent\":" + std::to_string(g_dragCandidatePercent) + ",";
+	s += "\"dragTargetRowId\":\"" + g_lastCommittedDragTargetRowId + "\",";
+	int ownSelTaskPercent = -1;
+	if (g_ownSelKind == "TASK" && !g_ownSelId.empty()) {
+		PpDocument cached;
+		if (Gantt_TryPeekCachedDoc(&cached)) {
+			for (const auto& t : cached.tasks) {
+				if (t.id == g_ownSelId) { ownSelTaskPercent = t.percent; break; }
+			}
+		}
+	}
+	s += "\"ownSelTaskPercent\":" + std::to_string(ownSelTaskPercent) + ",";
+	s += "\"cardVisible\":" + std::string((g_cardHwnd && ::IsWindowVisible(g_cardHwnd)) ? "true" : "false") + ",";
 	s += "\"appBarVisible\":" + std::string(g_appBarShown ? "true" : "false") + ",";
 	s += "\"appBarValid\":" + std::string(g_appBarValid ? "true" : "false") + ",";
 	s += "\"scale\":\"" + g_lastScale + "\",";

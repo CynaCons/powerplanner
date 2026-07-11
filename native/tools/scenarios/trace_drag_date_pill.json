@@ -1,0 +1,11 @@
+{
+  "name": "trace_drag_date_pill",
+  "description": "v2.6.2 trace: task drag shows live date pill (SR-IXC-03)",
+  "exe": "ppappbarshot",
+  "trace_profile": "drag-date-pill",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["drag_pill_present", "row_bands_stable", "horizontal_drag_no_retarget"],
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+}

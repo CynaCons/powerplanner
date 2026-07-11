@@ -13,6 +13,7 @@ inline AppBarSel HtZoneToAppBarSel(HtZone zone, HtItemKind kind, bool hasRowId) 
 	case HtZone::TaskBody:
 	case HtZone::TaskEdgeL:
 	case HtZone::TaskEdgeR:
+	case HtZone::TaskProgressEdge:
 		return AppBarSel::Task;
 	case HtZone::Milestone:
 		return AppBarSel::Milestone;

@@ -191,13 +191,6 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 			model.groups.push_back(g);
 		}
 		{
-			// Progress for task (direct access when task selected; addresses user need to edit percent without overlap issues)
-			AppBarGroup g;
-			g.items.push_back({ HtCmd_PercentMinus10, "-10%", AppBarIcon::MinusDay });
-			g.items.push_back({ HtCmd_PercentPlus10, "+10%", AppBarIcon::PlusDay });
-			model.groups.push_back(g);
-		}
-		{
 			AppBarGroup g;
 			g.items.push_back({ HtCmd_Link, "Link", AppBarIcon::Link });
 			AppBarItem unlink;

@@ -2295,7 +2295,17 @@ int wmain(int argc, wchar_t** argv) {
 								if (m.id == markerIdUtf8) { newDate = m.date; foundAfter = true; break; }
 							}
 
-							std::string expectDate = DaysToDate(DateToDays(origDate) + kDragDays);
+							// UF-09 / SR-IXC-04: marker drags snap to the smallest visible
+							// scale unit. The sample doc uses week scale -> Monday-aligned
+							// (mirror of Overlay.cpp SnapDayToScale's week branch).
+							long expectDay = DateToDays(origDate) + kDragDays;
+							{
+								const long epochMonday = 4; // 1970-01-05
+								long rel = expectDay - epochMonday;
+								long mod = ((rel % 7) + 7) % 7;
+								expectDay = (mod <= 3) ? expectDay - mod : expectDay + (7 - mod);
+							}
+							std::string expectDate = DaysToDate(expectDay);
 
 							const char* gotIdUtf8 = Overlay_GetSelectedIdForTest();
 							std::string gotId = gotIdUtf8 ? gotIdUtf8 : "";

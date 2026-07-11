@@ -1,0 +1,11 @@
+{
+  "name": "trace_marker_snap",
+  "description": "v2.6.2 trace: marker drag snaps to scale unit (SR-IXC-04/12)",
+  "exe": "ppappbarshot",
+  "trace_profile": "marker-snap",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["marker_snap_pill"],
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+}

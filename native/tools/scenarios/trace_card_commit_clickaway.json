@@ -1,0 +1,11 @@
+{
+  "name": "trace_card_commit_clickaway",
+  "description": "v2.6.2 trace: card editor commits on click-away (SR-IXC-07, B2)",
+  "exe": "ppappbarshot",
+  "trace_profile": "card-commit-clickaway",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["card_commits_on_clickaway"],
+  "expected_trace_steps": ["pre", "card-open", "immed", "+1", "+3"]
+}

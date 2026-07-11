@@ -306,6 +306,114 @@ static void PostTaskBodyDrag(HWND ov, POINT screenCenter, int dragPx) {
 	PumpFor(400);
 }
 
+static bool FindTaskBodyRect(PowerPoint::_ApplicationPtr& app, const char* taskId, RECT* out);
+static bool ParseNamedRectFromDump(const char* json, const char* key, RECT* out);
+
+static bool FindTaskProgressEdge(PowerPoint::_ApplicationPtr& app, const char* taskId, int percent, POINT* outScreen) {
+	RECT r{};
+	if (!FindTaskBodyRect(app, taskId, &r) || !outScreen) return false;
+	if (percent < 0) percent = 0;
+	if (percent > 100) percent = 100;
+	outScreen->x = r.left + (r.right - r.left) * percent / 100;
+	outScreen->y = (r.top + r.bottom) / 2;
+	return true;
+}
+
+static bool FindMarkerDragPoint(PowerPoint::_ApplicationPtr& app, const char* markerId, POINT* outScreen) {
+	if (!outScreen || !markerId || !*markerId) return false;
+	try {
+		PowerPoint::DocumentWindowPtr w = app->GetActiveWindow();
+		PowerPoint::_SlidePtr sl = w->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shs = sl->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			PowerPoint::ShapePtr root = shs->Item(_variant_t(ii));
+			_bstr_t rk = root->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!rk.length() || std::string((const char*)_bstr_t(rk)) != "CHART_ROOT") continue;
+			PowerPoint::GroupShapesPtr items = root->GetGroupItems();
+			long n = items->GetCount();
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				if (!id.length() || std::string((const char*)_bstr_t(id)) != markerId) continue;
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				std::string kind = k.length() ? std::string((const char*)_bstr_t(k)) : "";
+				if (kind != "TODAY_LINE" && kind != "DEADLINE" && kind != "CUSTOM_MARKER") continue;
+				float l = ch->GetLeft(), t = ch->GetTop(), h = ch->GetHeight();
+				outScreen->x = w->PointsToScreenPixelsX(l);
+				outScreen->y = w->PointsToScreenPixelsY(t + h * 0.5f);
+				return true;
+			}
+		}
+	} catch (...) {}
+	return false;
+}
+
+// Down + moves (button still held). Pair with PostScreenDragFinish. Split so
+// trace profiles can dump live-drag state (pill text, candidate %, preview
+// rect) BEFORE mouse-up — that state legitimately clears at drop.
+static void PostScreenDragStart(HWND ov, POINT screenStart, int dragPxX, int dragPxY = 0) {
+	if (!ov) return;
+	POINT clientPt = screenStart;
+	::ScreenToClient(ov, &clientPt);
+	Overlay_SetCursorPosOverrideForTest(true, screenStart);
+	LPARAM downLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+	::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, downLp);
+	PumpFor(60);
+	const int steps = 5;
+	for (int s = 1; s <= steps; ++s) {
+		int mx = clientPt.x + dragPxX * s / steps;
+		int my = clientPt.y + dragPxY * s / steps;
+		POINT screenPt = { screenStart.x + dragPxX * s / steps, screenStart.y + dragPxY * s / steps };
+		Overlay_SetCursorPosOverrideForTest(true, screenPt);
+		::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)mx, (short)my));
+		PumpFor(40);
+	}
+}
+
+static void PostScreenDragFinish(HWND ov, POINT screenStart, int dragPxX, int dragPxY = 0) {
+	if (!ov) return;
+	POINT clientPt = screenStart;
+	::ScreenToClient(ov, &clientPt);
+	int finalX = clientPt.x + dragPxX;
+	int finalY = clientPt.y + dragPxY;
+	POINT upScreen = { screenStart.x + dragPxX, screenStart.y + dragPxY };
+	Overlay_SetCursorPosOverrideForTest(true, upScreen);
+	::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)finalY));
+	PumpFor(400);
+}
+
+static void PostScreenDrag(HWND ov, POINT screenStart, int dragPxX, int dragPxY = 0) {
+	PostScreenDragStart(ov, screenStart, dragPxX, dragPxY);
+	PostScreenDragFinish(ov, screenStart, dragPxX, dragPxY);
+}
+
+static bool JsonFieldNonEmpty(const char* dump, const char* key) {
+	if (!dump || !key) return false;
+	char needle[64];
+	::snprintf(needle, sizeof(needle), "\"%s\":\"", key);
+	const char* p = ::strstr(dump, needle);
+	return p && p[::strlen(needle)] != '"';
+}
+
+static int JsonFieldInt(const char* dump, const char* key, int fallback = 0) {
+	if (!dump || !key) return fallback;
+	char needle[64];
+	::snprintf(needle, sizeof(needle), "\"%s\":", key);
+	const char* p = ::strstr(dump, needle);
+	if (!p) return fallback;
+	int v = fallback;
+	::sscanf_s(p + ::strlen(needle), "%d", &v);
+	return v;
+}
+
+static bool ParseDragPreviewHeight(const char* dump, int* outH) {
+	RECT r{};
+	if (!ParseNamedRectFromDump(dump, "dragPreviewRect", &r) || !outH) return false;
+	*outH = r.bottom - r.top;
+	return *outH > 0;
+}
+
 // Count pixels within per-channel tolerance 24 of legacy accent RGB(26,115,232).
 static double MeasureAccentPctInRect(const RECT& rc) {
 	int w = rc.right - rc.left, h = rc.bottom - rc.top;
@@ -1653,10 +1761,8 @@ int wmain(int argc, wchar_t** argv) {
 				PumpFor(300);
 				captureStep("+3", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"task-select-progress") == 0) {
-				// Select a task body, verify TASK sel, progress should be actionable and visible.
-				Overlay_SelectForTest("TASK", "discovery");
-				// Simulate the common case (native PPT sel remains CHART_ROOT group after item click).
-				// Pre-fix this caused full-chart takeover in selScreenRect/frameRect.
+				// v2.6.2: progress edge drag on wireframes (40%) instead of ±10% steppers.
+				Overlay_SelectForTest("TASK", "wireframes");
 				try {
 					PowerPoint::ShapesPtr shs = slide->GetShapes();
 					long nn = shs->GetCount();
@@ -1670,16 +1776,173 @@ int wmain(int argc, wchar_t** argv) {
 					}
 				} catch(...) {}
 				Overlay_InvalidateAppBarForTest();
-				PumpFor(400);  // longer settle for bands after select
+				PumpFor(400);
 				captureStep("task-sel", traceProfile);
-				// Test edit without breaking visuals (percent controls now in TASK appbar).
-				Overlay_PerformAppBarCommandForTest(HtCmd_PercentPlus10);
-				Overlay_InvalidateAppBarForTest();
-				PumpFor(400);  // longer for rebuild after edit
-				captureStep("+1", traceProfile);
-				Overlay_PerformAppBarCommandForTest(HtCmd_PercentMinus10);
+				HWND ov = OverlayHwnd();
+				POINT edge{};
+				if (ov && FindTaskProgressEdge(app, "wireframes", 40, &edge)) {
+					PostScreenDrag(ov, edge, 48);
+				}
 				Overlay_InvalidateAppBarForTest();
 				PumpFor(400);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"drag-date-pill") == 0) {
+				Overlay_SelectForTest("TASK", "interviews");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				HWND ov = OverlayHwnd();
+				POINT center{};
+				if (ov && FindTaskBodyCenter(app, "interviews", &center)) {
+					// Inline drag with a MID-GESTURE capture: the date pill only
+					// exists while the button is down, so dump it before mouse-up.
+					POINT clientPt = center;
+					::ScreenToClient(ov, &clientPt);
+					Overlay_SetCursorPosOverrideForTest(true, center);
+					::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((short)clientPt.x, (short)clientPt.y));
+					PumpFor(60);
+					const int dragPx = 90, dragSteps = 6;
+					for (int s = 1; s <= dragSteps; ++s) {
+						POINT sp = { center.x + dragPx * s / dragSteps, center.y };
+						Overlay_SetCursorPosOverrideForTest(true, sp);
+						::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)(clientPt.x + dragPx * s / dragSteps), (short)clientPt.y));
+						PumpFor(40);
+					}
+					captureStep("mid", traceProfile);
+					POINT up = { center.x + dragPx, center.y };
+					Overlay_SetCursorPosOverrideForTest(true, up);
+					::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)(clientPt.x + dragPx), (short)clientPt.y));
+					PumpFor(400);
+				}
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"drag-row-retarget") == 0) {
+				Overlay_SelectForTest("TASK", "interviews");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				HWND ov = OverlayHwnd();
+				POINT center{};
+				const char* preDump = Overlay_DumpChromeStateForTest();
+				RECT researchBand{}, designBand{};
+				if (ParseRowBandFromDump(preDump, "research", &researchBand)
+					&& ParseRowBandFromDump(preDump, "design", &designBand)
+					&& ov && FindTaskBodyCenter(app, "interviews", &center)) {
+					const int researchCy = (researchBand.top + researchBand.bottom) / 2;
+					const int designCy = (designBand.top + designBand.bottom) / 2;
+					const int dragDy = designCy - researchCy;
+					PostScreenDrag(ov, center, 0, dragDy);
+				}
+				captureStep("immed", traceProfile);
+				{
+					char phaseBuf[512];
+					const int phaseLen = Gantt_GetLastOpPhasesForTest(phaseBuf, (int)sizeof(phaseBuf));
+					if (phaseLen > 0)
+						wprintf(L"TRACE OPPHASES: %hs\n", phaseBuf);
+				}
+				const char* immedDump = Overlay_DumpChromeStateForTest();
+				wprintf(L"DRAGRETARGET targetRow=%hs\n",
+					immedDump && ::strstr(immedDump, "dragTargetRowId") ? ::strstr(immedDump, "dragTargetRowId") : "(none)");
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"marker-snap") == 0) {
+				Overlay_SelectForTest("MARKER", "today");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				HWND ov = OverlayHwnd();
+				POINT mkPt{};
+				if (ov && FindMarkerDragPoint(app, "today", &mkPt)) {
+					PostScreenDragStart(ov, mkPt, 42);
+					captureStep("mid", traceProfile);
+					PostScreenDragFinish(ov, mkPt, 42);
+				}
+				captureStep("immed", traceProfile);
+				PumpFor(200);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"create-preview-shape") == 0) {
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				HWND ov = OverlayHwnd();
+				const char* preDump = Overlay_DumpChromeStateForTest();
+				RECT band{};
+				int rowBandH = 0;
+				int previewH = 0;
+				if (ParseRowBandFromDump(preDump, "launch", &band)) {
+					rowBandH = band.bottom - band.top;
+					POINT start = { band.right - 60, (band.top + band.bottom) / 2 };
+					if (ov) {
+						PostScreenDragStart(ov, start, 100);
+						captureStep("mid", traceProfile);
+						ParseDragPreviewHeight(Overlay_DumpChromeStateForTest(), &previewH);
+						PostScreenDragFinish(ov, start, 100);
+					}
+				}
+				captureStep("immed", traceProfile);
+				wprintf(L"CREATEPREVIEW rowBandH=%d previewH=%d ratio=%.2f\n",
+					rowBandH, previewH, rowBandH > 0 ? (double)previewH / (double)rowBandH : 0.0);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"progress-drag") == 0) {
+				Overlay_SelectForTest("TASK", "wireframes");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				HWND ov = OverlayHwnd();
+				POINT edge{};
+				if (ov && FindTaskProgressEdge(app, "wireframes", 40, &edge)) {
+					PostScreenDragStart(ov, edge, 36);
+					captureStep("mid", traceProfile);
+					PostScreenDragFinish(ov, edge, 36);
+				}
+				captureStep("immed", traceProfile);
+				wprintf(L"PROGRESSDRAG pct=%d\n", JsonFieldInt(Overlay_DumpChromeStateForTest(), "dragCandidatePercent", -1));
+				PumpFor(200);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"card-commit-clickaway") == 0) {
+				Overlay_SelectForTest("TASK", "visual");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				Overlay_PerformAppBarCommandForTest(HtCmd_Edit);
+				PumpFor(350);
+				HWND card = ::FindWindowW(PP_CARD_EDITOR_CLASS, nullptr);
+				if (card) {
+					HWND label = ::GetDlgItem(card, OVERLAY_CARD_ID_LABEL_FOR_TEST);
+					if (label) ::SetWindowTextW(label, L"Card committed name");
+				}
+				captureStep("card-open", traceProfile);
+				HWND ov = OverlayHwnd();
+				if (ov) {
+					RECT or{}; ::GetWindowRect(ov, &or);
+					POINT away = { or.left + 8, or.top + 8 };
+					POINT cp = away; ::ScreenToClient(ov, &cp);
+					LPARAM lp = MAKELPARAM((short)cp.x, (short)cp.y);
+					::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+					::PostMessageW(ov, WM_LBUTTONUP, 0, lp);
+				}
+				PumpFor(400);
+				captureStep("immed", traceProfile);
+				const char* immedDump = Overlay_DumpChromeStateForTest();
+				wprintf(L"CARDCOMMIT cardVisible=%hs\n",
+					(immedDump && ::strstr(immedDump, "\"cardVisible\":false")) ? "committed-closed" : "still-open");
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
 				captureStep("+3", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"component-shape-protection") == 0) {
 				// v2.6.1 U1 selection integrity (SR-SHP-01..03 / SR-IXC-19/21 /

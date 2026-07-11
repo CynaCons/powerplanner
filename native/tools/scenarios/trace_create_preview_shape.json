@@ -1,0 +1,11 @@
+{
+  "name": "trace_create_preview_shape",
+  "description": "v2.6.2 trace: create-drag preview uses bar height not row height (SR-IXC-05)",
+  "exe": "ppappbarshot",
+  "trace_profile": "create-preview-shape",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["create_preview_bar_height"],
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+}

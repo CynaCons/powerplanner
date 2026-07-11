@@ -57,6 +57,29 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 		return hit;
 	}
 
+	// 1b) Task progress boundary (between date edges and milestones).
+	const HtItem* progItem = nullptr;
+	long progDist = edgeBandPx + 1;
+	for (const auto& it : snap.items) {
+		if (it.kind != HtItemKind::Task) continue;
+		if (it.progressPercent <= 0 || it.progressPercent >= 100) continue;
+		if (y < it.rect.top || y >= it.rect.bottom) continue;
+		long barW = it.rect.right - it.rect.left;
+		if (barW < 4) continue;
+		long progX = it.rect.left + barW * it.progressPercent / 100;
+		long dp = AbsLong(x - progX);
+		if (dp <= edgeBandPx && dp < progDist) {
+			progItem = &it;
+			progDist = dp;
+		}
+	}
+	if (progItem) {
+		hit.zone = HtZone::TaskProgressEdge;
+		hit.kind = HtItemKind::Task;
+		hit.id = progItem->id;
+		return hit;
+	}
+
 	// 2) Milestones (small markers drawn over the band).
 	for (const auto& it : snap.items) {
 		if (it.kind != HtItemKind::Milestone) continue;
@@ -400,12 +423,10 @@ HtMenuOp MapRowAppBarCommand(int cmdId) {
 
 HtMenuOp MapTaskAppBarCommand(int cmdId) {
 	if (!RegistryTaskAppBarCmd(cmdId)) return {};
-	HtMenuOp op = MapRegistryCommand(cmdId);
-	if (cmdId == HtCmd_Rename) {
-		op.opKind = HtOpKind::Edit;
-		op.needsTaskId = true;
-	}
-	return op;
+	// Rename on TASK opens inline label edit (SR-IXC-16); overlay handles it
+	// directly — must not map to Edit/card.
+	if (cmdId == HtCmd_Rename) return {};
+	return MapRegistryCommand(cmdId);
 }
 
 HtMenuOp MapMilestoneAppBarCommand(int cmdId) {
@@ -499,6 +520,7 @@ HtCursor GanttCursorForZone(HtZone zone) {
 		return HtCursor::SizeAll;
 	case HtZone::TaskEdgeL:
 	case HtZone::TaskEdgeR:
+	case HtZone::TaskProgressEdge:
 	case HtZone::Marker:
 		return HtCursor::SizeWE;
 	case HtZone::EmptyCell:
