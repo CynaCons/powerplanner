@@ -1362,7 +1362,8 @@ void OpenInlineEditor(const EditRegion& region) {
 		NormalizeRect(rc);
 		int w = std::max(80, (int)(rc.right - rc.left));
 		int h = std::max(22, (int)(rc.bottom - rc.top));
-		::SetWindowPos(g_editorHwnd, HWND_TOPMOST, rc.left, rc.top, w, h, SWP_SHOWWINDOW);
+		::SetWindowPos(g_editorHwnd, (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST,
+			rc.left, rc.top, w, h, SWP_SHOWWINDOW);
 		::MoveWindow(g_editHwnd, 0, 0, w, h, TRUE);
 		std::wstring text = Widen(value);
 		::SetWindowTextW(g_editHwnd, text.c_str());
@@ -1702,7 +1703,8 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 			if (y < mi.rcWork.top) y = mi.rcWork.top;
 		}
 
-		::SetWindowPos(g_cardHwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+		::SetWindowPos(g_cardHwnd, (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST,
+			x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
 		::SetForegroundWindow(g_cardHwnd);
 		::SetFocus(g_cardLabelHwnd);
 		::SendMessageW(g_cardLabelHwnd, EM_SETSEL, 0, -1);
@@ -3921,7 +3923,11 @@ void HideOverlay() {
 			g_shown ? 1 : 0, g_hotkeysActive ? 1 : 0, g_ownSelKind.c_str(), g_ownSelId.c_str());
 		OvLog(buf);
 	}
-	if (g_shown && g_hwnd) { ::ShowWindow(g_hwnd, SW_HIDE); g_shown = false; }
+	// Hide on ACTUAL visibility, not only the g_shown flag: a flag desync
+	// would otherwise leave the window painted on screen forever with every
+	// later HideOverlay a silent no-op (live report 2026-07-11: overlay
+	// remained over a fullscreen game after PowerPoint lost foreground).
+	if (g_hwnd && (g_shown || ::IsWindowVisible(g_hwnd))) { ::ShowWindow(g_hwnd, SW_HIDE); g_shown = false; }
 	g_buttonsValid = false;
 	ClearSelectionState();
 	ClearOwnSelection();
@@ -3974,7 +3980,13 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	bool resized = hadWindow && (oldWindow.right - oldWindow.left != ww || oldWindow.bottom - oldWindow.top != wh);
 	bool needUpdate = dpiChanged || !wasShown || !hadWindow || moved || resized;
 	if (needUpdate) {
-		::SetWindowPos(g_hwnd, HWND_TOPMOST, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		// Under harness override the gating that would hide this window when
+		// another app is foreground is bypassed — so it must NOT be TOPMOST,
+		// or it paints over whatever the user is doing while a test run
+		// borrows the desktop (live report 2026-07-11: app bar over a
+		// fullscreen game). Production keeps TOPMOST (it hides via gating).
+		HWND insertAfter = (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST;
+		::SetWindowPos(g_hwnd, insertAfter, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		++g_overlaySwpCount;
 	}
 	g_shown = true;
@@ -4560,7 +4572,9 @@ void EnsureAppBarWindow() {
 }
 
 void HideAppBar(bool keepGeomCache = false) {
-	if (g_appBarShown && g_appBarHwnd) { ::ShowWindow(g_appBarHwnd, SW_HIDE); g_appBarShown = false; }
+	// Same actual-visibility rule as HideOverlay (flag desync must not pin
+	// the bar on screen).
+	if (g_appBarHwnd && (g_appBarShown || ::IsWindowVisible(g_appBarHwnd))) { ::ShowWindow(g_appBarHwnd, SW_HIDE); g_appBarShown = false; }
 	g_appBarHoverCmd = 0;
 	if (!keepGeomCache) {
 		g_appBarValid = false;
@@ -4601,7 +4615,10 @@ void ShowAppBar(const RECT& slideRect) {
 	bool geomChanged = windowPosChanged || windowSizeChanged || contentSizeChanged;
 	bool firstShow = !g_appBarShown;
 	if (geomChanged || firstShow) {
-		::SetWindowPos(g_appBarHwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		// Same override rule as ShowOverlayForChartRect: harness runs bypass
+		// host-active gating, so their windows must never be TOPMOST.
+		HWND barInsertAfter = (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST;
+		::SetWindowPos(g_appBarHwnd, barInsertAfter, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		++g_appBarSwpCount;
 		g_appBarLastRect = want;
 		g_appBarGeomValid = true;

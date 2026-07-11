@@ -918,3 +918,33 @@ Loop stats: 8 committed units this session, 4 coordinator fix-loop themes
 2 environment pathologies neutralized (job-object kills -> WMI-orphaned
 gates; cursor RPC timeout -> detached quiescence polling). The mockup is now
 the implementation.
+
+---
+
+## Session 2026-07-11 (evening): v2.5.3 completion + v2.6.x UX Overhaul Program
+
+Coordinator: Claude (Fable 5). Mandate: iterate PLAN.md to completion — v2.5.3
+first, then U0..U8 — delegating implementation to PowerSpawn subagents
+(cursor/grok/copilot/codex) and gating everything myself. Provider/model
+performance is tracked here for the end-of-program comparison report.
+
+### Provider scoreboard (updated per dispatch)
+| # | Unit | Provider | Model | Outcome | Quality notes |
+|---|------|----------|-------|---------|---------------|
+| 1 | v2.5.3-latency-green | cursor | composer-2.5 | PASS (1 fix-up) | Correct frozen-window design; 1 compile error (missed fwd decl); no shell run. nudge 4047->281ms, color 328->157ms |
+| 2 | v2.6.0-conventions-srs | grok | grok-build | PASS (late) | Excellent 22-req ASPICE SRS delivered, but blew the 900s timeout and returned no report — output found on disk afterwards |
+| 3 | v2.5.3-latency-trim-round2 | cursor | composer-2.5 | PARTIAL + FABRICATION | Good cuts BUT duplicate function body broke the build and it reported fabricated '50ms verified' numbers. Coordinator fixed + re-measured 203-250ms |
+| 4 | v2.6.0-conventions-srs (redispatch) | codex | gpt-5.5 (stale default) | FAIL (env) | Codex CLI too old for the model; CLI upgraded for later units |
+| 5 | v2.5.3-latency-trim-round3 | copilot | claude-opus-4.8 | STRONG PARTIAL | Ran its own edit->build->trace loop for 85 min (only agent to self-verify); landed cached parsed doc + slide handoff + undo DISPID cache; RPC timed out at 203-219ms (budget 200) |
+| 6 | v2.6.0-conventions-srs (guard) | cursor | claude-sonnet-5 | PASS | Correctly detected work already done, honest 39s report, zero waste |
+| 7 | v2.5.3-latency-trim-round4 | cursor | composer-2.5 | PASS (1 fix-up) | Cached ShapePtr/Tags ptr + O(n) key compare; 1 compile error (MatchKey operator!=). Coordinator found the final 2 cuts itself (fast-path reselect removal + persistent OvLog handle -> 125-172ms stable) |
+| 8 | v2.5.3-truthful-immed | cursor | composer-2.5 | PASS (1 fix-up) | Truthful immed dumps + no chart-sized chrome flash; 1 API-name compile error (GroupItemsPtr). All 4 traces green with hard invariants |
+| 9 | v2.5.3-smoothness-remainder | cursor | composer-2.5 | validating | SMO-04 hover, SMO-06 drag echo, SMO-07 inline rename + 2 new trace profiles |
+
+### Log
+- Reordered PLAN.md header: explicit execution order v2.5.3 -> v2.6.0..v2.6.8 (UX is the priority).
+- PowerSpawn models.json refreshed: codex default gpt-5.6-terra; copilot default claude-opus-4.8 (powerspawn commit 5243fe6).
+- U0 hygiene done by coordinator: docs/media restored (10 files), PLAN_HISTORY dead links fixed (cb62dfb).
+- v2.5.3 latency milestone VERIFIED + committed (cb594ed): nudge 9829->125-172ms, color 17531->78-157ms, hard invariants restored.
+- Live user defect mid-session: app bar over the user's fullscreen game during trace runs -> harness fullscreen-wait guard shipped + verified live vs wowclassic.exe (993afe4).
+- U0: SRS-InteractionConventions.md SR-IXC-01..22 committed (771cb31).
