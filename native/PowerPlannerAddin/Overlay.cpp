@@ -5,6 +5,7 @@
 #include "GanttOps.h"
 #include "GanttHitTest.h"
 #include "GanttAppBar.h"
+#include "GanttCommandRegistry.h"
 #include "GanttTheme.h"
 #include "GanttLayout.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes. Define
@@ -142,6 +143,9 @@ int g_appBarHoverCmd = 0;
 struct AppBarHitRect { int cmd; RECT rc; bool enabled; };
 std::vector<AppBarHitRect> g_appBarHits;
 int g_appBarContentW = 0, g_appBarContentH = 0;
+int g_appBarLastMeasuredContentW = 0, g_appBarLastMeasuredContentH = 0;
+AppBarModel g_appBarLayout;
+std::vector<AppBarItem> g_appBarInsertPopupItems;
 
 // PowerPoint's main window, cached each Tick() from the Application COM object.
 // Used to forward input (e.g. mouse wheel) that the overlay captures but does
@@ -3647,16 +3651,41 @@ int MeasureAppBarSegmentedWidth(const std::vector<AppBarItem>& items, size_t fro
 	return innerPad * 2 + (int)(to - from) * chip;
 }
 
-void MeasureAppBar() {
+namespace {
+// Overlay-local command id for the collapsed INSERT "+" popup trigger (not HtMenuCmd).
+constexpr int kAppBarInsertMenuCmd = -1001;
+
+bool AppBarIsScaleGroup(const AppBarGroup& group) {
+	return group.label == "SCALE";
+}
+
+bool AppBarIsSelectionContextGroup(const AppBarGroup& group) {
+	for (const auto& item : group.items) {
+		if (item.cmd == HtCmd_Rename || item.cmd == HtCmd_Edit) return true;
+	}
+	return false;
+}
+
+void AppBarStripIconLabels(AppBarGroup& group, bool labelsAndGridOnly) {
+	for (auto& item : group.items) {
+		if (item.cmd == kAppBarInsertMenuCmd) continue;
+		if (item.icon == AppBarIcon::ScaleSeg || item.icon == AppBarIcon::Swatch) continue;
+		if (labelsAndGridOnly) {
+			if (item.cmd == HtCmd_ToggleRailLabels || item.cmd == HtCmd_CycleGrid)
+				item.label.clear();
+			continue;
+		}
+		if (item.icon != AppBarIcon::None) item.label.clear();
+	}
+}
+
+int MeasureAppBarWidth(const AppBarModel& model) {
 	const int padH = Scale(6);
 	const int gap = Scale(2);
 	const int groupPad = Scale(7);
 	const int hairline = Scale(1);
 	const int nameGap = Scale(8);
 	int w = padH * 2;
-	int h = AppBarContainerHeight();
-	g_appBarContentW = 0;
-	g_appBarContentH = h;
 
 	Gdiplus::Graphics* measureG = nullptr;
 	Gdiplus::Font* btnFont = nullptr;
@@ -3665,14 +3694,14 @@ void MeasureAppBar() {
 		measureG = new Gdiplus::Graphics(&bmp);
 		btnFont = MakeAppBarFont(ScaleF(11.5f), Gdiplus::FontStyleRegular);
 		Gdiplus::Font* nameFont = MakeAppBarFont(ScaleF(11.5f), Gdiplus::FontStyleItalic);
-		if (!g_appBar.name.empty()) {
-			std::wstring nw(g_appBar.name.begin(), g_appBar.name.end());
+		if (!model.name.empty()) {
+			std::wstring nw(model.name.begin(), model.name.end());
 			w += (int)std::ceil(MeasureTextW(*measureG, *nameFont, nw.c_str())) + nameGap;
 		}
 		delete nameFont;
 
 		bool firstGroup = true;
-		for (const auto& group : g_appBar.groups) {
+		for (const auto& group : model.groups) {
 			if (!firstGroup) w += hairline + gap * 2;
 			firstGroup = false;
 			w += groupPad;
@@ -3700,7 +3729,55 @@ void MeasureAppBar() {
 	}
 	delete btnFont;
 	delete measureG;
-	g_appBarContentW = w;
+	return w;
+}
+
+void CollapseAppBarInsertGroup(AppBarModel& model) {
+	for (auto& group : model.groups) {
+		if (group.label != "INSERT" || group.items.size() <= 1) continue;
+		g_appBarInsertPopupItems = group.items;
+		AppBarItem plus;
+		plus.cmd = kAppBarInsertMenuCmd;
+		plus.label = "+";
+		plus.enabled = true;
+		group.items = { plus };
+		return;
+	}
+}
+
+void ApplyAppBarOverflowPolicy(int maxContentW) {
+	g_appBarLayout = g_appBar;
+	g_appBarInsertPopupItems.clear();
+	if (maxContentW <= 0) return;
+
+	auto fits = [&]() { return MeasureAppBarWidth(g_appBarLayout) <= maxContentW; };
+	if (fits()) return;
+
+	CollapseAppBarInsertGroup(g_appBarLayout);
+	if (fits()) return;
+
+	for (auto& group : g_appBarLayout.groups) {
+		if (AppBarIsScaleGroup(group) || AppBarIsSelectionContextGroup(group)) continue;
+		AppBarStripIconLabels(group, false);
+	}
+	if (fits()) return;
+
+	for (auto& group : g_appBarLayout.groups) {
+		if (!AppBarIsSelectionContextGroup(group)) continue;
+		AppBarStripIconLabels(group, false);
+	}
+	if (fits()) return;
+
+	for (auto& group : g_appBarLayout.groups) {
+		if (!AppBarIsScaleGroup(group)) continue;
+		AppBarStripIconLabels(group, true);
+	}
+}
+} // namespace
+
+void MeasureAppBar() {
+	const int h = AppBarContainerHeight();
+	g_appBarContentW = MeasureAppBarWidth(g_appBarLayout);
 	g_appBarContentH = h;
 }
 
@@ -3857,8 +3934,8 @@ void PaintAppBar(Gdiplus::Graphics& g, int W, int H) {
 	int x = containerX + padH;
 	int contentY = containerY + (containerH - btnH) / 2;
 
-	if (!g_appBar.name.empty()) {
-		std::wstring nw(g_appBar.name.begin(), g_appBar.name.end());
+	if (!g_appBarLayout.name.empty()) {
+		std::wstring nw(g_appBarLayout.name.begin(), g_appBarLayout.name.end());
 		SolidBrush nameBrush(GpToken(255, gt::ink2));
 		StringFormat sf;
 		sf.SetLineAlignment(StringAlignmentCenter);
@@ -3868,7 +3945,7 @@ void PaintAppBar(Gdiplus::Graphics& g, int W, int H) {
 	}
 
 	bool firstGroup = true;
-	for (const auto& group : g_appBar.groups) {
+	for (const auto& group : g_appBarLayout.groups) {
 		if (!firstGroup) {
 			int sepX = x + gap;
 			Pen hair(GpToken(255, gt::outline), (REAL)hairline);
@@ -3976,6 +4053,8 @@ void RenderAppBar() {
 	if (w <= 0 || h <= 0) return;
 	if (!EnsureAppBarBackBuffer(w, h)) return;
 	try {
+		if (g_abBits && g_abW > 0 && g_abH > 0)
+			::memset(g_abBits, 0, (size_t)g_abW * (size_t)g_abH * 4u);
 		Gdiplus::Bitmap surface(w, h, w * 4, PixelFormat32bppPARGB, (BYTE*)g_abBits);
 		if (surface.GetLastStatus() != Gdiplus::Ok) return;
 		Gdiplus::Graphics g(&surface);
@@ -4001,7 +4080,8 @@ void RenderAppBar() {
 	}
 }
 
-void HandleAppBarCommand(int cmd);
+void ShowAppBarInsertMenu(POINT clientPt);
+void HandleAppBarCommand(int cmd, POINT clientPt = { 0, 0 });
 
 LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	try {
@@ -4043,7 +4123,7 @@ LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 					(long)pt.x, (long)pt.y, resolved, g_appBarHits.size());
 				OvLog(buf);
 			}
-			if (resolved != 0) HandleAppBarCommand(resolved);
+			if (resolved != 0) HandleAppBarCommand(resolved, pt);
 			return 0;
 		}
 	}
@@ -4077,6 +4157,8 @@ void HideAppBar(bool keepGeomCache = false) {
 		g_appBarValid = false;
 		g_appBarGeomValid = false;
 		g_appBarModelDirty = true;
+		g_appBarLastMeasuredContentW = 0;
+		g_appBarLastMeasuredContentH = 0;
 	}
 }
 
@@ -4088,22 +4170,26 @@ void ShowAppBar(const RECT& slideRect) {
 	if (g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt || !g_appBarValid || g_appBarModelDirty) {
 		RebuildAppBarModelFromSlide();
 	}
-	MeasureAppBar();
 	const int shadow = AppBarShadowInset();
 	int maxW = (int)((slideRect.right - slideRect.left) * 0.94);
+	int maxContentW = std::max(0, maxW - shadow * 2);
+	ApplyAppBarOverflowPolicy(maxContentW);
+	MeasureAppBar();
 	int w = g_appBarContentW + shadow * 2;
 	if (w > maxW) w = maxW;
 	int h = g_appBarContentH + shadow * 2;
 	int cx = (slideRect.left + slideRect.right) / 2;
 	int x = cx - w / 2;
 	int y = slideRect.bottom - Scale(8) - h;
-	// Only reposition/repaint when geometry or the model actually changed —
-	// re-pushing the layered window every 150ms tick is what made it flicker
-	// (mirrors ShowOverlayForChartRect's dirty guard).
 	RECT want = { x, y, x + w, y + h };
-	bool geomChanged = !g_appBarGeomValid ||
-		want.left != g_appBarLastRect.left || want.top != g_appBarLastRect.top ||
-		want.right != g_appBarLastRect.right || want.bottom != g_appBarLastRect.bottom;
+	const int prevWindowW = g_appBarGeomValid ? (g_appBarLastRect.right - g_appBarLastRect.left) : 0;
+	const int prevWindowH = g_appBarGeomValid ? (g_appBarLastRect.bottom - g_appBarLastRect.top) : 0;
+	bool windowPosChanged = !g_appBarGeomValid ||
+		want.left != g_appBarLastRect.left || want.top != g_appBarLastRect.top;
+	bool windowSizeChanged = !g_appBarGeomValid || w != prevWindowW || h != prevWindowH;
+	bool contentSizeChanged = g_appBarContentW != g_appBarLastMeasuredContentW ||
+		g_appBarContentH != g_appBarLastMeasuredContentH;
+	bool geomChanged = windowPosChanged || windowSizeChanged || contentSizeChanged;
 	bool firstShow = !g_appBarShown;
 	if (geomChanged || firstShow) {
 		::SetWindowPos(g_appBarHwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -4111,6 +4197,8 @@ void ShowAppBar(const RECT& slideRect) {
 		g_appBarLastRect = want;
 		g_appBarGeomValid = true;
 	}
+	g_appBarLastMeasuredContentW = g_appBarContentW;
+	g_appBarLastMeasuredContentH = g_appBarContentH;
 	g_appBarShown = true;
 	if (geomChanged || firstShow || g_appBarModelDirty) {
 		RenderAppBar();
@@ -4118,7 +4206,45 @@ void ShowAppBar(const RECT& slideRect) {
 	}
 }
 
-void HandleAppBarCommand(int cmd) {
+void ShowAppBarInsertMenu(POINT clientPt) {
+	if (g_appBarInsertPopupItems.empty()) return;
+	if (::GetEnvironmentVariableW(L"PP_OVERLAY_NO_MENU", NULL, 0) > 0) return;
+
+	HMENU menu = ::CreatePopupMenu();
+	if (!menu) return;
+	std::vector<std::pair<std::string, HMENU>> submenus;
+	auto submenuFor = [&](const std::string& name) -> HMENU {
+		for (auto& p : submenus) if (p.first == name) return p.second;
+		HMENU sub = ::CreatePopupMenu();
+		submenus.push_back({ name, sub });
+		::AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR)sub, Widen(name).c_str());
+		return sub;
+	};
+
+	HMENU insertSub = submenuFor("Insert");
+	for (const auto& item : g_appBarInsertPopupItems) {
+		UINT flags = MF_STRING;
+		if (!item.enabled) flags |= MF_GRAYED;
+		::AppendMenuW(insertSub, flags, (UINT_PTR)item.cmd, Widen(MenuLabelForAppBarItem(item)).c_str());
+	}
+
+	POINT screenPt = { clientPt.x, clientPt.y };
+	::ClientToScreen(g_appBarHwnd, &screenPt);
+	::SetForegroundWindow(g_appBarHwnd);
+	int cmd = ::TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+		screenPt.x, screenPt.y, g_appBarHwnd, NULL);
+	::PostMessageW(g_appBarHwnd, WM_NULL, 0, 0);
+	::DestroyMenu(menu);
+
+	if (cmd > 0 && cmd != kAppBarInsertMenuCmd)
+		HandleAppBarCommand(cmd, POINT{ 0, 0 });
+}
+
+void HandleAppBarCommand(int cmd, POINT clientPt) {
+	if (cmd == kAppBarInsertMenuCmd) {
+		ShowAppBarInsertMenu(clientPt);
+		return;
+	}
 	if (cmd == HtCmd_InsertMarker && g_ownSelKind.empty() && g_app && !g_mutating) {
 		g_mutating = true;
 		try {
@@ -4158,6 +4284,17 @@ void HandleAppBarCommand(int cmd) {
 			RequestOverlayRepaint();
 		}
 		return;
+	}
+
+	if (g_ownSelKind.empty() && g_app && !g_mutating) {
+		HtMenuOp op = MapBackgroundAppBarCommand(cmd);
+		if (op.opKind != HtOpKind::None) {
+			HtHit hit;
+			HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
+			g_appBarValid = false;
+			RequestOverlayRepaint();
+			return;
+		}
 	}
 
 	if (g_ownSelKind == "ROW" && !g_ownSelId.empty()) {
@@ -5558,6 +5695,16 @@ void OverlayStop() {
 HWND OverlayHwnd() { return g_hwnd; }
 
 HWND OverlayAppBarHwnd() { return g_appBarHwnd; }
+
+void OverlayAppBarContentWidthForTest(int* content, int* window) {
+	if (content) *content = g_appBarContentW;
+	if (window) {
+		if (g_appBarGeomValid)
+			*window = g_appBarLastRect.right - g_appBarLastRect.left;
+		else
+			*window = g_appBarContentW + AppBarShadowInset() * 2;
+	}
+}
 
 bool OverlayAppBarButtonRectForTest(int cmd, RECT* outScreenRect) {
 	if (!outScreenRect || !g_appBarHwnd) return false;

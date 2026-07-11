@@ -96,6 +96,9 @@ HWND OverlayAppBarHwnd();
 // button without hard-coded coordinates. Never touches COM.
 bool OverlayAppBarButtonRectForTest(int cmd, RECT* outScreenRect);
 
+// Test hook: last measured app-bar content width and clamped window width (pixels).
+void OverlayAppBarContentWidthForTest(int* content, int* window);
+
 // Test hook: mark the app-bar model/geometry dirty so the next ShowAppBar (or an
 // immediate RenderAppBar if the bar is already shown) rebuilds/repaints after
 // Overlay_SelectForTest drives a new selection context. Never touches COM.

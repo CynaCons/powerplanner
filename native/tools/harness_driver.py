@@ -114,6 +114,7 @@ def _tail(text: str, n: int = 4000) -> str:
 
 
 def _parse_markers(stdout: str) -> List[str]:
+    """Collect harness OK/PASS lines (incl. i2d APPBAR FIT OK, CHROME CALM * OK)."""
     markers: List[str] = []
     for line in stdout.splitlines():
         line = line.strip()
@@ -750,7 +751,7 @@ def run_scenario(name: str, update_goldens: bool = False, **overrides) -> Harnes
 
 def run_appbar_matrix() -> HarnessReport:
     """S2 app bar visual matrix (uses --matrix on ppappbarshot)."""
-    return run_harness("ppappbarshot", ["--matrix"])
+    return run_scenario("appbar_matrix")
 
 
 def run_full_overlay_gate() -> HarnessReport:

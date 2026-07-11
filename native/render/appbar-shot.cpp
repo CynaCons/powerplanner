@@ -13,6 +13,7 @@
 #include "../PowerPlannerAddin/GanttModel.h"
 #include "../PowerPlannerAddin/Overlay.h"
 #include "../PowerPlannerAddin/GanttHitTest.h"
+#include "../PowerPlannerAddin/GanttAppBar.h"
 // GDI+ headers use unqualified min/max; provide them if a prior include pulled
 // in NOMINMAX (matches how the addin's own GDI+ TU gets them from windows.h).
 #ifndef min
@@ -23,6 +24,9 @@
 #endif
 #include <gdiplus.h>
 #include <cstdio>
+#include <cstdlib>
+#include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -95,6 +99,178 @@ static int PngEncoderClsid(CLSID* clsid) {
 		if (wcscmp(codecs[i].MimeType, L"image/png") == 0) { *clsid = codecs[i].Clsid; return (int)i; }
 	}
 	return -1;
+}
+
+static bool RectContainsRect(const RECT& outer, const RECT& inner) {
+	return inner.left >= outer.left && inner.top >= outer.top &&
+		inner.right <= outer.right && inner.bottom <= outer.bottom;
+}
+
+static bool GetChartRootScreenRect(PowerPoint::_ApplicationPtr& app, RECT* out) {
+	if (!out) return false;
+	try {
+		PowerPoint::DocumentWindowPtr w = app->GetActiveWindow();
+		PowerPoint::_SlidePtr sl = w->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shs = sl->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			PowerPoint::ShapePtr s = shs->Item(_variant_t(ii));
+			_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+				float cl = s->GetLeft(), ct = s->GetTop(), cw = s->GetWidth(), chh = s->GetHeight();
+				out->left = w->PointsToScreenPixelsX(cl);
+				out->top = w->PointsToScreenPixelsY(ct);
+				out->right = w->PointsToScreenPixelsX(cl + cw);
+				out->bottom = w->PointsToScreenPixelsY(ct + chh);
+				return true;
+			}
+		}
+	} catch (...) {}
+	return false;
+}
+
+static void SelectChartRootNatively(PowerPoint::_SlidePtr& slide) {
+	try {
+		PowerPoint::ShapesPtr shs = slide->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			auto s = shs->Item(_variant_t(ii));
+			_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+				s->Select(Office::msoTrue);
+				break;
+			}
+		}
+	} catch (...) {}
+}
+
+static AppBarSel AppBarSelFromKind(const char* kind) {
+	if (!kind || !*kind) return AppBarSel::None;
+	if (strcmp(kind, "TASK") == 0) return AppBarSel::Task;
+	if (strcmp(kind, "ROW") == 0) return AppBarSel::Row;
+	if (strcmp(kind, "MILESTONE") == 0) return AppBarSel::Milestone;
+	if (strcmp(kind, "MARKER") == 0) return AppBarSel::Marker;
+	if (strcmp(kind, "TEXT") == 0 || strcmp(kind, "NOTE") == 0) return AppBarSel::Note;
+	return AppBarSel::None;
+}
+
+// Count pixels within per-channel tolerance 24 of legacy accent RGB(26,115,232).
+static double MeasureAccentPctInRect(const RECT& rc) {
+	int w = rc.right - rc.left, h = rc.bottom - rc.top;
+	if (w <= 0 || h <= 0) return 100.0;
+	HDC screen = ::GetDC(NULL);
+	HDC mem = ::CreateCompatibleDC(screen);
+	HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
+	HGDIOBJ old = ::SelectObject(mem, bmp);
+	::BitBlt(mem, 0, 0, w, h, screen, rc.left, rc.top, SRCCOPY);
+	::SelectObject(mem, old);
+
+	double pct = 100.0;
+	{
+		Gdiplus::Bitmap bitmap(bmp, NULL);
+		Gdiplus::BitmapData data{};
+		Gdiplus::Rect grect(0, 0, w, h);
+		if (bitmap.LockBits(&grect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &data) == Gdiplus::Ok) {
+			int accent = 0;
+			const int total = w * h;
+			for (int y = 0; y < h; ++y) {
+				const BYTE* row = static_cast<const BYTE*>(data.Scan0) + y * data.Stride;
+				for (int x = 0; x < w; ++x) {
+					const BYTE b = row[x * 4 + 0];
+					const BYTE g = row[x * 4 + 1];
+					const BYTE r = row[x * 4 + 2];
+					if (std::abs((int)r - 26) <= 24 && std::abs((int)g - 115) <= 24 && std::abs((int)b - 232) <= 24) {
+						++accent;
+					}
+				}
+			}
+			bitmap.UnlockBits(&data);
+			if (total > 0) pct = 100.0 * (double)accent / (double)total;
+		}
+	}
+	::DeleteObject(bmp);
+	::DeleteDC(mem);
+	::ReleaseDC(NULL, screen);
+	return pct;
+}
+
+static bool CheckChromeCalm(
+	PowerPoint::_ApplicationPtr& app,
+	PowerPoint::_SlidePtr& slide,
+	bool overall,
+	double maxPct,
+	int* matrixRc) {
+	if (overall) {
+		Overlay_SelectForTest("", "");
+		SelectChartRootNatively(slide);
+	} else {
+		Overlay_SelectForTest("", "");
+		try { app->GetActiveWindow()->GetSelection()->Unselect(); } catch (...) {}
+	}
+	PumpFor(900);
+	RECT chartRc{};
+	if (!GetChartRootScreenRect(app, &chartRc)) {
+		wprintf(overall ? L"CHROME CALM OVERALL FAIL: no chart rect\n" : L"CHROME CALM IDLE FAIL: no chart rect\n");
+		if (matrixRc) *matrixRc = 1;
+		return false;
+	}
+	RECT interior = chartRc;
+	::InflateRect(&interior, -8, -8);
+	if (interior.right <= interior.left || interior.bottom <= interior.top) {
+		wprintf(overall ? L"CHROME CALM OVERALL FAIL: interior too small\n" : L"CHROME CALM IDLE FAIL: interior too small\n");
+		if (matrixRc) *matrixRc = 1;
+		return false;
+	}
+	const double pct = MeasureAccentPctInRect(interior);
+	const bool pass = pct <= maxPct;
+	if (pass) {
+		wprintf(overall ? L"CHROME CALM OVERALL OK\n" : L"CHROME CALM IDLE OK\n");
+	} else {
+		wprintf(overall ? L"CHROME CALM OVERALL FAIL: %.1f%%\n" : L"CHROME CALM IDLE FAIL: %.1f%%\n", pct);
+		if (matrixRc) *matrixRc = 1;
+	}
+	return pass;
+}
+
+static bool CheckAppBarFitForContext(
+	const char* ctxLabel,
+	AppBarSel sel,
+	const std::string& selId,
+	const PpDocument& doc,
+	HWND abm) {
+	if (!abm || !::IsWindowVisible(abm)) {
+		wprintf(L"APPBAR FIT %hs FAIL: window missing\n", ctxLabel);
+		return false;
+	}
+	RECT winRc{};
+	::GetWindowRect(abm, &winRc);
+	const AppBarModel model = BuildAppBar(sel, doc, selId);
+	for (const auto& group : model.groups) {
+		for (const auto& item : group.items) {
+			if (!item.enabled) continue;
+			RECT btnRc{};
+			if (!OverlayAppBarButtonRectForTest(item.cmd, &btnRc)) {
+				const char* cmdLabel = item.label.empty() ? nullptr : item.label.c_str();
+				if (cmdLabel && *cmdLabel) {
+					wprintf(L"APPBAR FIT %hs FAIL: %hs rect outside window\n", ctxLabel, cmdLabel);
+				} else {
+					wprintf(L"APPBAR FIT %hs FAIL: cmd%d rect outside window\n", ctxLabel, item.cmd);
+				}
+				return false;
+			}
+			if (!RectContainsRect(winRc, btnRc)) {
+				const char* cmdLabel = item.label.empty() ? nullptr : item.label.c_str();
+				if (cmdLabel && *cmdLabel) {
+					wprintf(L"APPBAR FIT %hs FAIL: %hs rect outside window\n", ctxLabel, cmdLabel);
+				} else {
+					wprintf(L"APPBAR FIT %hs FAIL: cmd%d rect outside window\n", ctxLabel, item.cmd);
+				}
+				return false;
+			}
+		}
+	}
+	wprintf(L"APPBAR FIT %hs OK\n", ctxLabel);
+	return true;
 }
 
 // Screen-capture the rectangle [rc] into a PNG at [path]. Clamps nothing — the
@@ -538,7 +714,13 @@ int wmain(int argc, wchar_t** argv) {
 				{ "ROW",       "research",L"native\\build\\ab-row.png",       NULL },
 				{ "MILESTONE", "m_ship",  L"native\\build\\ab-milestone.png", NULL },
 			};
+			const PpDocument showcaseDoc = MakeShowcaseDocument();
 			int matrixRc = 0;
+			bool appbarFitAll = true;
+
+			CheckChromeCalm(app, slide, false, 2.0, &matrixRc);
+			CheckChromeCalm(app, slide, true, 3.0, &matrixRc);
+
 			for (const auto& c : ctxs) {
 				Overlay_SelectForTest(c.kind, c.id);
 				PumpFor(900); // a few ticks: selection chrome + app-bar model rebuild + paint
@@ -563,10 +745,19 @@ int wmain(int argc, wchar_t** argv) {
 						wprintf(L"APPBAR-MATRIX %hs FAIL\n", ctxLabel);
 						matrixRc = 1;
 					}
+					if (!CheckAppBarFitForContext(ctxLabel, AppBarSelFromKind(c.kind), c.id, showcaseDoc, abm)) {
+						appbarFitAll = false;
+						matrixRc = 1;
+					}
 				} else {
 					wprintf(L"APPBAR-MATRIX %hs FAIL\n", ctxLabel);
+					wprintf(L"APPBAR FIT %hs FAIL: window missing\n", ctxLabel);
+					appbarFitAll = false;
 					matrixRc = 1;
 				}
+			}
+			if (appbarFitAll) {
+				wprintf(L"APPBAR FIT OK\n");
 			}
 			OverlayStop();
 			if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
