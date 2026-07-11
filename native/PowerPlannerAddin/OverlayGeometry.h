@@ -45,20 +45,6 @@ inline void AddRoundRect(Gdiplus::GraphicsPath& path, Gdiplus::REAL x, Gdiplus::
 	path.CloseFigure();
 }
 
-inline void DrawHandle(Gdiplus::Graphics& g, int cx, int cy, int r) {
-	using namespace Gdiplus;
-	GraphicsPath path;
-	AddRoundRect(path, (REAL)(cx - r), (REAL)(cy - r), (REAL)(2 * r + 1), (REAL)(2 * r + 1), 1.5f);
-	SolidBrush fill(Color(255, 255, 255, 255));
-	g.FillPath(&fill, &path);
-	GraphicsPath innerPath;
-	AddRoundRect(innerPath, (REAL)(cx - r + 1), (REAL)(cy - r + 1), (REAL)(2 * r - 1), (REAL)(2 * r - 1), 1.0f);
-	Pen inner(GpColor(255, RGB(138, 180, 248)), 1.0f);
-	g.DrawPath(&inner, &innerPath);
-	Pen border(GpColor(255, RGB(26, 115, 232)), 1.0f);
-	g.DrawPath(&border, &path);
-}
-
 inline COLORREF AbRgb(unsigned long v) {
 	return RGB((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
 }

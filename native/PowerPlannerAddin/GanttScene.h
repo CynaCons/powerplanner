@@ -40,6 +40,11 @@ inline std::wstring Widen(const std::string& s) {
 inline const char* const kMonthNames[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" };
 inline const char* const kMonthUpper[] = { "JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC" };
 
+// Rough Segoe UI width estimate (points) for label-fit without measuring at emit time.
+inline float EstimateTextWidthPt(const std::string& text, float fontSize) {
+	return (float)text.size() * fontSize * 0.55f;
+}
+
 // Layout constants in points (Material: roomy rail + row rhythm). Shared by the
 // pure scene builder and GanttBuilder.cpp's COM projection/reconcile code.
 constexpr float MARGIN     = 36.0f;
@@ -267,16 +272,36 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 		p.tagKind = "SUMMARY"; p.tagId = s.rowId; sc.prims.push_back(p);
 	}
 
+	// Dependencies (elbow connectors) — below gridlines/row bands, above bar bodies
+	// and all text (SR-VIZ-03). Explicit elbow routing (matches web layout) so the
+	// arrow on the final horizontal segment always points into the target edge.
+	std::map<std::string, const PpTask*> taskById;
+	for (const auto& t : doc.tasks) taskById[t.id] = &t;
+	std::map<std::string, const LaidTask*> laidById;
+	for (const auto& lt : L.tasks) laidById[lt.id] = &lt;
+	std::map<std::string, std::pair<std::string, std::string>> depEnds;
+	for (const auto& d : doc.deps) depEnds[d.id] = { d.from, d.to };
+	for (const auto& d : L.dependencies) {
+		auto e = depEnds.find(d.id); if (e == depEnds.end()) continue;
+		const LaidTask* fr = laidById.count(e->second.first) ? laidById[e->second.first] : nullptr;
+		const LaidTask* to = laidById.count(e->second.second) ? laidById[e->second.second] : nullptr;
+		if (!fr || !to) continue;
+		float x1 = xToPt(d.fromXDay), y1 = slotTop(L.rowOffsets[fr->rowIndex] + fr->subRow) + ROW_HEIGHT / 2.0f;
+		float x2 = xToPt(d.toXDay), y2 = slotTop(L.rowOffsets[to->rowIndex] + to->subRow) + ROW_HEIGHT / 2.0f;
+		float midX = (x1 + x2) / 2.0f;
+		Style c; c.line = true; c.lineBgr = Bgr(th.connector); c.lineWeight = gt::dep_weight;
+		Prim hSeg = scene::line(x1, y1, midX, y1, c); hSeg.tagKind = "DEP"; hSeg.tagId = d.id; sc.prims.push_back(hSeg);
+		Prim vSeg = scene::line(midX, y1, midX, y2, c); vSeg.tagKind = "DEP"; vSeg.tagId = d.id; sc.prims.push_back(vSeg);
+		Style ca = c; ca.arrowEnd = true;
+		Prim arrSeg = scene::connector(midX, y2, x2, y2, ca); arrSeg.tagKind = "DEP"; arrSeg.tagId = d.id; sc.prims.push_back(arrSeg);
+	}
+
 	// Task bars (+ percent-complete). Material bar (docs/design-tokens.md §3 +
 	// the mockup's .bar): TRACK = the effective swatch pre-blended 40% over
 	// white (rounded rect, radius bar.radius); PROGRESS = the SOLID swatch
 	// overlaid from the left across percent% of the width (same radius). The
 	// stored per-task color drives the swatch (empty ⇒ swatch1). On-bar label
-	// stays white text on the track shape.
-	std::map<std::string, const PpTask*> taskById;
-	for (const auto& t : doc.tasks) taskById[t.id] = &t;
-	std::map<std::string, const LaidTask*> laidById;
-	for (const auto& lt : L.tasks) laidById[lt.id] = &lt;
+	// is a separate TASK_LABEL prim emitted after progress (SR-VIZ-01).
 	for (const auto& lt : L.tasks) {
 		const PpTask* t = taskById[lt.id];
 		float left = xToPt(lt.xDay), width = std::max(2.0f, lt.widthDays * ptPerDay);
@@ -294,20 +319,35 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 		unsigned long swatch = gt::EffectiveSwatch(t->color);
 		unsigned long track = gt::BlendOnWhite(swatch, 0.40f);
 		Style bar; bar.fill = true; bar.fillBgr = Bgr(track); bar.corner = gt::bar_radius;
-		bar.textBgr = Bgr(th.onPrimary); bar.fontSize = 11.0f; bar.align = TextAlign::Center;
 		Prim p = scene::roundRect(left, top, width, h, bar);
-		if (width > 54.0f && showBarLabel) p.text = Widen(t->label);
 		p.tagKind = "TASK"; p.tagId = t->id; sc.prims.push_back(p);
 		if (t->percent > 0) {
 			float pw = width * (float)t->percent / 100.0f;
 			if (pw > 1.5f) {
-				// Progress as bottom strip to avoid overlapping on-bar task label text.
-				// Matches web rendering (bottom 3-4px) and prevents visual overlap reported by users.
-				float progH = 4.0f;
-				float progTop = top + h - progH;
-				Style pr; pr.fill = true; pr.fillBgr = Bgr(swatch); pr.corner = 2.0f;
-				Prim u = scene::roundRect(left, progTop, pw, progH, pr); u.tagKind = "TASK_PROGRESS"; u.tagId = t->id; sc.prims.push_back(u);
+				Style pr; pr.fill = true; pr.fillBgr = Bgr(swatch); pr.corner = gt::bar_radius;
+				Prim u = scene::roundRect(left, top, pw, h, pr); u.tagKind = "TASK_PROGRESS"; u.tagId = t->id; sc.prims.push_back(u);
 			}
+		}
+		if (showBarLabel && !t->label.empty()) {
+			const float labelFont = 11.0f;
+			const float estW = EstimateTextWidthPt(t->label, labelFont);
+			const float innerPad = gt::bar_label_pad * 2.0f;
+			const bool fitsInside = width > 54.0f && estW <= width - innerPad;
+			Style lbl;
+			lbl.fontSize = labelFont;
+			lbl.align = fitsInside ? TextAlign::Center : TextAlign::Left;
+			float lx, lw, ly;
+			if (fitsInside) {
+				lbl.textBgr = Bgr(th.onPrimary);
+				lx = left; lw = width; ly = top;
+			} else {
+				lbl.textBgr = Bgr(th.onSurfaceVariant);
+				lx = left + width + 6.0f;
+				lw = std::max(estW + 4.0f, 48.0f);
+				ly = top + (h - 14.0f) / 2.0f;
+			}
+			Prim lblPrim = scene::text(lx, ly, lw, h, Widen(t->label), lbl);
+			lblPrim.tagKind = "TASK_LABEL"; lblPrim.tagId = t->id; sc.prims.push_back(lblPrim);
 		}
 
 		// Rail entry: 8pt swatch dot (radius 3) + task label (type.railTask) at
@@ -385,7 +425,24 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 
 	// Markers (Today line / Deadline lines / Custom lines). Default color by
 	// type — today = primary, deadline = deadline token, custom = customMarker
-	// token — overridable per marker via its stored color.
+	// token — overridable per marker via its stored color. Labels sit in a
+	// reserved strip above the axis header bands (SR-VIZ-02); stagger when
+	// horizontal rects would overlap (two levels max).
+	struct MarkerLabelSlot { float left, right; int level; };
+	std::vector<MarkerLabelSlot> markerLabelSlots;
+	auto markerLabelLevel = [&](float lx, float lw) -> int {
+		const float lr = lx + lw;
+		for (int lvl = 0; lvl < 2; ++lvl) {
+			bool clash = false;
+			for (const auto& s : markerLabelSlots) {
+				if (s.level != lvl) continue;
+				if (lx < s.right && lr > s.left) { clash = true; break; }
+			}
+			if (!clash) return lvl;
+		}
+		return 1; // two levels max — allow overlap on level 1
+	};
+	const float headTop = chartTop - AXIS_H;
 	for (const auto& m : doc.markers) {
 		float mx = xToPt(DateToDays(m.date) - vs);
 		if (mx >= MARGIN + ROW_GUTTER && mx <= chartRight) {
@@ -402,30 +459,24 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 			ln.tagId = m.id;
 			sc.prims.push_back(ln);
 
+			const float lx = mx + gt::marker_label_gap;
+			const float lw = std::max(EstimateTextWidthPt(m.label, 9.0f) + 4.0f, 48.0f);
+			int lvl = markerLabelLevel(lx, lw);
+			markerLabelSlots.push_back({ lx, lx + lw, lvl });
+			float ly = (lvl == 0)
+				? headTop - gt::marker_label_strip
+				: headTop - gt::marker_label_h;
+
 			Style ml;
 			ml.textBgr = Bgr(markerColor);
 			ml.fontSize = 9.0f;
 			ml.align = TextAlign::Left;
 			ml.bold = true;
-			Prim t = scene::text(mx + 4.0f, chartTop - AXIS_H + 2.0f, 96.0f, 12.0f, Widen(m.label), ml);
+			Prim t = scene::text(lx, ly, lw, gt::marker_label_h, Widen(m.label), ml);
 			t.tagKind = isToday ? "TODAY_LABEL" : (isDeadline ? "DEADLINE_LABEL" : "CUSTOM_MARKER_LABEL");
 			t.tagId = m.id;
 			sc.prims.push_back(t);
 		}
-	}
-
-	// Dependencies (elbow connectors).
-	std::map<std::string, std::pair<std::string, std::string>> depEnds;
-	for (const auto& d : doc.deps) depEnds[d.id] = { d.from, d.to };
-	for (const auto& d : L.dependencies) {
-		auto e = depEnds.find(d.id); if (e == depEnds.end()) continue;
-		const LaidTask* fr = laidById.count(e->second.first) ? laidById[e->second.first] : nullptr;
-		const LaidTask* to = laidById.count(e->second.second) ? laidById[e->second.second] : nullptr;
-		if (!fr || !to) continue;
-		float x1 = xToPt(d.fromXDay), y1 = slotTop(L.rowOffsets[fr->rowIndex] + fr->subRow) + ROW_HEIGHT / 2.0f;
-		float x2 = xToPt(d.toXDay), y2 = slotTop(L.rowOffsets[to->rowIndex] + to->subRow) + ROW_HEIGHT / 2.0f;
-		Style c; c.line = true; c.lineBgr = Bgr(th.connector); c.lineWeight = 1.0f; c.arrowEnd = true;
-		Prim p = scene::connector(x1, y1, x2, y2, c); p.tagKind = "DEP"; p.tagId = d.id; sc.prims.push_back(p);
 	}
 
 	// Free-standing / anchored text annotations. Anchored text (L.anchored)

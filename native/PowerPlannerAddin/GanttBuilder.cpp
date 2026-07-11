@@ -203,6 +203,10 @@ void SyncShapeStyle(PowerPoint::ShapePtr ch, const Prim& prim) {
 			lf->GetForeColor()->PutPpRGB((Office::MsoRGBType)s.lineBgr);
 		if (lf->GetWeight() != s.lineWeight)
 			lf->PutWeight(s.lineWeight);
+		if (prim.kind == PrimKind::Connector) {
+			lf->PutBeginArrowheadStyle(Office::msoArrowheadNone);
+			lf->PutEndArrowheadStyle(s.arrowEnd ? Office::msoArrowheadTriangle : Office::msoArrowheadNone);
+		}
 		return;
 	}
 	PowerPoint::FillFormatPtr fill = ch->GetFill();

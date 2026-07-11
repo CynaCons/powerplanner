@@ -92,9 +92,33 @@ solid: `blend(swatch, #FFFFFF, 0.40)`); progress portion = solid swatch; both
 
 | State | Treatment |
 |---|---|
-| Selection chrome (task/milestone/marker/note) | 1.5px `primary` frame, radius 7, 3px halo `primary` @14% alpha, two 7px side handles (white fill, `primary` border) |
-| Rail row selected | `primarySoft` fill + inset 2.5px left edge in `primary`; name text `primary` |
+| Selection chrome (task/milestone/marker/note) | ~~1.5px `primary` frame, radius 7, 3px halo `primary` @14% alpha, two 7px side handles (white fill, `primary` border)~~ **Superseded by §7 (v2.5.1)** |
+| Rail row selected | ~~`primarySoft` fill + inset 2.5px left edge in `primary`; name text `primary`~~ **Superseded by §7 (v2.5.1)** |
 | App-bar button hover | `primarySoft` fill, text+icon `primary`; destructive: `dangerSoft` + `deadline` |
 | Segmented active | White chip, `primary` text, 1px shadow |
 | Drag ghost | Element outline at 30% alpha `primary` + date tooltip (ink bg, white 8pt text) |
 | Link mode | Crosshair cursor over bars; hint pill (ink bg, white text) above app bar |
+
+## 7. Selection chrome (v2.5.1)
+
+Calm on-slide selection chrome (SR-CHR-01..05). Native source: `GanttTheme.h` `chrome*` tokens.
+
+| Token | Value | Used for |
+|---|---|---|
+| `chromeHairline` | `#CBD5E1` | Overall (CHART_ROOT) selection frame — 1 px hairline only |
+| `chromeRowWashSelect` | 18 (alpha) | Row band wash when a row is selected |
+| `chromeRowWashHover` | 10 (alpha) | Row band wash on hover |
+| `chromeChipAlpha` | 235 | Hover-only "PowerPlanner" chip fill (`primary` @ alpha) |
+| `chromeChipRadius` | 3 px @96dpi | Hover chip corner radius (DPI-scaled) |
+| `chromeChipFontPx` | 10 px @96dpi | Hover chip label (DPI-scaled) |
+| `chromeItemFramePx` | 1 px @96dpi | Task/milestone/marker/text selection frame (`primary`) |
+
+| State | Treatment |
+|---|---|
+| Overall selected (CHART_ROOT) | 1 px `chromeHairline` frame only — no halo, no handles, no badge (PowerPoint native grips remain) |
+| Hover chip | `primary` fill @ `chromeChipAlpha`, `surface` text, shown only when nothing is selected and the pointer is in the chart top-edge band |
+| Row selected | Left `primary` accent bar (existing width) + `primary` wash @ `chromeRowWashSelect` over the row band |
+| Row hover | `primary` wash @ `chromeRowWashHover` over the row band (no opaque label-gutter fill) |
+| Item selected (task/milestone/marker/text) | 1 px `primary` frame, no fill, no painted handles |
+
+**Supersedes:** v2.4.x overall frame + badge always-on when CHART_ROOT is selected (see §6 strikethrough rows).

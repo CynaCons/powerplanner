@@ -24,6 +24,7 @@ constexpr unsigned long headerBand = 0xF1F3F9; // axis header bands, segmented-c
 constexpr unsigned long rowAlt     = 0xFAFBFE; // alternate row banding (odd row indices)
 constexpr unsigned long outline    = 0xE2E5EF; // row/grid hairlines, chart border, app-bar border
 constexpr unsigned long outline2   = 0xD3D7E6; // axis band separators, month/major ticks, note borders
+constexpr unsigned long chromeHairline = 0xCBD5E1; // overall selection frame (slate-300)
 
 // ---- §2 Color — accent & semantic -----------------------------------------
 constexpr unsigned long primary    = 0x4355E0; // selection chrome, today marker, rail selection
@@ -59,8 +60,20 @@ constexpr float marker_width  = 1.5f;
 constexpr float hairline      = 0.75f; // row lines, week ticks
 constexpr float hairline_major = 1.0f; // month/quarter/year boundary ticks
 constexpr float dep_weight    = 1.5f;  // dependency elbow stroke
+constexpr float bar_label_pad = 8.0f;  // horizontal inset for on-bar task labels
+constexpr float marker_label_h = 12.0f;     // marker label row height (one stagger level)
+constexpr float marker_label_gap = 4.0f;    // gap between marker line and label left edge
+constexpr float marker_label_strip = 26.0f; // reserved two-level strip above axis headers
 constexpr float rail_width    = 150.0f;
 constexpr float axis_height   = 30.0f;
+
+// ---- §4b Selection chrome (v2.5.1) ----------------------------------------
+constexpr unsigned char chromeRowWashSelect = 18;  // row band wash when selected (0–255)
+constexpr unsigned char chromeRowWashHover  = 10;  // row band wash on hover
+constexpr unsigned char chromeChipAlpha     = 235; // "PowerPlanner" hover chip fill
+constexpr float chromeChipRadius   = 3.0f;
+constexpr float chromeChipFontPx   = 10.0f;
+constexpr float chromeItemFramePx  = 1.0f; // task/milestone/marker/text frame
 
 // ---- material helpers ------------------------------------------------------
 

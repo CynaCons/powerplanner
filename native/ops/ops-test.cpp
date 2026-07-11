@@ -10,7 +10,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <string>
+#include <vector>
 
 static bool Check(bool cond, const char* msg) {
 	if (!cond) {
@@ -799,8 +801,11 @@ static bool RunLabelOpsChecks() {
 		float barCy = trBar->y + trBar->h / 2.0f;
 		ok = Check(std::fabs(lblCy - barCy) < ROW_HEIGHT / 2.0f, "rail label sits at the task's lane") && ok;
 	}
-	ok = Check(trBar && trBar->text.empty(), "rail task has NO on-bar label") && ok;
-	ok = Check(tbBar && !tbBar->text.empty(), "bar task keeps its on-bar label") && ok;
+	ok = Check(trBar && trBar->text.empty(), "rail task TASK prim has no embedded label text") && ok;
+	ok = Check(FindPrim(sc, "TASK_LABEL", "tr") == nullptr, "rail task emits NO TASK_LABEL") && ok;
+	const Prim* tbLbl = FindPrim(sc, "TASK_LABEL", "tb");
+	ok = Check(tbBar && tbBar->text.empty(), "bar task TASK prim has no embedded label text") && ok;
+	ok = Check(tbLbl && !tbLbl->text.empty(), "bar task label is a separate TASK_LABEL prim") && ok;
 	ok = Check(FindPrim(sc, "RAIL_TASKLBL", "tb") == nullptr, "bar task emits NO rail label") && ok;
 
 	// --- global override: railLabels=true forces the bar task into the rail ---
@@ -810,7 +815,8 @@ static bool RunLabelOpsChecks() {
 	if (Check(BuildProjectedScene(gDoc, 960.0f, &gsc, &gmn, &gmx, &gpad, &gppd), "global-rail scene builds")) {
 		ok = Check(FindPrim(gsc, "RAIL_TASKLBL", "tb") != nullptr, "global railLabels moves bar task to rail") && ok;
 		const Prim* tbBar2 = FindPrim(gsc, "TASK", "tb");
-		ok = Check(tbBar2 && tbBar2->text.empty(), "global railLabels suppresses the bar task's on-bar label") && ok;
+		ok = Check(tbBar2 && tbBar2->text.empty(), "global railLabels: TASK prim has no embedded label") && ok;
+		ok = Check(FindPrim(gsc, "TASK_LABEL", "tb") == nullptr, "global railLabels suppresses TASK_LABEL") && ok;
 	}
 
 	// --- PP_ROWY: milestone-only last row still gets a non-degenerate band ---
@@ -847,6 +853,131 @@ static PpDocument GridDoc(const std::string& start, const std::string& end, cons
 	d.rows.push_back(PpRow{"r1", "Row 1", "", false});
 	d.tasks.push_back(PpTask{"t1", "T", start, end, "r1", "", 0});
 	return d;
+}
+
+// v2.5.1 i2b scene emission contract (SR-VIZ-01/02/03): TASK_LABEL prim after
+// TASK/TASK_PROGRESS; three DEP elbow segments (arrow on final only); marker
+// labels in the strip above axis headers with two-level stagger.
+// Print 'SCENE VIZ OK' when these pass.
+static bool RunSceneVizChecks() {
+	bool ok = true;
+	const float headTop = MARGIN; // chartTop - AXIS_H
+
+	// --- SR-VIZ-01: TASK_LABEL prim, emission order, inside vs right fallback ---
+	{
+		PpDocument d;
+		d.scale = "week";
+		d.rows.push_back(PpRow{"r1", "Row 1", "", false});
+		d.tasks.push_back(PpTask{"wide", "Wide bar label", "2026-06-01", "2026-06-28", "r1", "#4355E0", 60});
+		d.tasks.push_back(PpTask{"narrow", "Tiny", "2026-06-01", "2026-06-01", "r1", "", 0});
+		Scene sc; std::string mn, mx; long pad = 0; float ppd = 0.0f;
+		if (!Check(BuildProjectedScene(d, 960.0f, &sc, &mn, &mx, &pad, &ppd), "scene viz: doc builds")) return false;
+
+		const Prim* wideBar = FindPrim(sc, "TASK", "wide");
+		const Prim* wideProg = FindPrim(sc, "TASK_PROGRESS", "wide");
+		const Prim* wideLbl = FindPrim(sc, "TASK_LABEL", "wide");
+		ok = Check(wideBar && wideBar->text.empty(), "scene viz: TASK round-rect carries no label text") && ok;
+		ok = Check(wideProg != nullptr, "scene viz: progress task emits TASK_PROGRESS") && ok;
+		ok = Check(wideLbl && !wideLbl->text.empty(), "scene viz: bar label is a TASK_LABEL prim") && ok;
+
+		int taskIdx = -1, progIdx = -1, lblIdx = -1;
+		for (size_t i = 0; i < sc.prims.size(); ++i) {
+			const auto& p = sc.prims[i];
+			if (p.tagId != "wide") continue;
+			if (p.tagKind == "TASK") taskIdx = (int)i;
+			else if (p.tagKind == "TASK_PROGRESS") progIdx = (int)i;
+			else if (p.tagKind == "TASK_LABEL") lblIdx = (int)i;
+		}
+		ok = Check(taskIdx >= 0 && lblIdx > taskIdx, "scene viz: TASK_LABEL follows TASK in emission order") && ok;
+		ok = Check(progIdx > taskIdx && lblIdx > progIdx, "scene viz: TASK_LABEL follows TASK_PROGRESS") && ok;
+
+		if (wideBar && wideLbl) {
+			ok = Check(wideLbl->style.align == TextAlign::Center,
+				"scene viz: wide bar label aligns center inside bar") && ok;
+			ok = Check(std::fabs(wideLbl->x - wideBar->x) < 0.5f && std::fabs(wideLbl->w - wideBar->w) < 0.5f,
+				"scene viz: inside label spans the bar width") && ok;
+		}
+
+		const Prim* narrowBar = FindPrim(sc, "TASK", "narrow");
+		const Prim* narrowLbl = FindPrim(sc, "TASK_LABEL", "narrow");
+		if (narrowBar && narrowLbl) {
+			ok = Check(narrowLbl->style.align == TextAlign::Left,
+				"scene viz: narrow bar label falls back right of bar (left-aligned text)") && ok;
+			ok = Check(narrowLbl->x >= narrowBar->x + narrowBar->w + 5.0f,
+				"scene viz: fallback label sits right of the bar") && ok;
+		}
+	}
+
+	// --- SR-VIZ-03: three DEP segments; arrow only on final; deps before bars ---
+	{
+		PpDocument d;
+		d.rows.push_back(PpRow{"r1", "Row 1", "", false});
+		d.tasks.push_back(PpTask{"t1", "Task 1", "2026-01-01", "2026-01-05", "r1", "", 0});
+		d.tasks.push_back(PpTask{"t2", "Task 2", "2026-01-06", "2026-01-10", "r1", "", 0});
+		std::string depId = AddDependency(d, "t1", "t2");
+		ok = Check(!depId.empty(), "scene viz: dep setup") && ok;
+		Scene sc; std::string mn, mx; long pad = 0; float ppd = 0.0f;
+		if (!Check(BuildProjectedScene(d, 960.0f, &sc, &mn, &mx, &pad, &ppd), "scene viz: dep scene builds")) return false;
+
+		std::vector<const Prim*> segs;
+		for (const auto& p : sc.prims) if (p.tagKind == "DEP" && p.tagId == depId) segs.push_back(&p);
+		ok = Check(segs.size() == 3, "scene viz: one dependency emits three DEP prims") && ok;
+		if (segs.size() == 3) {
+			ok = Check(segs[0]->kind == PrimKind::Line && !segs[0]->style.arrowEnd,
+				"scene viz: DEP segment 1 is a plain horizontal line") && ok;
+			ok = Check(segs[1]->kind == PrimKind::Line && !segs[1]->style.arrowEnd,
+				"scene viz: DEP segment 2 is a plain vertical line") && ok;
+			ok = Check(segs[2]->kind == PrimKind::Connector && segs[2]->style.arrowEnd,
+				"scene viz: DEP segment 3 is a connector with arrowEnd") && ok;
+			float y1 = segs[0]->y, midX = segs[1]->x;
+			ok = Check(std::fabs(segs[0]->y - segs[0]->y2) < 0.5f, "scene viz: DEP h-seg is horizontal") && ok;
+			ok = Check(std::fabs(segs[1]->x - segs[1]->x2) < 0.5f, "scene viz: DEP v-seg is vertical") && ok;
+			ok = Check(std::fabs(segs[2]->y - segs[2]->y2) < 0.5f, "scene viz: DEP arrow-seg is horizontal") && ok;
+			ok = Check(std::fabs(segs[0]->y - y1) < 0.5f && std::fabs(segs[1]->y - y1) < 0.5f,
+				"scene viz: h-seg and v-seg share source row y") && ok;
+			ok = Check(std::fabs(segs[1]->x - midX) < 0.5f && std::fabs(segs[2]->x - midX) < 0.5f,
+				"scene viz: v-seg and arrow-seg share elbow x") && ok;
+		}
+
+		int lastDep = -1, firstTask = -1;
+		for (size_t i = 0; i < sc.prims.size(); ++i) {
+			if (sc.prims[i].tagKind == "DEP") lastDep = (int)i;
+			if (firstTask < 0 && sc.prims[i].tagKind == "TASK") firstTask = (int)i;
+		}
+		ok = Check(lastDep >= 0 && firstTask > lastDep, "scene viz: DEP prims emit before TASK bars") && ok;
+	}
+
+	// --- SR-VIZ-02: marker labels above axis header band; two-level stagger ---
+	{
+		PpDocument d;
+		d.scale = "week";
+		d.rows.push_back(PpRow{"r1", "Row 1", "", false});
+		d.tasks.push_back(PpTask{"t1", "T", "2026-06-01", "2026-06-28", "r1", "", 0});
+		d.markers.push_back(PpMarker{"m1", "today", "TODAY", "2026-06-10", ""});
+		d.markers.push_back(PpMarker{"m2", "deadline", "BOARD REVIEW", "2026-06-10", ""});
+
+		Scene sc; std::string mn, mx; long pad = 0; float ppd = 0.0f;
+		if (!Check(BuildProjectedScene(d, 960.0f, &sc, &mn, &mx, &pad, &ppd), "scene viz: marker scene builds")) return false;
+
+		const Prim* todayLbl = FindPrim(sc, "TODAY_LABEL", "m1");
+		const Prim* dlLbl = FindPrim(sc, "DEADLINE_LABEL", "m2");
+		ok = Check(todayLbl && dlLbl, "scene viz: marker label prims emitted") && ok;
+		if (todayLbl) {
+			ok = Check(todayLbl->y < headTop, "scene viz: marker label sits above the axis header band") && ok;
+		}
+		if (todayLbl && dlLbl) {
+			const float levelGap = gt::marker_label_strip - gt::marker_label_h;
+			ok = Check(std::fabs(todayLbl->y - dlLbl->y) >= levelGap - 0.5f,
+				"scene viz: overlapping marker labels use two stagger levels") && ok;
+		}
+		for (const auto& p : sc.prims) {
+			if (p.tagKind != "TODAY_LABEL" && p.tagKind != "DEADLINE_LABEL" && p.tagKind != "CUSTOM_MARKER_LABEL") continue;
+			ok = Check(p.y + p.h <= headTop + 0.5f,
+				"scene viz: marker label does not descend into axis header text band") && ok;
+		}
+	}
+
+	return ok;
 }
 
 static bool RunGridOpsChecks() {
@@ -1663,6 +1794,9 @@ int main() {
 	bool labelOpsOk = RunLabelOpsChecks();
 	ok = labelOpsOk && ok;
 
+	bool sceneVizOk = RunSceneVizChecks();
+	ok = sceneVizOk && ok;
+
 	bool gridOpsOk = RunGridOpsChecks();
 	ok = gridOpsOk && ok;
 
@@ -1707,6 +1841,9 @@ int main() {
 	}
 	if (labelOpsOk) {
 		std::printf("LABEL OPS OK\n");
+	}
+	if (sceneVizOk) {
+		std::printf("SCENE VIZ OK\n");
 	}
 	if (gridOpsOk) {
 		std::printf("GRID OPS OK\n");

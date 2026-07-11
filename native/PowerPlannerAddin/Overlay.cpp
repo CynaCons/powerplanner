@@ -60,7 +60,6 @@ const COLORREF TEXT = RGB(60, 64, 67);
 // on screen) and become unusably small at 150-200%. kBase* constants live in
 // OverlayMetrics.h; scaled runtime values are below.
 const int BUTTON_COUNT = 4;                 // not a pixel metric: unscaled
-const BYTE HOVER_WASH_ALPHA = 28;           // translucent accent wash over hovered row
 
 // Current DPI-scaled values, recomputed by UpdateDpiScaledMetrics() whenever
 // the overlay's window DPI changes (or on first use). Default to the 96-DPI
@@ -3064,28 +3063,20 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			g_hoverBandRect.right - g_windowOriginX,
 			g_hoverBandRect.bottom - g_windowOriginY
 		};
-		// Genuinely translucent accent wash over the whole hovered row band.
-		SolidBrush wash(GpColor(HOVER_WASH_ALPHA, ACCENT));
+		SolidBrush wash(GpToken(gt::chromeRowWashHover, gt::primary));
 		g.FillRectangle(&wash, (INT)band.left, (INT)band.top,
 			(INT)(band.right - band.left), (INT)(band.bottom - band.top));
-		// Soft accent edge lines top/bottom.
-		Pen edge(GpColor(110, ACCENT), 1.0f);
-		g.DrawLine(&edge, (INT)band.left, (INT)band.top, (INT)band.right, (INT)band.top);
-		g.DrawLine(&edge, (INT)band.left, (INT)band.bottom, (INT)band.right, (INT)band.bottom);
-		// Solid accent bar on the left edge.
-		SolidBrush bar(GpColor(255, ACCENT));
-		g.FillRectangle(&bar, (INT)band.left, (INT)band.top, Scale(3), (INT)(band.bottom - band.top));
 
 		if (g_hoverInsertValid) {
 			INT ex = (INT)g_hoverInsertRect.left, ey = (INT)g_hoverInsertRect.top;
 			INT ew = (INT)(g_hoverInsertRect.right - g_hoverInsertRect.left);
 			INT eh = (INT)(g_hoverInsertRect.bottom - g_hoverInsertRect.top);
-			SolidBrush plusFill(GpColor(255, SURFACE));
+			SolidBrush plusFill(GpToken(255, gt::surface));
 			g.FillEllipse(&plusFill, ex, ey, ew, eh);
-			Pen plusPen(GpColor(255, ACCENT), 1.0f);
+			Pen plusPen(GpToken(255, gt::primary), 1.0f);
 			g.DrawEllipse(&plusPen, ex, ey, ew, eh);
 
-			Pen glyphPen(GpColor(255, ACCENT), ScaleF(2.0f));
+			Pen glyphPen(GpToken(255, gt::primary), ScaleF(2.0f));
 			int cx = (g_hoverInsertRect.left + g_hoverInsertRect.right) / 2;
 			int cy = (g_hoverInsertRect.top + g_hoverInsertRect.bottom) / 2;
 			int g4 = Scale(4);
@@ -3310,6 +3301,41 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		g.DrawString(hint, -1, &hintFont, RectF((REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH), &hintFmt, &hintText);
 	}
 
+	// Hover-only "PowerPlanner" chip (SR-CHR-02): top-edge band, no selection active.
+	if (g_ownSelKind.empty() && !g_hasSelectionChrome && !::IsRectEmpty(&g_chartScreenRect)) {
+		POINT pt = {};
+		if (OverlayGetCursorPos(&pt)) {
+			int chartLeft = g_chartScreenRect.left - g_windowOriginX;
+			int chartRight = g_chartScreenRect.right - g_windowOriginX;
+			int chartTop = g_chartScreenRect.top - g_windowOriginY;
+			int ptX = pt.x - g_windowOriginX;
+			int ptY = pt.y - g_windowOriginY;
+			int bandTop = chartTop - BADGE_H;
+			int bandBottom = chartTop + Scale(8);
+			if (ptX >= chartLeft && ptX <= chartRight && ptY >= bandTop && ptY <= bandBottom) {
+				Gdiplus::Font chipFont(L"Segoe UI", ScaleF(gt::chromeChipFontPx), FontStyleRegular, UnitPixel);
+				RectF textBounds;
+				g.MeasureString(g_badge.c_str(), -1, &chipFont, PointF(0, 0), &textBounds);
+				int chipPadH = Scale(6);
+				int chipPadV = Scale(3);
+				int chipW = (int)textBounds.Width + chipPadH * 2;
+				int chipH = (int)textBounds.Height + chipPadV * 2;
+				int chipTop = std::max(Scale(2), chartTop - chipH - Scale(3));
+				GraphicsPath chipPath;
+				AddRoundRect(chipPath, (REAL)chartLeft, (REAL)chipTop, (REAL)chipW, (REAL)chipH, ScaleF(gt::chromeChipRadius));
+				SolidBrush chipBrush(GpToken(gt::chromeChipAlpha, gt::primary));
+				g.FillPath(&chipBrush, &chipPath);
+				StringFormat sf;
+				sf.SetAlignment(StringAlignmentCenter);
+				sf.SetLineAlignment(StringAlignmentCenter);
+				sf.SetFormatFlags(StringFormatFlagsNoWrap);
+				SolidBrush chipText(GpToken(255, gt::surface));
+				g.DrawString(g_badge.c_str(), -1, &chipFont,
+					RectF((REAL)chartLeft, (REAL)chipTop, (REAL)chipW, (REAL)chipH), &sf, &chipText);
+			}
+		}
+	}
+
 	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
 
 	RECT frame = g_frameRect;
@@ -3317,63 +3343,31 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	REAL fw = (REAL)(frame.right - frame.left), fh = (REAL)(frame.bottom - frame.top);
 
 	if (g_ownSelKind == "ROW") {
-		// Row selection highlight: left accent only (rail style) to avoid covering left-side row titles/labels.
-		// Full rect fill was causing "title disappears" on click select.
 		const int inset = Scale(3);
 		Pen edge(GpToken(255, gt::primary), ScaleF(3.0f));
 		g.DrawLine(&edge, (INT)fx + inset, (INT)fy, (INT)fx + inset, (INT)(fy + fh));
-		// Optional very subtle wash only on the right (timeline) part if desired; keep minimal for now
+		for (const auto& band : g_rowBands) {
+			if (band.rowId != g_ownSelId) continue;
+			RECT bandClient = {
+				band.screenRect.left - g_windowOriginX,
+				band.screenRect.top - g_windowOriginY,
+				band.screenRect.right - g_windowOriginX,
+				band.screenRect.bottom - g_windowOriginY
+			};
+			SolidBrush wash(GpToken(gt::chromeRowWashSelect, gt::primary));
+			g.FillRectangle(&wash, (INT)bandClient.left, (INT)bandClient.top,
+				(INT)(bandClient.right - bandClient.left), (INT)(bandClient.bottom - bandClient.top));
+			break;
+		}
 		return;
 	}
 
-	// Soft halo behind the frame, then the crisp accent frame itself. Stroke
-	// widths and the halo's outward inflation are DPI-scaled so the chrome
-	// stays proportioned (not hairline-thin) at high scale factors.
-	REAL haloInfl = ScaleF(1.5f);
-	REAL haloPenW = ScaleF(4.0f);
-	REAL framePenW = ScaleF(2.0f);
-	{
-		GraphicsPath halo;
-		AddRoundRect(halo, fx - haloInfl, fy - haloInfl, fw + haloInfl * 2.0f, fh + haloInfl * 2.0f, 4.5f);
-		Pen haloPen(GpColor(56, ACCENT), haloPenW);
-		g.DrawPath(&haloPen, &halo);
-
-		GraphicsPath framePath;
-		AddRoundRect(framePath, fx, fy, fw, fh, 3.0f);
-		Pen framePen(GpColor(255, ACCENT), framePenW);
-		g.DrawPath(&framePen, &framePath);
-	}
-
-	// 8 handles (white fill, accent border)
-	int mx = (frame.left + frame.right) / 2, my = (frame.top + frame.bottom) / 2;
-	int xs[3] = { (int)frame.left, mx, (int)frame.right };
-	int ys[3] = { (int)frame.top, my, (int)frame.bottom };
-	int handleR = Scale(3);
-	for (int i = 0; i < 3; ++i)
-		for (int j = 0; j < 3; ++j) {
-			if (i == 1 && j == 1) continue;
-			DrawHandle(g, xs[i], ys[j], handleR);
-		}
-
-	// badge: only for overall component (no specific ownSel) to avoid fighting item/row selection visuals (v2.4.1)
 	if (g_ownSelKind.empty()) {
-		int bw = Scale(96), bh = BADGE_H - Scale(4);
-		int badgeTop = std::max(Scale(2), (int)frame.top - BADGE_H - Scale(3));
-		{
-			GraphicsPath badgePath;
-			AddRoundRect(badgePath, fx, (REAL)badgeTop, (REAL)bw, (REAL)bh, 4.0f);
-			SolidBrush badgeBrush(GpColor(255, ACCENT));
-			g.FillPath(&badgeBrush, &badgePath);
-
-			Gdiplus::Font badgeFont(L"Segoe UI", g_badgeFontPx, FontStyleRegular, UnitPixel);
-			StringFormat sf;
-			sf.SetAlignment(StringAlignmentCenter);
-			sf.SetLineAlignment(StringAlignmentCenter);
-			sf.SetFormatFlags(StringFormatFlagsNoWrap);
-			SolidBrush textBrush(Color(255, 255, 255, 255));
-			g.DrawString(g_badge.c_str(), -1, &badgeFont,
-				RectF(fx, (REAL)badgeTop, (REAL)bw, (REAL)bh), &sf, &textBrush);
-		}
+		Pen hairPen(GpToken(255, gt::chromeHairline), (REAL)Scale(1));
+		g.DrawRectangle(&hairPen, (INT)fx, (INT)fy, (INT)fw, (INT)fh);
+	} else {
+		Pen framePen(GpToken(255, gt::primary), ScaleF(gt::chromeItemFramePx));
+		g.DrawRectangle(&framePen, (INT)fx, (INT)fy, (INT)fw, (INT)fh);
 	}
 
 	// floating Material mini-toolbar
