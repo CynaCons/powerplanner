@@ -7,6 +7,7 @@
 #include "PptRenderer.h"
 #include <algorithm>
 #include <map>
+#include <tuple>
 #include <string>
 #include <vector>
 #include <cstdio>
@@ -92,6 +93,10 @@ void WriteChartRootTags(PowerPoint::ShapePtr group, const PpDocument& doc, const
 	long pad, float ptPerDay, float slideW);
 }
 
+namespace {
+static void CommitSceneCacheFromGroup(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc);
+}
+
 HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, const std::string& selectId) {
 	if (!pApp) return E_POINTER;
 	int count = 0;
@@ -138,6 +143,7 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, 
 					}
 				}
 			}
+			CommitSceneCacheFromGroup(group, sc, doc);
 		}
 	}
 	catch (const _com_error& e) {
@@ -169,6 +175,9 @@ struct MatchKey {
 		if (id != o.id) return id < o.id;
 		return ordinal < o.ordinal;
 	}
+	bool operator==(const MatchKey& o) const {
+		return kind == o.kind && id == o.id && ordinal == o.ordinal;
+	}
 };
 
 std::vector<MatchKey> BuildMatchKeys(const std::vector<std::pair<std::string, std::string>>& kindIds) {
@@ -180,6 +189,226 @@ std::vector<MatchKey> BuildMatchKeys(const std::vector<std::pair<std::string, st
 		out.push_back({ ki.first, ki.second, ord });
 	}
 	return out;
+}
+
+using ShapeMapKey = std::tuple<std::string, std::string, int>;
+
+static ShapeMapKey ToShapeMapKey(const MatchKey& k) {
+	return { k.kind, k.id, k.ordinal };
+}
+
+// §1 persistent scene cache (i4a2-scene-diff). ShapePtr entries may dangle if
+// shapes are deleted externally (undo, manual edit); PP_DOC-tag drift check
+// plus COM-failure fallback to the full reconcile path are the guards.
+static Scene g_lastScene;
+static std::map<ShapeMapKey, PowerPoint::ShapePtr> g_shapeMap;
+static bool g_sceneCacheValid = false;
+static long g_chartRootShapeId = 0;
+static std::string g_cacheDocJson;
+
+static void InvalidateSceneCache() {
+	g_sceneCacheValid = false;
+	g_shapeMap.clear();
+	g_lastScene.prims.clear();
+	g_chartRootShapeId = 0;
+	g_cacheDocJson.clear();
+}
+
+static std::vector<MatchKey> BuildScenePrimKeys(const Scene& sc) {
+	std::vector<std::pair<std::string, std::string>> kindIds;
+	kindIds.reserve(sc.prims.size());
+	for (const auto& p : sc.prims) kindIds.push_back({ p.tagKind, p.tagId });
+	return BuildMatchKeys(kindIds);
+}
+
+static bool PrimKeyMultisetEqual(const Scene& a, const Scene& b) {
+	std::vector<MatchKey> ka = BuildScenePrimKeys(a);
+	std::vector<MatchKey> kb = BuildScenePrimKeys(b);
+	if (ka.size() != kb.size()) return false;
+	std::sort(ka.begin(), ka.end());
+	std::sort(kb.begin(), kb.end());
+	return ka == kb;
+}
+
+static bool PrimVisualFieldsEqual(const Prim& a, const Prim& b) {
+	if (a.kind != b.kind) return false;
+	if (a.x != b.x || a.y != b.y || a.w != b.w || a.h != b.h || a.x2 != b.x2 || a.y2 != b.y2) return false;
+	if (a.text != b.text) return false;
+	const Style& sa = a.style, sb = b.style;
+	return sa.fill == sb.fill && sa.fillBgr == sb.fillBgr
+		&& sa.line == sb.line && sa.lineBgr == sb.lineBgr && sa.lineWeight == sb.lineWeight
+		&& sa.textBgr == sb.textBgr && sa.fontSize == sb.fontSize && sa.bold == sb.bold
+		&& sa.align == sb.align && sa.arrowEnd == sb.arrowEnd && sa.corner == sb.corner
+		&& sa.dash == sb.dash;
+}
+
+static bool LineDashStyle(const Prim& p) {
+	return p.style.dash || p.tagKind == "DEADLINE" || p.tagKind == "TODAY_LINE";
+}
+
+// Write-only delta apply for the scene-diff fast path — no COM reads back.
+static void ApplyPrimWriteDelta(PowerPoint::ShapePtr ch, const Prim& oldP, const Prim& newP) {
+	const Style& os = oldP.style;
+	const Style& ns = newP.style;
+
+	if (newP.kind == PrimKind::Line || newP.kind == PrimKind::Connector) {
+		if (oldP.x != newP.x || oldP.y != newP.y || oldP.x2 != newP.x2 || oldP.y2 != newP.y2) {
+			ch->PutLeft((float)std::min(newP.x, newP.x2));
+			ch->PutTop((float)std::min(newP.y, newP.y2));
+			float w = std::fabs(newP.x2 - newP.x), h = std::fabs(newP.y2 - newP.y);
+			ch->PutWidth(w > 0.0f ? w : 0.01f);
+			ch->PutHeight(h > 0.0f ? h : 0.01f);
+		}
+		PowerPoint::LineFormatPtr lf = ch->GetLine();
+		if (os.lineBgr != ns.lineBgr)
+			lf->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.lineBgr);
+		if (os.lineWeight != ns.lineWeight)
+			lf->PutWeight(ns.lineWeight);
+		if (newP.kind == PrimKind::Connector && os.arrowEnd != ns.arrowEnd) {
+			lf->PutBeginArrowheadStyle(Office::msoArrowheadNone);
+			lf->PutEndArrowheadStyle(ns.arrowEnd ? Office::msoArrowheadTriangle : Office::msoArrowheadNone);
+		}
+		if (LineDashStyle(oldP) != LineDashStyle(newP))
+			lf->PutDashStyle(LineDashStyle(newP) ? Office::msoLineDashDot : Office::msoLineDash);
+		return;
+	}
+
+	if (oldP.x != newP.x) ch->PutLeft(newP.x);
+	if (oldP.y != newP.y) ch->PutTop(newP.y);
+	if (oldP.w != newP.w) ch->PutWidth(newP.w > 0.0f ? newP.w : 0.01f);
+	if (oldP.h != newP.h) ch->PutHeight(newP.h > 0.0f ? newP.h : 0.01f);
+
+	PowerPoint::FillFormatPtr fill = ch->GetFill();
+	if (os.fill != ns.fill)
+		fill->PutVisible(ns.fill ? Office::msoTrue : Office::msoFalse);
+	if (ns.fill && os.fillBgr != ns.fillBgr)
+		fill->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.fillBgr);
+
+	PowerPoint::LineFormatPtr line = ch->GetLine();
+	if (os.line != ns.line)
+		line->PutVisible(ns.line ? Office::msoTrue : Office::msoFalse);
+	if (ns.line) {
+		if (os.lineBgr != ns.lineBgr)
+			line->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.lineBgr);
+		if (os.lineWeight != ns.lineWeight)
+			line->PutWeight(ns.lineWeight);
+	}
+
+	if (newP.kind == PrimKind::RoundRect && os.corner != ns.corner && ns.corner > 0.0f) {
+		float shorter = (newP.w < newP.h ? newP.w : newP.h);
+		if (shorter > 0.0f) {
+			float adj = ns.corner / shorter;
+			if (adj < 0.0f) adj = 0.0f; else if (adj > 0.5f) adj = 0.5f;
+			try { ch->GetAdjustments()->PutItem(1, adj); } catch (...) {}
+		}
+	}
+
+	bool textChanged = oldP.text != newP.text;
+	bool fontChanged = os.fontSize != ns.fontSize || os.bold != ns.bold || os.textBgr != ns.textBgr || os.align != ns.align;
+	if (textChanged || fontChanged) {
+		PowerPoint::TextFramePtr tf = ch->GetTextFrame();
+		tf->PutAutoSize(PowerPoint::ppAutoSizeNone);
+		PowerPoint::TextRangePtr tr = tf->GetTextRange();
+		if (textChanged) tr->PutText(_bstr_t(newP.text.c_str()));
+		if (fontChanged) {
+			PowerPoint::FontPtr font = tr->GetFont();
+			if (os.fontSize != ns.fontSize) font->PutSize(ns.fontSize);
+			if (os.bold != ns.bold) font->PutBold(ns.bold ? Office::msoTrue : Office::msoFalse);
+			if (os.textBgr != ns.textBgr) font->GetColor()->PutPpRGB((Office::MsoRGBType)ns.textBgr);
+			if (os.align != ns.align) {
+				long a = (ns.align == TextAlign::Center) ? 2 : (ns.align == TextAlign::Right) ? 3 : 1;
+				tr->GetParagraphFormat()->PutAlignment((PowerPoint::PpParagraphAlignment)a);
+			}
+		}
+	} else if (oldP.w != newP.w || oldP.h != newP.h) {
+		// Geometry-only retext path still needs autosize suppressed.
+		ch->GetTextFrame()->PutAutoSize(PowerPoint::ppAutoSizeNone);
+	}
+}
+
+static void CommitSceneCache(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc,
+	const std::vector<PowerPoint::ShapePtr>& shapesByPrimIndex) {
+	g_lastScene = sc;
+	g_cacheDocJson = DocumentToJson(doc);
+	g_chartRootShapeId = group->GetId();
+	g_shapeMap.clear();
+	std::vector<MatchKey> primKeys = BuildScenePrimKeys(sc);
+	for (size_t p = 0; p < sc.prims.size() && p < shapesByPrimIndex.size(); ++p) {
+		if (shapesByPrimIndex[p]) g_shapeMap[ToShapeMapKey(primKeys[p])] = shapesByPrimIndex[p];
+	}
+	g_sceneCacheValid = true;
+}
+
+static void CommitSceneCacheFromGroup(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc) {
+	PowerPoint::GroupShapesPtr items = group->GetGroupItems();
+	long childCount = items->GetCount();
+	std::vector<std::pair<std::string, std::string>> childKindIds(childCount ? childCount : 0);
+	std::vector<PowerPoint::ShapePtr> children(childCount ? childCount : 0);
+	for (long i = 1; i <= childCount; ++i) {
+		PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+		children[i - 1] = ch;
+		_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+		_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+		childKindIds[i - 1] = { k.length() ? Narrow((const wchar_t*)k) : "", id.length() ? Narrow((const wchar_t*)id) : "" };
+	}
+	std::vector<MatchKey> childKeys = BuildMatchKeys(childKindIds);
+	std::map<MatchKey, PowerPoint::ShapePtr> childByKey;
+	for (long i = 0; i < (long)childKeys.size(); ++i) {
+		if (childKindIds[i].first.empty()) continue;
+		childByKey[childKeys[i]] = children[i];
+	}
+	std::vector<MatchKey> primKeys = BuildScenePrimKeys(sc);
+	std::vector<PowerPoint::ShapePtr> byPrim(sc.prims.size());
+	for (size_t p = 0; p < sc.prims.size(); ++p) {
+		auto it = childByKey.find(primKeys[p]);
+		if (it != childByKey.end()) byPrim[p] = it->second;
+	}
+	CommitSceneCache(group, sc, doc, byPrim);
+}
+
+// §2 fast path: pure C++ scene diff + write-only COM deltas (~10 calls/edit).
+static bool TryApplySceneDiffFast(PowerPoint::ShapePtr group, const PpDocument& doc, const Scene& newSc,
+	const std::string& minD, long pad, float ptPerDay, float slideW, const std::string& selectId) {
+	try {
+		std::vector<MatchKey> newKeys = BuildScenePrimKeys(newSc);
+		std::map<ShapeMapKey, const Prim*> oldPrimByKey;
+		std::vector<MatchKey> oldKeys = BuildScenePrimKeys(g_lastScene);
+		for (size_t i = 0; i < g_lastScene.prims.size(); ++i)
+			oldPrimByKey[ToShapeMapKey(oldKeys[i])] = &g_lastScene.prims[i];
+
+		for (size_t p = 0; p < newSc.prims.size(); ++p) {
+			ShapeMapKey sk = ToShapeMapKey(newKeys[p]);
+			auto oldIt = oldPrimByKey.find(sk);
+			auto shIt = g_shapeMap.find(sk);
+			if (oldIt == oldPrimByKey.end() || shIt == g_shapeMap.end()) return false;
+			const Prim& oldP = *oldIt->second;
+			const Prim& newP = newSc.prims[p];
+			if (!PrimVisualFieldsEqual(oldP, newP))
+				ApplyPrimWriteDelta(shIt->second, oldP, newP);
+		}
+
+		WriteChartRootTags(group, doc, minD, pad, ptPerDay, slideW);
+		std::vector<PowerPoint::ShapePtr> byPrim(newSc.prims.size());
+		for (size_t p = 0; p < newSc.prims.size(); ++p) {
+			auto it = g_shapeMap.find(ToShapeMapKey(newKeys[p]));
+			if (it != g_shapeMap.end()) byPrim[p] = it->second;
+		}
+		CommitSceneCache(group, newSc, doc, byPrim);
+
+		if (!selectId.empty()) {
+			for (size_t p = 0; p < newSc.prims.size(); ++p) {
+				if (newSc.prims[p].tagId == selectId) {
+					auto it = g_shapeMap.find(ToShapeMapKey(newKeys[p]));
+					if (it != g_shapeMap.end()) { it->second->Select(Office::msoTrue); break; }
+				}
+			}
+		}
+		return true;
+	} catch (const _com_error&) {
+		return false;
+	} catch (...) {
+		return false;
+	}
 }
 
 // Mirror PptRenderer.cpp's fill/line writes so in-place reconcile keeps shape
@@ -342,6 +571,12 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		}
 		WriteChartRootTags(group, doc, minD, pad, ptPerDay, slideW);
 
+		{
+			std::vector<PowerPoint::ShapePtr> byPrim(sc.prims.size());
+			for (size_t p = 0; p < sc.prims.size(); ++p) byPrim[p] = children[primMatchChildIdx[p]];
+			CommitSceneCache(group, sc, doc, byPrim);
+		}
+
 		if (!selectId.empty()) {
 			for (size_t p = 0; p < sc.prims.size(); ++p) {
 				if (sc.prims[p].tagId == selectId) { children[primMatchChildIdx[p]]->Select(Office::msoTrue); break; }
@@ -479,6 +714,12 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		newGroup->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
 		WriteChartRootTags(newGroup, doc, minD, pad, ptPerDay, slideW);
 
+		{
+			std::vector<PowerPoint::ShapePtr> byPrim(sc.prims.size());
+			for (size_t p = 0; p < sc.prims.size(); ++p) byPrim[p] = finalOrder[p];
+			CommitSceneCache(newGroup, sc, doc, byPrim);
+		}
+
 		if (!selectId.empty()) {
 			for (size_t p = 0; p < sc.prims.size(); ++p) {
 				if (sc.prims[p].tagId == selectId) { finalOrder[p]->Select(Office::msoTrue); break; }
@@ -557,6 +798,23 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		const float capWidth = group->GetWidth();
 		const float capHeight = group->GetHeight();
 
+		const float slideW = (float)app->GetActivePresentation()->GetPageSetup()->GetSlideWidth();
+		Scene newSc; std::string minD, maxD; long pad = 0; float ptPerDay = 0.0f;
+		if (!BuildProjectedScene(doc, slideW, &newSc, &minD, &maxD, &pad, &ptPerDay)) return E_FAIL;
+
+		// §2 scene-diff fast path: skip full reconcile when prim keys are stable.
+		if (g_sceneCacheValid && group->GetId() == g_chartRootShapeId && PrimKeyMultisetEqual(newSc, g_lastScene)) {
+			_bstr_t docTag = group->GetTags()->Item(_bstr_t(L"PP_DOC"));
+			std::string slideDocJson = docTag.length() ? Narrow((const wchar_t*)docTag) : "";
+			if (slideDocJson == g_cacheDocJson) {
+				if (TryApplySceneDiffFast(group, doc, newSc, minD, pad, ptPerDay, slideW, selectId)) {
+					PreserveChartRootFrame(pApp, slide, capLeft, capTop, capWidth, capHeight);
+					return S_OK;
+				}
+				InvalidateSceneCache();
+			}
+		}
+
 		HRESULT hr = ReconcileChartRoot(app, slide, group, doc, selectId);
 		if (SUCCEEDED(hr)) {
 			PreserveChartRootFrame(pApp, slide, capLeft, capTop, capWidth, capHeight);
@@ -579,6 +837,7 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 				if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") { sh->Delete(); break; }
 			}
 		} catch (const _com_error&) {}
+		InvalidateSceneCache();
 		int cnt = 0;
 		HRESULT hr2 = InsertGantt(pApp, doc, &cnt, selectId);
 		return hr2;
@@ -589,6 +848,7 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		wchar_t buf[96];
 		::swprintf_s(buf, 96, L"UpdateGantt: COM error 0x%08lX during reconcile, falling back to InsertGantt", (unsigned long)e.Error());
 		GbLog(buf);
+		InvalidateSceneCache();
 		try {
 			int cnt = 0;
 			HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);
@@ -598,6 +858,7 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 	}
 	catch (const std::exception&) {
 		GbLog(L"UpdateGantt: std::exception during reconcile, falling back to InsertGantt");
+		InvalidateSceneCache();
 		try {
 			int cnt = 0;
 			HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);
@@ -607,6 +868,7 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 	}
 	catch (...) {
 		GbLog(L"UpdateGantt: unknown exception during reconcile, falling back to InsertGantt");
+		InvalidateSceneCache();
 		try {
 			int cnt = 0;
 			HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);

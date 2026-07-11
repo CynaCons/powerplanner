@@ -4672,17 +4672,42 @@ void CommitLinkTarget(const std::string& targetId) {
 static int g_pptPaintLockDepth = 0;
 struct PptPaintLock {
 	bool locked = false;
-	PptPaintLock() {
-		if (g_pptPaintLockDepth++ == 0 && g_pptHwnd && ::IsWindow(g_pptHwnd))
+	bool engaged = false;
+	explicit PptPaintLock(bool engage = true) : engaged(engage) {
+		if (engage && g_pptPaintLockDepth++ == 0 && g_pptHwnd && ::IsWindow(g_pptHwnd))
 			locked = !!::LockWindowUpdate(g_pptHwnd);
 	}
 	~PptPaintLock() {
+		if (!engaged) return;
 		if (--g_pptPaintLockDepth == 0 && locked) ::LockWindowUpdate(NULL);
 	}
 };
 
+static bool IsStructuralDocChange(const PpDocument& before, const PpDocument& after) {
+	if (before.rows.size() != after.rows.size()) return true;
+	if (before.tasks.size() != after.tasks.size()) return true;
+	if (before.milestones.size() != after.milestones.size()) return true;
+	if (before.markers.size() != after.markers.size()) return true;
+	if (before.texts.size() != after.texts.size()) return true;
+	if (before.deps.size() != after.deps.size()) return true;
+	if (before.brackets.size() != after.brackets.size()) return true;
+	if (before.scale != after.scale) return true;
+	if (before.gridDensity != after.gridDensity) return true;
+	return false;
+}
+
 void RebuildChart(PpDocument& doc, const std::string& selectId) {
-	PptPaintLock paintLock;
+	bool structural = false;
+	try {
+		std::string beforeJson = ReadGanttFromSlide(g_app);
+		if (!beforeJson.empty()) {
+			PpDocument beforeDoc = DocumentFromJson(beforeJson);
+			structural = IsStructuralDocChange(beforeDoc, doc);
+		}
+	} catch (...) {
+		structural = true;
+	}
+	PptPaintLock paintLock(structural);
 	StartNewUndoEntryIfPossible();
 	InvalidateHitSnapshot();
 	HRESULT hr = UpdateGantt(g_app, doc, selectId);
