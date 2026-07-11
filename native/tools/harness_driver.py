@@ -81,6 +81,31 @@ class HarnessReport:
         return json.dumps(self.to_dict(), indent=indent)
 
 
+@dataclass
+class TraceStep:
+    step: str
+    state: Dict[str, Any]
+    artifacts: List[str] = field(default_factory=list)
+
+
+@dataclass
+class OperationTraceReport:
+    profile: str
+    exe: str
+    steps: List[TraceStep] = field(default_factory=list)
+    status: str = "PASS"  # PASS | FAIL | FLAKE
+    duration_s: float = 0.0
+    timestamp: str = ""
+    stdout_tail: str = ""
+    invariants: List[Dict[str, Any]] = field(default_factory=list)  # violations or checks
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def to_json(self, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent)
+
+
 def _tail(text: str, n: int = 4000) -> str:
     return text[-n:] if text else ""
 
@@ -301,6 +326,331 @@ def run_with_golden_checks(
 
 
 # ------------------------------------------------------------------
+# v2.4.0 Operation Trace support (before / immed / +1 / +3)
+# ------------------------------------------------------------------
+
+TRACE_STEP_RE = re.compile(r"TRACE\s+(\S+):\s*(\{.*?\})\s*$", re.DOTALL)
+TRACE_ARTIFACT_RE = re.compile(r"TRACE\s+(\S+)\s+ARTIFACTS:\s*(.*)$")
+
+
+def _parse_trace_steps(stdout: str) -> List[TraceStep]:
+    """Parse sequenced TRACE lines emitted by harness during a --trace run."""
+    steps: List[TraceStep] = []
+    step_map: Dict[str, TraceStep] = {}
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        m = TRACE_STEP_RE.search(line)
+        if m:
+            step_name = m.group(1)
+            try:
+                state = json.loads(m.group(2))
+            except Exception:
+                state = {"raw": m.group(2)}
+            ts = step_map.get(step_name)
+            if not ts:
+                ts = TraceStep(step=step_name, state=state)
+                step_map[step_name] = ts
+                steps.append(ts)
+            else:
+                ts.state = state
+        am = TRACE_ARTIFACT_RE.search(line)
+        if am:
+            step_name = am.group(1)
+            arts = [a.strip() for a in am.group(2).split() if a.strip()]
+            ts = step_map.get(step_name)
+            if not ts:
+                ts = TraceStep(step=step_name, state={})
+                step_map[step_name] = ts
+                steps.append(ts)
+            ts.artifacts.extend([a for a in arts if a not in ts.artifacts])
+    return steps
+
+
+def run_operation_trace(
+    profile: str,
+    exe_name: str = "ppappbarshot",
+    timeout: int = 180,
+    retries: int = 1,
+) -> OperationTraceReport:
+    """Run a harness in trace mode for the given profile and return sequenced report."""
+    start = time.time()
+    base_report = run_harness(
+        exe_name,
+        ["--trace", profile],
+        timeout=timeout,
+        retries=retries,
+        kill_ppt=True,
+    )
+    steps = _parse_trace_steps(base_report.stdout_tail)
+    # attach any late artifacts by mtime to the trace (best effort)
+    recent = _find_recent_artifacts(start)
+    for st in steps:
+        for art in recent:
+            if profile in art or st.step in art or "trace_" in art:
+                if art not in st.artifacts:
+                    st.artifacts.append(art)
+    tr = OperationTraceReport(
+        profile=profile,
+        exe=exe_name,
+        steps=steps,
+        status=base_report.status if base_report.status != "PASS" else "PASS",
+        duration_s=round(time.time() - start, 2),
+        timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        stdout_tail=_tail(base_report.stdout_tail),
+    )
+    # write sidecar trace report
+    trace_path = BUILD_DIR / f"trace_{profile}_report.json"
+    trace_path.write_text(tr.to_json(), encoding="utf-8")
+    return tr
+
+
+# Core invariants for continuity (used to auto-detect the v2.4.1 class of bugs)
+CONTINUITY_RULES = [
+    "row_sel_stable_during_item_op",
+    "appbar_visible_stable",
+    "no_large_sel_drop_to_empty",
+    "rowband_count_stable_or_increases",
+    "scale_group_always_reachable",
+]
+
+
+def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Run core continuity checks. Returns list of {rule, passed, detail}."""
+    results: List[Dict[str, Any]] = []
+    steps = tr.steps
+    if not steps:
+        results.append({"rule": "has_trace_steps", "passed": False, "detail": "no steps captured"})
+        return results
+
+    # Collect per-step key signals
+    own_sel_seq = [ (s.step, s.state.get("ownSelKind", "")) for s in steps ]
+    rowcount_seq = [ (s.step, s.state.get("rowCount", 0)) for s in steps ]
+    appbar_vis_seq = [ (s.step, bool(s.state.get("appBarVisible"))) for s in steps ]
+    has_scale_seq = [ (s.step, bool(s.state.get("hasScaleGroup"))) for s in steps ]
+    groups_seq = [ (s.step, s.state.get("appBarGroups", [])) for s in steps ]
+
+    # 1. row_sel_stable_during_item_op : for row-* profiles, once ROW, should not drop to empty or container during flow
+    if profile and profile.startswith("row-"):
+        dropped = False
+        for step, kind in own_sel_seq:
+            if kind not in ("ROW", "row"):  # tolerate casing
+                # allow pre step before we select
+                if step != "pre":
+                    dropped = True
+        results.append({
+            "rule": "row_sel_stable_during_item_op",
+            "passed": not dropped,
+            "detail": f"sel seq: {own_sel_seq}",
+            "seq": own_sel_seq,
+        })
+
+    # 2. appbar_visible_stable
+    vis_ok = all(v for _, v in appbar_vis_seq)
+    results.append({
+        "rule": "appbar_visible_stable",
+        "passed": vis_ok,
+        "detail": f"vis: {appbar_vis_seq}",
+    })
+
+    # 3. no_large_sel_drop_to_empty (ownSelKind should not go blank mid op for *item-specific* ops)
+    # Overall move/resize legitimately clears item sel to avoid weird combined chrome.
+    if profile and not profile.startswith('overall-'):
+        empty_mid = False
+        for i, (step, kind) in enumerate(own_sel_seq):
+            if i > 0 and not kind:
+                empty_mid = True
+        results.append({
+            "rule": "no_large_sel_drop_to_empty",
+            "passed": not empty_mid,
+            "detail": f"sel seq: {own_sel_seq}",
+        })
+    else:
+        results.append({
+            "rule": "no_large_sel_drop_to_empty",
+            "passed": True,
+            "detail": "skipped for overall-* (intentional clear when selecting CHART_ROOT)",
+        })
+
+    # 4. rowband count stable or increases (insert may +1)
+    counts = [c for _, c in rowcount_seq]
+    non_decreasing = all(counts[i] <= counts[i+1] for i in range(len(counts)-1)) if len(counts) > 1 else True
+    results.append({
+        "rule": "rowband_count_stable_or_increases",
+        "passed": non_decreasing,
+        "detail": f"counts: {rowcount_seq}",
+    })
+
+    # 5. scale_group_always_reachable : SR-EDT-02 (docs/SRS_CreationFlows.md).
+    # The global SCALE/Labels/Grid group is appended for EVERY selection
+    # context (matches the committed ops-test appbar contract "SCALE last
+    # for every sel"). Flag any step where the app bar lacks it.
+    scale_missing = False
+    for sstep, has in has_scale_seq:
+        if not has:
+            scale_missing = True
+    results.append({
+        "rule": "scale_group_always_reachable",
+        "passed": not scale_missing,
+        "detail": f"scale-seq: {has_scale_seq} sel:{own_sel_seq}",
+    })
+
+    # v2.4.1+ content flash hunter: compare PNG sizes across trace steps.
+    # A sharp drop in immed or +1 vs pre/+3 for overlay/ctx artifacts indicates
+    # graph (bars) or left titles (labels) temporarily missing.
+    def _flash_flag(art_list, pre_size, final_size):
+        for a in art_list:
+            if 'immed' in a or '+1' in a:
+                try:
+                    # approximate: caller will have populated recent artifacts
+                    pass
+                except:
+                    pass
+        return False
+
+    # Heuristic on known artifacts in report
+    flash_suspect = False
+    sizes = {}
+    for s in steps:
+        for art in s.artifacts:
+            p = (REPO_ROOT / art).resolve()
+            if p.exists() and p.suffix == '.png' and ('overlay' in art or 'ctx' in art):
+                try:
+                    sz = p.stat().st_size
+                    key = 'pre' if 'pre' in art else ('immed' if 'immed' in art else ('+1' if '+1' in art else ('+3' if '+3' in art else 'other')))
+                    sizes[key] = sz
+                except:
+                    pass
+    if sizes:
+        max_ref = max(sizes.values()) or 1
+        for k, sz in sizes.items():
+            if k in ('immed', '+1') and sz < max_ref * 0.72:
+                flash_suspect = True
+    results.append({
+        "rule": "no_content_flash_in_trace",
+        "passed": not flash_suspect,
+        "detail": f"png sizes sample (max ref): {sizes}",
+    })
+
+    # Overall component (CHART_ROOT) move/resize invariants
+    if profile and (profile.startswith('row-label') or profile.startswith('row-then') or profile == 'row-label-select'):
+        # For row interaction e2e: labels must not disappear on select (user reported title gone on click)
+        pre_labels = steps[0].state.get('rowLabelCount') if steps else None
+        stable_labels = all(s.state.get('rowLabelCount') == pre_labels for s in steps if s.state.get('rowLabelCount') is not None)
+        results.append({
+            'rule': 'row_labels_stable_on_select',
+            'passed': stable_labels or pre_labels is None,
+            'detail': 'labels seq: ' + str([s.state.get('rowLabelCount') for s in steps])
+        })
+    if profile and profile == 'task-select-progress':
+        # Task selection + progress edit must set TASK and keep labels visible.
+        has_task = any(s.state.get('ownSelKind') == 'TASK' for s in steps)
+        labels_stable = all(s.state.get('rowLabelCount') in (None, 4) for s in steps)  # 4 in showcase
+        results.append({
+            'rule': 'task_select_and_progress_stable',
+            'passed': has_task and labels_stable,
+            'detail': 'sel seq: ' + str([s.state.get('ownSelKind') for s in steps]) + ' labels: ' + str([s.state.get('rowLabelCount') for s in steps])
+        })
+
+    # Detect "weird full component takeover on item click": when ownSel is item (ROW/TASK/etc),
+    # the selScreenRect/frameRect should be small (item sized), not equal to full chartRect.
+    # This catches the intermittent resize-to-whole-area bug.
+    item_kinds = {'ROW', 'TASK', 'MILESTONE', 'MARKER', 'TEXT'}
+    takeover = False
+    for s in steps:
+        kind = s.state.get('ownSelKind', '')
+        if kind in item_kinds:
+            cr = s.state.get('chartRect') or {}
+            sr = s.state.get('selScreenRect') or {}
+            if cr and sr and cr.get('left') == sr.get('left') and cr.get('right') == sr.get('right'):
+                takeover = True
+    if any(s.state.get('ownSelKind') in item_kinds for s in steps):
+        results.append({
+            'rule': 'no_full_component_takeover_on_item_sel',
+            'passed': not takeover,
+            'detail': 'checked selScreenRect != chartRect for item kinds'
+        })
+    if profile and profile.startswith("overall-"):
+        # chartRect should have changed between pre and later steps
+        chart_rects = [(s.step, s.state.get("chartRect", {})) for s in steps]
+        pre_rect = chart_rects[0][1] if chart_rects else {}
+        later_rect = chart_rects[-1][1] if len(chart_rects) > 1 else {}
+        rect_changed = (pre_rect != later_rect) if pre_rect and later_rect else True  # at least not identical after op
+        results.append({
+            "rule": "overall_rect_propagates_to_chartRect",
+            "passed": rect_changed or len(steps) < 2,
+            "detail": f"pre={pre_rect} later={later_rect}",
+        })
+        # rowBands should have shifted or adjusted if overall moved/resized
+        row_counts = [s.state.get("rowCount", 0) for s in steps]
+        row_stable = all(c == row_counts[0] for c in row_counts)  # move shouldn't change count
+        results.append({
+            "rule": "overall_op_preserves_row_count",
+            "passed": row_stable,
+            "detail": f"counts: {row_counts}",
+        })
+        # appbar should remain visible
+        ab_vis = all(s.state.get("appBarVisible", False) for s in steps)
+        results.append({
+            "rule": "overall_op_keeps_appbar_visible",
+            "passed": ab_vis,
+            "detail": "appBarVisible across steps",
+        })
+
+    tr.invariants = results
+    # write back
+    (BUILD_DIR / f"trace_{tr.profile}_report.json").write_text(tr.to_json(), encoding="utf-8")
+    return results
+
+
+def snapshot_trace_keys(tr: OperationTraceReport) -> Dict[str, Any]:
+    """Extract stable key sequence for golden comparison (ignores pixel rects)."""
+    key_seq = []
+    for s in tr.steps:
+        st = s.state or {}
+        key_seq.append({
+            "step": s.step,
+            "ownSelKind": st.get("ownSelKind", ""),
+            "rowCount": st.get("rowCount", 0),
+            "hasScaleGroup": st.get("hasScaleGroup", False),
+            "appBarVisible": st.get("appBarVisible", False),
+            "appBarGroups": st.get("appBarGroups", []),
+            "scale": st.get("scale", ""),
+        })
+    return {"profile": tr.profile, "steps": key_seq}
+
+
+def compare_trace_to_golden(
+    tr: OperationTraceReport, golden_name: str, update: bool = False
+) -> Dict[str, Any]:
+    """Compare trace key snapshot (not images) to golden json."""
+    snap = snapshot_trace_keys(tr)
+    golden_path = GOLDENS_DIR / f"{golden_name}.json"
+    if not golden_path.exists():
+        if not update:
+            return {"match": False, "reason": "golden_missing", "golden": str(golden_path)}
+        golden_path.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+        return {"match": True, "updated": True, "golden": str(golden_path.relative_to(NATIVE_ROOT))}
+    if update:
+        golden_path.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+        return {"match": True, "updated": True}
+    try:
+        expected = json.loads(golden_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"match": False, "reason": f"bad_golden: {e}"}
+    match = expected.get("steps") == snap.get("steps")
+    res = {
+        "match": match,
+        "profile": tr.profile,
+        "golden": str(golden_path.relative_to(NATIVE_ROOT)),
+    }
+    if not match:
+        res["actual"] = snap.get("steps")
+        res["expected"] = expected.get("steps")
+        res["note"] = "Trace key sequence mismatch - run with --update-goldens or investigate transient"
+    return res
+
+
+# ------------------------------------------------------------------
 # Scenarios
 # ------------------------------------------------------------------
 
@@ -314,6 +664,26 @@ def load_scenario(name: str) -> Dict[str, Any]:
 def run_scenario(name: str, update_goldens: bool = False, **overrides) -> HarnessReport:
     spec = load_scenario(name)
     spec.update(overrides)
+    if spec.get("trace_profile"):
+        # v2.4.0 trace scenario path returns harness-like but we use trace underneath
+        # For unified, return a shim HarnessReport with trace info in notes
+        tr = run_operation_trace(spec["trace_profile"], retries=spec.get("retries", 1))
+        if spec.get("check_invariants", True):
+            check_trace_invariants(tr, spec["trace_profile"])
+        shim = HarnessReport(
+            exe=spec.get("exe", "ppappbarshot"),
+            args=spec.get("args", []),
+            returncode=0,
+            duration_s=tr.duration_s,
+            stdout_tail=tr.stdout_tail,
+            markers_found=[f"TRACE_{s.step}" for s in tr.steps],
+            artifacts=[a for s in tr.steps for a in s.artifacts],
+            status=tr.status,
+            timestamp=tr.timestamp,
+            notes=json.dumps({"trace": tr.to_dict(), "invariants": tr.invariants}),
+        )
+        (BUILD_DIR / f"{name}_report.json").write_text(shim.to_json(), encoding="utf-8")
+        return shim
     report = run_harness(
         spec["exe"],
         spec.get("args", []),
@@ -357,6 +727,29 @@ def run_row_selection_scenario() -> HarnessReport:
     return report
 
 
+# v2.4.0 high-level trace runners for reported issues
+def run_trace_row_add_below() -> OperationTraceReport:
+    """Trace the exact user-reported flow: row selected + New row below."""
+    return run_operation_trace("row-add-below")
+
+
+def run_trace_row_rename() -> OperationTraceReport:
+    return run_operation_trace("row-rename")
+
+
+def run_trace_row_scale() -> OperationTraceReport:
+    return run_operation_trace("row-scale")
+
+
+def run_trace_with_golden(profile: str, golden_name: Optional[str] = None, update: bool = False) -> Dict[str, Any]:
+    tr = run_operation_trace(profile)
+    gname = golden_name or f"trace_{profile}"
+    key_res = compare_trace_to_golden(tr, gname, update=update)
+    # also allow attaching visual checks for generated pngs if caller wants
+    tr.notes = json.dumps({"key_golden": key_res})  # stash
+    return {"trace": tr.to_dict(), "key_golden": key_res}
+
+
 # ------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------
@@ -379,6 +772,11 @@ if __name__ == "__main__":
     p_g.add_argument("artifact")
     p_g.add_argument("golden_name")
     p_g.add_argument("--update", action="store_true")
+
+    p_tr = sub.add_parser("trace", help="Run operation trace for continuity monitoring (v2.4.0)")
+    p_tr.add_argument("profile", help="e.g. row-add-below, row-rename, row-scale")
+    p_tr.add_argument("--retries", type=int, default=1)
+    p_tr.add_argument("--check-invariants", action="store_true")
 
     args = parser.parse_args()
 
@@ -403,6 +801,18 @@ if __name__ == "__main__":
         res = compare_to_golden(args.artifact, args.golden_name, update=args.update)
         print(json.dumps(res, indent=2))
         sys.exit(0 if res.get("match") else 1)
+    elif args.cmd == "trace":
+        tr = run_operation_trace(args.profile, retries=args.retries)
+        invs = []
+        if args.check_invariants:
+            invs = check_trace_invariants(tr, args.profile)
+            tr.invariants = invs
+        print(tr.to_json())
+        # exit non-zero on any failing invariant or bad status
+        bad = any(not i.get("passed", True) for i in (tr.invariants or []))
+        if bad or tr.status not in ("PASS",):
+            sys.exit(4)
+        sys.exit(0)
     else:
         parser.print_help()
         sys.exit(2)

@@ -1,0 +1,10 @@
+{
+  "name": "trace_row_scale",
+  "description": "v2.5.0 trace for scale context while row selected (SR-EDT-02: global SCALE group stays reachable in every selection context)",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "row-scale"],
+  "timeout": 120,
+  "retries": 1,
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"],
+  "invariants": ["scale_group_always_reachable"]
+}

@@ -95,8 +95,8 @@ void WriteChartRootTags(PowerPoint::ShapePtr group, const PpDocument& doc, const
 HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, const std::string& selectId) {
 	if (!pApp) return E_POINTER;
 	int count = 0;
+	PowerPoint::_ApplicationPtr app(pApp);
 	try {
-		PowerPoint::_ApplicationPtr app(pApp);
 		PowerPoint::_PresentationPtr pres = app->GetActivePresentation();
 		const float slideW = (float)pres->GetPageSetup()->GetSlideWidth();
 		PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
@@ -535,8 +535,9 @@ static void PreserveChartRootFrame(IDispatch* pApp, PowerPoint::_SlidePtr slide,
 
 HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& selectId) {
 	if (!pApp) return E_POINTER;
+	PowerPoint::_ApplicationPtr app(pApp);
+
 	try {
-		PowerPoint::_ApplicationPtr app(pApp);
 		PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
 		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
 		PowerPoint::ShapesPtr shapes = slide->GetShapes();
@@ -551,7 +552,8 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		if (!group) {
 			// No existing chart to reconcile against: full emit.
 			int cnt = 0;
-			return InsertGantt(pApp, doc, &cnt, selectId);
+			HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);
+			return hr;
 		}
 
 		// Capture the CHART_ROOT's frame BEFORE reconciling — this is whatever
@@ -585,7 +587,8 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 			}
 		} catch (const _com_error&) {}
 		int cnt = 0;
-		return InsertGantt(pApp, doc, &cnt, selectId);
+		HRESULT hr2 = InsertGantt(pApp, doc, &cnt, selectId);
+		return hr2;
 	}
 	catch (const _com_error& e) {
 		// Best-effort fallback even on an unexpected COM error during the
@@ -595,7 +598,8 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		GbLog(buf);
 		try {
 			int cnt = 0;
-			return InsertGantt(pApp, doc, &cnt, selectId);
+			HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);
+			return hr;
 		} catch (...) {}
 		return e.Error() ? e.Error() : E_FAIL;
 	}
@@ -603,7 +607,8 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		GbLog(L"UpdateGantt: std::exception during reconcile, falling back to InsertGantt");
 		try {
 			int cnt = 0;
-			return InsertGantt(pApp, doc, &cnt, selectId);
+			HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);
+			return hr;
 		} catch (...) {}
 		return E_FAIL;
 	}
@@ -611,7 +616,8 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		GbLog(L"UpdateGantt: unknown exception during reconcile, falling back to InsertGantt");
 		try {
 			int cnt = 0;
-			return InsertGantt(pApp, doc, &cnt, selectId);
+			HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);
+			return hr;
 		} catch (...) {}
 		return E_FAIL;
 	}

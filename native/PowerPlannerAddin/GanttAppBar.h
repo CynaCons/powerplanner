@@ -152,7 +152,7 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		}
 		if (!task) {
 			AppBarAppendInsertGroup(model);
-			AppBarAppendGlobalGroup(model, doc);
+			// global only when truly None overall
 			return model;
 		}
 		model.name = task->label;
@@ -187,6 +187,13 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 			labelItem.label = "Label: " + AppBarLabelPlacementWord(task->labelPlacement);
 			labelItem.icon = AppBarIcon::Label;
 			g.items.push_back(labelItem);
+			model.groups.push_back(g);
+		}
+		{
+			// Progress for task (direct access when task selected; addresses user need to edit percent without overlap issues)
+			AppBarGroup g;
+			g.items.push_back({ HtCmd_PercentMinus10, "-10%", AppBarIcon::MinusDay });
+			g.items.push_back({ HtCmd_PercentPlus10, "+10%", AppBarIcon::PlusDay });
 			model.groups.push_back(g);
 		}
 		{
@@ -304,6 +311,7 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		return model;
 	}
 
+	// None / fallback: overall component — includes global scale controls
 	AppBarAppendInsertGroup(model);
 	AppBarAppendGlobalGroup(model, doc);
 	return model;

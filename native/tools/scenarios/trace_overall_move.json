@@ -1,0 +1,9 @@
+{
+  "name": "trace_overall_move",
+  "description": "v2.4.x trace for moving the overall CHART_ROOT component (simulate user drag via grip or direct). Check overlay follows, rowBands shift, appbar docks, no weird sel/chrome, content stable.",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "overall-move"],
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true
+}

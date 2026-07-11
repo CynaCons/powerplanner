@@ -301,8 +301,12 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 		if (t->percent > 0) {
 			float pw = width * (float)t->percent / 100.0f;
 			if (pw > 1.5f) {
-				Style pr; pr.fill = true; pr.fillBgr = Bgr(swatch); pr.corner = gt::bar_radius;
-				Prim u = scene::roundRect(left, top, pw, h, pr); u.tagKind = "TASK_PROGRESS"; u.tagId = t->id; sc.prims.push_back(u);
+				// Progress as bottom strip to avoid overlapping on-bar task label text.
+				// Matches web rendering (bottom 3-4px) and prevents visual overlap reported by users.
+				float progH = 4.0f;
+				float progTop = top + h - progH;
+				Style pr; pr.fill = true; pr.fillBgr = Bgr(swatch); pr.corner = 2.0f;
+				Prim u = scene::roundRect(left, progTop, pw, progH, pr); u.tagKind = "TASK_PROGRESS"; u.tagId = t->id; sc.prims.push_back(u);
 			}
 		}
 

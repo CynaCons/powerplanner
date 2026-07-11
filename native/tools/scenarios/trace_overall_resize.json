@@ -1,0 +1,9 @@
+{
+  "name": "trace_overall_resize",
+  "description": "v2.4.x trace for resizing the overall CHART_ROOT (user drag handles). Check layout reflow or preserve, overlay/appbar update, no distortion or flash of graph/labels, chartRect in state updates.",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "overall-resize"],
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true
+}

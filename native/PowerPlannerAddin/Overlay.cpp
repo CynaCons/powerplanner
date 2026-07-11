@@ -153,6 +153,7 @@ AppBarModel g_appBar;
 bool g_appBarValid = false;
 std::string g_appBarSelKindBuilt, g_appBarSelIdBuilt;
 std::string g_appBarDocSig;
+std::string g_lastScale = "week";
 int g_appBarHoverCmd = 0;
 struct AppBarHitRect { int cmd; RECT rc; bool enabled; };
 std::vector<AppBarHitRect> g_appBarHits;
@@ -1892,9 +1893,10 @@ void SelectChartRoot() {
 		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
 		PowerPoint::ShapePtr chart = FindChartRoot(slide);
 		if (!chart) return;
+		ClearOwnSelection();  // avoid weird lingering row/task sel + container highlight while moving overall component
 		chart->Select(Office::msoTrue);
 		FocusPowerPoint();
-		OvLog(L"move-chart grip: selected CHART_ROOT");
+		OvLog(L"move-chart grip: selected CHART_ROOT (own sel cleared)");
 	}
 	catch (const _com_error&) {
 		OvLog(L"COM error selecting chart root");
@@ -2005,6 +2007,11 @@ void ApplyClickSelection(const HtHit& hit) {
 	default:
 		ClearOwnSelection();
 		return;
+	}
+	// v2.4.1 robust row selection: hover already lights the band; ensure click in row area selects the row
+	// even if the HtHit zone resolution was conservative. First-class rows must be clickable.
+	if (g_ownSelKind.empty() && !g_hoverRowId.empty()) {
+		SetOwnSelection("ROW", g_hoverRowId);
 	}
 }
 
@@ -3435,11 +3442,12 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	REAL fw = (REAL)(frame.right - frame.left), fh = (REAL)(frame.bottom - frame.top);
 
 	if (g_ownSelKind == "ROW") {
-		SolidBrush fill(GpToken(255, gt::primarySoft));
-		g.FillRectangle(&fill, (INT)fx, (INT)fy, (INT)fw, (INT)fh);
+		// Row selection highlight: left accent only (rail style) to avoid covering left-side row titles/labels.
+		// Full rect fill was causing "title disappears" on click select.
 		const int inset = Scale(3);
-		Pen edge(GpToken(255, gt::primary), ScaleF(2.5f));
+		Pen edge(GpToken(255, gt::primary), ScaleF(3.0f));
 		g.DrawLine(&edge, (INT)fx + inset, (INT)fy, (INT)fx + inset, (INT)(fy + fh));
+		// Optional very subtle wash only on the right (timeline) part if desired; keep minimal for now
 		return;
 	}
 
@@ -3472,23 +3480,25 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			DrawHandle(g, xs[i], ys[j], handleR);
 		}
 
-	// badge: filled Material chip with white label at top-left
-	int bw = Scale(96), bh = BADGE_H - Scale(4);
-	int badgeTop = std::max(Scale(2), (int)frame.top - BADGE_H - Scale(3));
-	{
-		GraphicsPath badgePath;
-		AddRoundRect(badgePath, fx, (REAL)badgeTop, (REAL)bw, (REAL)bh, 4.0f);
-		SolidBrush badgeBrush(GpColor(255, ACCENT));
-		g.FillPath(&badgeBrush, &badgePath);
+	// badge: only for overall component (no specific ownSel) to avoid fighting item/row selection visuals (v2.4.1)
+	if (g_ownSelKind.empty()) {
+		int bw = Scale(96), bh = BADGE_H - Scale(4);
+		int badgeTop = std::max(Scale(2), (int)frame.top - BADGE_H - Scale(3));
+		{
+			GraphicsPath badgePath;
+			AddRoundRect(badgePath, fx, (REAL)badgeTop, (REAL)bw, (REAL)bh, 4.0f);
+			SolidBrush badgeBrush(GpColor(255, ACCENT));
+			g.FillPath(&badgeBrush, &badgePath);
 
-		Gdiplus::Font badgeFont(L"Segoe UI", g_badgeFontPx, FontStyleRegular, UnitPixel);
-		StringFormat sf;
-		sf.SetAlignment(StringAlignmentCenter);
-		sf.SetLineAlignment(StringAlignmentCenter);
-		sf.SetFormatFlags(StringFormatFlagsNoWrap);
-		SolidBrush textBrush(Color(255, 255, 255, 255));
-		g.DrawString(g_badge.c_str(), -1, &badgeFont,
-			RectF(fx, (REAL)badgeTop, (REAL)bw, (REAL)bh), &sf, &textBrush);
+			Gdiplus::Font badgeFont(L"Segoe UI", g_badgeFontPx, FontStyleRegular, UnitPixel);
+			StringFormat sf;
+			sf.SetAlignment(StringAlignmentCenter);
+			sf.SetLineAlignment(StringAlignmentCenter);
+			sf.SetFormatFlags(StringFormatFlagsNoWrap);
+			SolidBrush textBrush(Color(255, 255, 255, 255));
+			g.DrawString(g_badge.c_str(), -1, &badgeFont,
+				RectF(fx, (REAL)badgeTop, (REAL)bw, (REAL)bh), &sf, &textBrush);
+		}
 	}
 
 	// floating Material mini-toolbar
@@ -3726,6 +3736,7 @@ void RebuildAppBarModelFromSlide() {
 			g_appBarSelKindBuilt = g_ownSelKind;
 			g_appBarSelIdBuilt = g_ownSelId;
 			g_appBarDocSig = doc.scale + (doc.railLabels ? "1" : "0");
+			g_lastScale = doc.scale;
 			g_appBarValid = true;
 			g_appBarModelDirty = true;
 		}
@@ -4290,6 +4301,7 @@ void HandleAppBarCommand(int cmd) {
 	}
 
 	if (g_ownSelKind == "ROW" && !g_ownSelId.empty()) {
+		if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(g_pptHwnd);  // freeze paint during row op (rename or add/delete row) to prevent label/graph flash
 		HtMenuOp op = MapRowAppBarCommand(cmd);
 		if (op.opKind == HtOpKind::RenameRow) {
 			for (const auto& region : g_editRegions) {
@@ -4297,10 +4309,12 @@ void HandleAppBarCommand(int cmd) {
 					try { OpenInlineEditor(region); } catch (...) { OvLog(L"row rename failed"); }
 					g_appBarValid = false;
 					RequestOverlayRepaint();
+					if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 					return;
 				}
 			}
 			OvLog(L"row rename: no ROW_LABEL edit region");
+			if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 			return;
 		}
 		if (op.opKind != HtOpKind::None) {
@@ -4310,8 +4324,10 @@ void HandleAppBarCommand(int cmd) {
 			HandleContextMenuCommand(op, hit, POINT{ 0, 0 });
 			g_appBarValid = false;
 			RequestOverlayRepaint();
+			if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 			return;
 		}
+		if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 	}
 
 	if ((g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE") && !g_ownSelId.empty()) {
@@ -4772,9 +4788,10 @@ void HandleHoverInsertRow() {
 	const std::string afterRowId = g_hoverRowId;
 
 	g_mutating = true;
+	if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(g_pptHwnd);  // freeze to hide transient delete/add of labels+graph during row insert
 	try {
 		std::string json = ReadGanttFromSlide(g_app);
-		if (json.empty()) { g_mutating = false; return; }
+		if (json.empty()) { g_mutating = false; goto unlock; }
 
 		PpDocument doc = DocumentFromJson(json);
 		std::string rowId = AddRowBelow(doc, afterRowId, "New Row");
@@ -4796,6 +4813,8 @@ void HandleHoverInsertRow() {
 	catch (...) {
 		OvLog(L"unknown error during hover row insert");
 	}
+unlock:
+	if (g_pptHwnd && ::IsWindow(g_pptHwnd)) ::LockWindowUpdate(NULL);
 	g_mutating = false;
 }
 
@@ -5484,19 +5503,25 @@ void Tick() {
 						g_suppressedKind.clear();
 						g_suppressedId.clear();
 					} else if (kindStr == "CHART_ROOT") {
-						chartRootNativelySelected = true;
-						g_selKind = kindStr;
-						_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
-						g_selId = Narrow((const wchar_t*)id);
-						float left = sh->GetLeft(), top = sh->GetTop(), w = sh->GetWidth(), h = sh->GetHeight();
-						g_selScreenRect = {
-							win->PointsToScreenPixelsX(left),
-							win->PointsToScreenPixelsY(top),
-							win->PointsToScreenPixelsX(left + w),
-							win->PointsToScreenPixelsY(top + h)
-						};
-						NormalizeRect(g_selScreenRect);
-						g_hasSelectionChrome = true;
+						if (g_ownSelKind.empty()) {
+							// Only drive full-chart root chrome from native sel when no item is selected via overlay.
+							// This prevents intermittent "full component takeover" when clicking items (native often remains root group).
+							chartRootNativelySelected = true;
+							g_selKind = kindStr;
+							_bstr_t id = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
+							g_selId = Narrow((const wchar_t*)id);
+							float left = sh->GetLeft(), top = sh->GetTop(), w = sh->GetWidth(), h = sh->GetHeight();
+							g_selScreenRect = {
+								win->PointsToScreenPixelsX(left),
+								win->PointsToScreenPixelsY(top),
+								win->PointsToScreenPixelsX(left + w),
+								win->PointsToScreenPixelsY(top + h)
+							};
+							NormalizeRect(g_selScreenRect);
+							g_hasSelectionChrome = true;
+						}
+						// else: have active item ownSel (from click); keep item chrome. Do not override with full root area.
+						// (Grip click explicitly clears ownSel before selecting root.)
 					}
 				}
 			}
@@ -5543,6 +5568,10 @@ void Tick() {
 			}
 		} catch (...) { slideRect = g_chartScreenRect; }
 		ShowAppBar(slideRect);
+		if (chartChanged) {
+			// immediate follow for overall move/resize - reduces "laggy/weird" feel when user drags the CHART_ROOT group
+			RequestOverlayRepaint();
+		}
 		if (chartChanged || hoverChanged || mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
 			RequestOverlayRepaint();
 		}
@@ -5701,6 +5730,10 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"ownSelId\":\"" + g_ownSelId + "\",";
 	s += "\"linkMode\":" + std::string(g_linkMode ? "true" : "false") + ",";
 	s += "\"linkFromId\":\"" + g_linkFromId + "\",";
+	s += "\"rowCount\":" + std::to_string(g_rowBands.size()) + ",";
+	int rowLabelCount = 0;
+	for (const auto& er : g_editRegions) if (er.kind == "ROW_LABEL") ++rowLabelCount;
+	s += "\"rowLabelCount\":" + std::to_string(rowLabelCount) + ",";
 	s += "\"rowBands\":[";
 	for (size_t i = 0; i < g_rowBands.size(); ++i) {
 		const auto& b = g_rowBands[i];
@@ -5717,11 +5750,36 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"hasDrag\":" + std::string((g_dragActive || g_gestureActive) ? "true" : "false") + ",";
 	s += "\"dragKind\":" + std::to_string(static_cast<int>(g_dragKind)) + ",";
 	s += "\"appBarVisible\":" + std::string(g_appBarShown ? "true" : "false") + ",";
-	s += "\"appBarValid\":" + std::string(g_appBarValid ? "true" : "false");
+	s += "\"appBarValid\":" + std::string(g_appBarValid ? "true" : "false") + ",";
+	s += "\"scale\":\"" + g_lastScale + "\",";
+	s += "\"chartRect\":{\"left\":" + std::to_string(g_chartScreenRect.left) + ",\"top\":" + std::to_string(g_chartScreenRect.top) + ",\"right\":" + std::to_string(g_chartScreenRect.right) + ",\"bottom\":" + std::to_string(g_chartScreenRect.bottom) + "},";
+	s += "\"selScreenRect\":{\"left\":" + std::to_string(g_selScreenRect.left) + ",\"top\":" + std::to_string(g_selScreenRect.top) + ",\"right\":" + std::to_string(g_selScreenRect.right) + ",\"bottom\":" + std::to_string(g_selScreenRect.bottom) + "},";
+	s += "\"frameRect\":{\"left\":" + std::to_string(g_frameRect.left) + ",\"top\":" + std::to_string(g_frameRect.top) + ",\"right\":" + std::to_string(g_frameRect.right) + ",\"bottom\":" + std::to_string(g_frameRect.bottom) + "},";
+	s += "\"appBarGroups\":[";
+	for (size_t i = 0; i < g_appBar.groups.size(); ++i) {
+		if (i > 0) s += ",";
+		s += "\"" + g_appBar.groups[i].label + "\"";
+	}
+	s += "],";
+	bool hasScale = false;
+	for (const auto& gr : g_appBar.groups) {
+		if (gr.label == "SCALE") { hasScale = true; break; }
+	}
+	s += "\"hasScaleGroup\":" + std::string(hasScale ? "true" : "false");
 	s += "}";
 	return s.c_str();
 }
 
 void Overlay_SetHostActiveOverrideForTest(int mode) {
 	g_hostActiveOverrideMode = mode;
+}
+
+void Overlay_PerformAppBarCommandForTest(int cmd) {
+	if (cmd <= 0) return;
+	// Drive through the same path as real appbar click (includes ROW special case for rename/rowops,
+	// scale handling, rebuilds, SetOwnSelection etc). Guarded by the handler itself.
+	HandleAppBarCommand(cmd);
+	// After a mutation the appbar is usually dirtied inside handler paths; ensure rebuild on next tick.
+	g_appBarValid = false;
+	RequestOverlayRepaint();
 }

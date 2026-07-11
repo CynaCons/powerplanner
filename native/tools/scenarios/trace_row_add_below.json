@@ -1,0 +1,9 @@
+{
+  "name": "trace_row_add_below",
+  "description": "v2.4.0 trace for row select + New row below (detects sel drop, content flash, rowband discontinuity)",
+  "exe": "ppappbarshot",
+  "trace_profile": "row-add-below",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true
+}

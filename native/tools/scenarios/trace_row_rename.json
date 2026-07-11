@@ -1,0 +1,10 @@
+{
+  "name": "trace_row_rename",
+  "description": "v2.4.0 trace for rename while row selected (detects content/text disappearance flash during editor/rebuild)",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "row-rename"],
+  "timeout": 120,
+  "retries": 1,
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"],
+  "invariants": ["appbar_visible_stable", "no_large_sel_drop_to_empty"]
+}

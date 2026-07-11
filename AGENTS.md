@@ -47,11 +47,41 @@ When commands change, update this file and `.claude/launch.json` together.
 
 - Treat `PLAN.md` as the current implementation plan and keep it current when
   completing planned work.
+- **CRITICAL PROCESS RULE**: Whenever new tasks arise — whether from user
+  feedback, self-discovery during exploration, bug reports, feature analysis,
+  or any other source — **immediately register them in PLAN.md**.
+  - Extend the currently active iteration (add checklist items under the
+    relevant vX.Y.Z section).
+  - For a coherent new focused group of work, declare a new iteration or
+    sub-iteration (following the vX.Y.Z **Goal:** + flat -[ ] list style at
+    the bottom of the active phase).
+  - This ensures PLAN.md always reflects open work, priorities, and future
+    items without losing track. Do this *before* starting implementation.
 - Keep `README.md` user-facing and concise.
 - Use `docs/` for focused implementation notes such as the PowerPoint add-in
   guide.
-- Do not duplicate long agent instructions in `CLAUDE.md`; update this file
-  instead.
+- For requirements and user interaction specifications, prefer ASPICE-style
+  SRS documents (e.g. `docs/SRS_FeatureName.md` or under `spec/srs/`) organized
+  by feature with clear "what the user does" and "software requirements".
+
+## Memory Files and Continuous Self-Improvement
+
+- Regularly contribute to memory files taking the form of `.md` files in the
+  `docs/` folder. These serve as persistent knowledge bases capturing learnings,
+  processes, decisions, feedback, and project evolution.
+- Constantly try to improve yourself and future agents in this project by:
+  - Learning what we're doing from all available sources (conversations, code,
+    plans, logs, artifacts, and user interactions).
+  - Iterating independently often until completion on tasks, improvements, and
+    refinements.
+  - Challenging your own actions, assumptions, and outputs to drive higher
+    quality.
+  - Ensuring quality and completeness in every step of the work.
+  - Most importantly, performing self-improving recursive updates to
+    `AGENTS.md` and associated sub-memory files in `docs/`.
+- After any significant work, discovery, or feedback cycle, proactively update
+  relevant memory files to evolve the shared agent knowledge base for the
+  project and all future agents.
 
 ## Implementation Rules
 
@@ -74,6 +104,11 @@ When commands change, update this file and `.claude/launch.json` together.
 - For PowerPoint add-in manifest or taskpane changes, run
   `npm run addin:validate`; cert/sideload checks may require local Office
   tooling.
+- For native on-slide UI/UX changes (overlay, app bar, row ops, rebuilds):
+  use the v2.4.0 trace harness: `python native/tools/harness_driver.py trace row-add-below --check-invariants`
+  (and rename/scale profiles). It captures before/immed/+1/+3 chrome state JSON + PNGs
+  and runs continuity invariants. Re-run after edits to verify fixes for flashes,
+  selection drops, wrong chrome context. Always update PLAN.md + docs/ memory files.
 
 ## Self-Verification & Process Awareness (MANDATORY)
 

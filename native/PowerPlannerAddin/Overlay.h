@@ -105,6 +105,11 @@ void Overlay_InvalidateAppBarForTest();
 bool Overlay_IsLinkModeForTest();
 void Overlay_CancelLinkModeForTest();
 
+// Test seam: drive an app-bar command (e.g. HtCmd_AddRowBelow, HtCmd_Rename, HtCmd_Scale*) 
+// exactly as if the user clicked the button. Used by trace harnesses to perform
+// ops and observe before/immed/after states. Never touches real input.
+void Overlay_PerformAppBarCommandForTest(int cmd);
+
 // Rich state dump for agent feedback loop: returns a JSON string (static buffer)
 // with current chrome state for reports: own selection, row bands (with rects),
 // drag/gesture state, app bar visibility, visible chrome elements, etc.

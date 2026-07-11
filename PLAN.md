@@ -2,626 +2,227 @@
 
 ## Quick Summary
 
-**Current Version:** v2.3.1 — PowerPoint add-in alpha (Office.js) + landing site + PowerNote integration
-**Next Milestone:** N7 — Pure On-Slide Editor (V2): the add-in's overlay captures all input over the chart (no raw shape selection); think-cell-grade drag/create/edit interactions directly on the slide. Plan: [docs/on-slide-ux-plan.md §4](docs/on-slide-ux-plan.md)
+**Current Version:** v2.4.3 (closed 2026-07-11; open items moved into v2.5.x)
+**Next Milestone:** v2.5.x - Production-grade UI/UX program (5 iterations from the 2026-07-11 full audit)
 
-### Recent Achievements
-- ✅ v0.1.0 — Project scaffold, types, stores, layout engine, SVG renderer, sample document, 15 unit tests passing
-- ✅ v0.2.0 — Bars & direct editing: snap-to-scale, nudge keys, inline label editing (F2/double-click), toolbar (Task/Milestone/Row/Snap/Fit)
-- ✅ v0.3.0 — Gantt vocabulary: drag-to-create dependencies with connector overlay, bracket button (creates from selection), deadline marker button, summary rows from groupId with collapse/expand, free-form marker selection/deletion
-- ✅ v0.4.0 — Layout & UX polish: axis label thinning, responsive row gutter, label collision fallback (on-bar → right), hover state on bars, empty state, light/dark/print themes, responsive toolbar (icon-only on narrow), print stylesheet, milestone label placement
-- ✅ **v1.0.0** — Persistence & portable HTML PUBLIC RELEASE: schema validation, YAML serializer/parser with roundtrip tests, autosave to localStorage, embedded-data Ctrl+S, File menu (Save / Save as / Open / Export JSON/YAML/SVG/PNG / Print), single-file build → `PowerPlanner.html` with inlined favicon, Playwright E2E smoke tests, 22 unit tests + 3 E2E tests passing
-- ✅ v1.0.1 — Replace blocking `confirm()` autosave restore with non-blocking RestoreBanner component (top-center, Restore + Dismiss)
-- ✅ v1.1.0 — **Tool modes + bottom toolbar + click-to-create**: new `useToolStore` with Select/Add-Task/Add-Milestone/Marquee/Pan tools; PowerNote-style bottom toolbar (`ToolPalette`) with tool group + scale group (D/W/M/Q/Y) + zoom group (−/readout/+/fit); click on canvas with Add-Task or Add-Milestone tool creates at clicked date+row; lasso marquee selection; wheel = zoom (no Ctrl required, Figma-style); Linear-style single-letter shortcuts (V/T/Y/H/R for tools, Shift+D/W/M/Q/Y for scales); "TODAY" pill label on today line; full visual refresh (Inter typography, layered greys, 8% opacity borders, tabular numerals)
-- ✅ v1.2.0 — **Direct manipulation**: right-click context menu on every chart element (background → Add task/milestone/deadline-here; task → Edit / Color / Duplicate / Wrap-in-bracket / Delete; milestone/bracket/dependency/marker → context-appropriate actions); dependency type switcher in dep context menu (FS/SS/FF/SF with check); muted Notion-inspired color palette swatches (8 presets + custom picker) in task inspector; ShortcutsOverlay modal (? to open) listing all keyboard bindings grouped by Tools/Scale/Selection/Editing/Navigation/File; HelpCircle button in header; right-click on unselected element replaces selection (desktop convention)
-- ✅ v1.3.0 — **Visual identity overhaul** ("Engineering Atelier"): new BrandLogo (3 offset bars + Power/Planner wordmark, indigo→violet→coral gradient used ONLY on the brand mark); Header redesigned with title-as-pill chip + grouped button clusters (Add / View / History); Inspector rewritten as elevated section cards with Stripe-style inset top highlight, Segmented controls for Scale (D/W/M/Q/Y) and Theme (Dark/Light/Print), new Statistics section with mono-numeral tiles (Tasks / Milestones / Span / Avg complete) and date-range footer; updated E2E test for new segmented theme control
-- ✅ v1.4.0 — **Command Palette + Templates + Notes**: Linear-grade Cmd+K command palette with fuzzy filter, 8 command groups (Create / Tools / Scale / View / Theme / File / Templates / Edit / Help), grouped sticky headers, arrow-key + Enter navigation, footer count; 5 templates (Product Launch, Two-Week Sprint, Hiring Plan, Marketing Campaign, Blank) loadable from the palette; Task `notes` field (textarea in inspector + schema validation); 9 new unit tests covering template integrity (schema validity, row references, dep references, date ordering); E2E test for Cmd+K command flow
-- ✅ **v2.0.0** — **PRO features + v2 PUBLIC RELEASE**: full Critical Path Method (forward/backward pass, 4 dependency types, per-component scoping, cycle detection, O(V+E)) with 7 unit tests, red-glow highlight when toggled; Baseline snapshot + drift visualization (capture current schedule, show as translucent rail under bars); Minimap overview rail at chart bottom (compact bars + viewport indicator, click-to-pan); commands wired into palette (View: critical path / baseline / minimap toggles; Edit: capture/clear baseline); new useViewStore for view toggles; README rewritten for v2; 38 unit + 4 E2E tests all passing
-- ✅ v2.1.0 — Landing page at `cynacons.github.io/powerplanner` (Engineering Atelier Editorial Edition): hand-crafted animated SVG Gantt hero, stat strip with count-up numerals, 4-step how-it-works, 3×3 feature grid, 3-card comparison fold, 12-row shortcuts showcase, pricing strip with gradient word, GitHub Actions auto-deploy from `/site`
-- ✅ v2.2.0 — Embeddable Gantt renderer (`src/embed/` barrel) + PowerNote integration: self-contained `<GanttRenderer document width height options>` with no store coupling; vendored into PowerNote at `src/vendor/powerplanner/`; new `'gantt'` node type, `GanttNode.tsx`, NavRail button, click-to-place handler creating a sample chart
-- ✅ v2.3.0 — PowerPoint add-in (alpha): Office.js manifest XML, second Vite entry (`taskpane.html`), `src/taskpane/{main,TaskPaneApp,officeBridge}.tsx`; "Insert into slide" emits native rectangles for tasks, diamonds for milestones, elbow connectors for dependencies, text boxes for row labels + title; full JSON round-trip via `PP_DOC` tag on chart group; npm scripts `addin:certs/start/stop/validate`; docs at `docs/powerpoint-addin.md`
-- ✅ v2.3.1 — Add-in dev ergonomics: split `npm run dev` (HTTP) vs `npm run dev:addin` (HTTPS + Office cert); taskpane browser fallback mount + PowerPointApi 1.4 runtime check; PNG ribbon icons + manifest `<Requirements>`; compact taskpane layout; troubleshooting section in `docs/powerpoint-addin.md`
+### Key Metrics
+- **Total Iterations:** Web foundation complete; Native on-slide work in progress
+- **Focus:** Native PowerPoint on-slide (think-cell style overlay + app bar)
+- **Test Harness:** Python driver + C++ harnesses with DumpChromeState + goldens (see native/tools/)
 
-### Key Objectives
-- Ship a single-file portable HTML Gantt authoring tool (PowerNote-style distribution).
-- Calendar-true bars, milestones, brackets, dependencies, today line.
-- Direct editing: drag a bar to change dates, type a date to move a bar.
-- Vector export (SVG / PNG / PDF) of presentation quality.
-- One engine, four surfaces over time: portable HTML → web app → PowerNote node → PowerPoint add-in.
+### Recent Achievements (v2.x + Native)
+- ✅ v2.0.0 — PRO features (Critical Path, Baseline, Minimap) + public release
+- ✅ v2.1.0 — Landing site
+- ✅ v2.2.0 — Embeddable renderer + PowerNote integration
+- ✅ v2.3.1 — PowerPoint add-in alpha (Office.js) + dev ergonomics
+- ✅ Native foundation — COM add-in, shape emission, round-trip, basic on-slide overlay + V1/V2 editing, S1–S6 V4 slices (harness green, 2026-07-10)
+- ✅ Agent feedback loop: harness_driver.py, scenarios, Overlay_DumpChromeStateForTest, --report (docs/native-agent-feedback-loop-plan.md)
+- ✅ v2.4.0: full before/immed/delayed trace + invariants + rich dump (rowCount, hasScaleGroup, appBarGroups) + perform seam + proof that it flags v2.4.1 issues (e.g. hasScale while ROW)
+- Ongoing: extended trace for overall CHART_ROOT move/resize; LockWindowUpdate + flash detection; additional visual reflow hunt (graph/labels) 
 
-### Stack
-- React 19 + TypeScript + Vite.
-- SVG renderer (no Canvas/Konva for the chart itself).
-- Zustand for state, Tailwind for app chrome.
-- Vitest unit tests, Playwright E2E tests.
-- Single-file portable HTML build (`vite.export.config.ts`), same pattern as PowerNote.
+### Next Up
+- **v2.5.0** (ACTIVE) - Overlay lifecycle correctness & render stability — fixes ghost chrome on other monitors + flicker (docs/SRS_OverlayLifecycle.md)
+- v2.5.1 - Calm selection chrome & chart visual quality (docs/SRS_SelectionChromeVisuals.md)
+- v2.5.2 - Reliable, discoverable creation flows (docs/SRS_CreationFlows.md)
+- v2.5.3 - Dependency creation & editing (docs/SRS_DependencyEditing.md)
+- v2.5.4 - Architecture hardening + cohesion + full visual matrix
+- Audit references: docs/overlay-architecture-map.md, docs/onslide-ux-inventory.md
+- Continue to use `trace` + `check-invariants` on any chrome mutation work. Update docs/ *.md and PLAN.md recursively.
+
+### Test Status
+See native/tools/ and tests/ for harness + unit coverage. Run `python native/tools/harness_driver.py scenario ...`
 
 ### Quick Links
 - [Product Requirements](PRD.md)
 - [README](README.md)
 - [Specification (concept layer)](spec/README.md)
 - [Native add-in notes](docs/native-addin.md)
+- [Implementation History](docs/PLAN_HISTORY.md) - Completed iterations (old web)
+- [On-Slide UX Plan](docs/onslide-v4-plan.md)
 
 ---
 
-## Architecture: one spec, two implementations
+## 📝 Format Rules
 
-PowerPlanner is a **concept** with two **implementations**. The concept lives in
-`spec/` (language-neutral); each implementation realizes it in its own medium.
-
-```
-spec/      ← the concept (source of truth): data-model, layout, visual-vocabulary,
-             interaction, JSON Schema, conformance fixtures
-src/       ← implementation A — WEB (React 19 + TS + SVG). The reference impl.
-native/    ← implementation B — POWERPOINT (C++ COM add-in, think-cell style)
-```
-
-- **Abstract coordinates.** `spec/layout.md` defines layout in days + row slots,
-  never pixels/points. Web maps day→px (`pxPerDay`); PowerPoint maps day→pt
-  (`ptPerDay`). Device mapping is each implementation's final, owned step.
-- **Conformance is the contract.** `spec/fixtures/` pairs canonical documents with
-  expected abstract layout. Web verifies via `tests/unit/spec-conformance.test.ts`;
-  native verifies the same fixtures against its C++ layout port. Same inputs →
-  same outputs keeps the two from drifting.
-- **The web app is the reference.** When spec and web disagree, that's a bug to
-  reconcile in one of them — neither is free to drift from the other.
-- `src/` and `native/` stay where they are (no `web/` move for now); the focus is
-  the PowerPoint implementation, built spec-first.
+**Format Rules:**
+- Iterations: Version number + brief title
+- Goal: One-line objective statement (optional)
+- Status: Complete/In Progress (only if in progress)
+- Tasks: Simple checkbox items only (no sub-bullets, no implementation details)
+- NO "Files Modified" sections (use git for that)
+- NO "Impact" sections (tasks describe the work)
+- NO "Key Accomplishments" or verbose summaries
+- Known Issues: Brief bullet points only
+- Close iterations chronologically - don't skip ahead
+- Move incomplete tasks to future iterations, don't leave them in closed ones
 
 ---
 
-## Format Rules
-
-- Iterations: version number + brief title.
-- Goal: one-line objective statement (optional).
-- Status: Complete / In Progress (only if in progress).
-- Tasks: simple checkbox items only (no sub-bullets, no implementation details).
-- NO "Files Modified" sections (use git for that).
-- NO "Impact" sections (tasks describe the work).
-- NO verbose summaries.
-- Close iterations chronologically — don't skip ahead.
-- Move incomplete tasks to future iterations, don't leave them in closed ones.
-- Update PLAN.md in real time as tasks complete.
-- Smoke test before tagging any release: app launches without crashes, can create a task, can save, can reopen.
-
----
-
-# Phase 1: Foundation (v0.1.x)
-**Goal:** App shell, data model, calendar header rendering. No tasks yet — just the canvas, the scale, and the inspector frame.
-
-### v0.1.0 — Project Scaffold
-- [x] Initialize Vite + React + TypeScript project
-- [x] Configure strict TypeScript, ESLint
-- [x] Install Zustand, lucide-react
-- [x] Set up Vitest config and unit tests
-- [x] Set up Playwright config with desktop / tablet / mobile projects
-- [x] Folder structure: `src/{types,stores,layout,renderer,app,utils,styles}`
-- [x] AppShell: header | left inspector | chart canvas | bottom status
-- [x] Smoke test: `npm run dev` launches cleanly
-
-### v0.1.1 — Data Model & Stores
-- [x] Define `Document`, `Task`, `Milestone`, `Bracket`, `Dependency`, `Marker`, `Row`, `Calendar`, `Style` types
-- [x] `useDocumentStore` — document state + CRUD reducers + undo/redo
-- [x] `useViewportStore` — scale, time range, pixel-per-day, pan/zoom
-- [x] `useSelectionStore` — selected ids, multi-select
-- [x] `utils/dates.ts` — date math (addDays, diffDays, snapTo, fiscalQuarterOf)
-- [x] `utils/ids.ts` — nanoid wrapper
-- [x] Sample document factory (6-task, 2-milestone chart for development)
-- [x] Unit tests for dates and layout engine
-
-### v0.1.2 — Calendar Header Rendering
-- [x] SVG `<TimeAxis>` component: multi-level header
-- [x] Scale switcher: day / week / month / quarter / year
-- [x] Tick positioning math in `layout/timeAxis.ts`
-- [x] Today line (auto, dashed)
-- [x] Fiscal year start month configurable
-- [x] Weekend stripes in day/week scales
-
-### v0.1.3 — Chart Canvas + Pan/Zoom
-- [x] SVG `<ChartArea>` fills the chart area (ResizeObserver)
-- [x] Horizontal pan via drag on background
-- [x] Zoom via Ctrl+wheel along the time axis, pointer-anchored
-- [x] Shift+wheel horizontal pan
-- [x] Clamp zoom to a sensible day-to-year range
-- [x] Auto-fit to data on first load + manual Fit button
-
-### v0.1.4 — Inspector Panel Frame
-- [x] `<Inspector>` left panel: Document section with title + scale + fiscal year + theme
-- [x] Selection tab populates with task / milestone / bracket fields
-- [x] Wire title and scale to document/viewport stores
-
----
-
-# Phase 2: Bars & Direct Editing (v0.2.x)
-**Goal:** Task bars rendered by date. Drag to move. Drag edges to resize. Type a date and the bar moves.
-
-### v0.2.0 — Row & Task Rendering
-- [x] `<RowGutter>` — left column with row labels
-- [x] Row vertical layout with sub-row stacking for overlaps
-- [x] `<TaskBar>` SVG primitive — rectangle positioned by date math
-- [x] Bar label rendered on the bar
-
-### v0.2.1 — Selection & Inspector Wiring
-- [x] Click bar to select; click background to deselect
-- [x] Selection chrome (outline, edge handles)
-- [x] Inspector "Selection" tab with label, row, start, end, percent, color
-- [x] Editing any field updates the document; bar re-renders
-
-### v0.2.2 — Drag to Move
-- [x] Mouse down on bar body → drag → release
-- [x] Drag math converts pixel delta to day delta via current scale
-- [x] Snap to scale unit configurable (toggle in toolbar)
-- [x] Document update on release; live preview while dragging
-- [x] Undo entry created per drag
-
-### v0.2.3 — Drag to Resize
-- [x] Left and right edge handles
-- [x] Resize updates start or end, never both
-- [x] Minimum duration enforced (end ≥ start)
-
-### v0.2.4 — Type-to-Move
-- [x] Date inputs in inspector (HTML date type)
-- [x] Typing a new start moves bar
-- [x] Typing a new end resizes
-- [x] Validation against bar end vs start
-
-### v0.2.5 — Percent Complete
-- [x] Inspector slider 0–100
-- [x] Bar renders a darker filled inset for percent complete
-
-### v0.2.6 — Multi-Select & Nudge
-- [x] Shift-click adds to selection
-- [x] Arrow keys nudge selection by 1 day; Shift+arrow = 7 days
-- [ ] Lasso-rectangle on background to select (deferred to v0.4.x)
-- [ ] Inspector "Multiple selection" mode for shared fields (deferred)
-
-### v0.2.7 — Undo / Redo
-- [x] Document history stack
-- [x] Ctrl+Z / Ctrl+Shift+Z
-
-### v0.2.8 — Inline Label Editing
-- [x] Double-click bar to edit label inline (foreignObject)
-- [x] Enter to commit, Escape to cancel
-- [x] F2 to edit selected task label
-
-### v0.2.9 — Toolbar Polish
-- [x] Add Task button (N)
-- [x] Add Milestone button (M)
-- [x] Add Row button
-- [x] Snap toggle button (S)
-- [x] Fit-to-data button (Home)
-
----
-
-# Phase 3: Gantt Vocabulary (v0.3.x)
-**Goal:** Milestones, brackets, dependencies, markers. The full vocabulary of a real Gantt chart.
-
-### v0.3.0 — Milestones
-- [x] Diamond marker primitive
-- [x] Anchored to a single date on a row
-- [x] Drag to move; type date in inspector to move
-- [x] Add via toolbar button (M)
-
-### v0.3.1 — Brackets
-- [x] Horizontal bracket primitive spanning a date range
-- [x] Anchored to one or more rows
-- [x] Drag body to shift, drag edges to resize
-- [x] "Create bracket from selection" (auto-span to selected tasks)
-
-### v0.3.2 — Dependency Arrows
-- [x] Edge handles on bar (visible when selected) reveal "drag-to-connect" affordance
-- [x] Dragging from one handle to another bar creates a dependency
-- [x] Live preview line during drag (dashed accent color)
-- [x] Drop on task to create dependency (FS or SS depending on origin handle)
-- [x] Click dependency to select, Delete to remove
-- [ ] Constraint enforcement (deferred to v0.5+)
-
-### v0.3.3 — Custom Markers
-- [x] Deadline lines: vertical line + label, anchored to a date
-- [x] Add via toolbar button
-- [x] Selectable and deletable
-
-### v0.3.4 — Hierarchy (Summary Rows)
-- [x] Rows with groupId belong to a parent row
-- [x] Parent row renders a summary bar = min(start) → max(end) of children
-- [x] Indentation in row gutter
-- [x] Collapse / expand chevron in row gutter
-
----
-
-# Phase 4: Layout & UX Polish (v0.4.x) — COMPLETE
-
-### v0.4.0 — Auto Sub-Row Splitting
-- [x] When two bars in the same row overlap, split the row into sub-rows
-- [x] Sub-row assignment is deterministic (sorted by start, greedy fit)
-- [x] Row height grows to fit all sub-rows
-
-### v0.4.1 — Label Collision Resolution
-- [x] On-bar → right fallback when label doesn't fit on bar
-- [x] Milestone label placement (above/below/left/right)
-- [x] Axis tick thinning (min spacing 60px/36px/16px)
-
-### v0.4.2 — Working Days & Holidays
-- [x] Calendar settings: weekend mask
-- [x] Non-working days shaded in the chart background
-
-### v0.4.3 — Theming
-- [x] Light, dark, and print themes
-- [x] Theme tokens in CSS variables
-- [x] Inspector "Style" tab: theme picker
-- [x] Per-task color override
-
-### v0.4.4 — Keyboard Ergonomics
-- [x] N — new task
-- [x] M — new milestone
-- [x] B — new bracket from selection
-- [x] Delete / Backspace — remove selection
-- [x] +/− — zoom in/out
-- [x] Home — fit to data
-- [x] F2 — edit task label
-- [x] Esc — clear selection / cancel drag
-- [x] S — toggle snap
-
-### v0.4.5 — Responsive Layout
-- [x] Responsive row gutter (200 → 120 on narrow)
-- [x] Responsive inspector (320 → 260 → hidden on very narrow)
-- [x] Toolbar icon-only mode at <900px
-- [x] Print stylesheet (hide chrome, chart only)
-- [x] Empty state when chart has no items
-- [x] Hover effect on bars
-
----
-
-# Phase 5: Persistence & Portable HTML (v0.5.x)
-**Goal:** Ship the single-file portable HTML edition. Email it, archive it, open it offline.
-
-### v0.5.0 — JSON / YAML Persistence
-- [x] Serialize document to JSON (canonical, schemaVersion: 1)
-- [x] Deserialize with schema validation (`SchemaError` on mismatch)
-- [x] YAML import / export (human-readable form with custom parser)
-- [x] File picker for `.html` / `.json` / `.yaml` open
-
-### v0.5.1 — LocalStorage Auto-Save
-- [x] Snapshot to localStorage debounced (800ms) while editing
-- [x] "Restore previous session?" prompt on launch when a snapshot exists
-
-### v0.5.2 — In-File Persistence (Embedded JSON)
-- [x] Embed document JSON into HTML via `<script type="application/json" id="powerplanner-data">` tag on save
-- [x] On launch, read embedded data tag and hydrate
-- [x] File System Access API save (Chrome / Edge); download fallback elsewhere
-- [x] Ctrl+S binding
-
-### v0.5.3 — Single-File Build
-- [x] `vite.export.config.ts` with `vite-plugin-singlefile`
-- [x] Inline favicon as data URI (truly self-contained)
-- [x] Auto-rename output → `PowerPlanner.html`
-- [x] Build script `npm run build:template`
-- [x] Verified opens directly (file://) and works offline
-- [x] Output size: 263 KB (81 KB gzipped)
-
-### v0.5.4 — PNG / SVG / PDF Export
-- [x] File menu: Save, Save as, Open, JSON / YAML / SVG / PNG (1x, 2x) / Print
-- [x] PNG via canvas rasterization of the SVG
-- [x] SVG via direct serialization with inlined computed styles
-- [x] PDF via browser print stylesheet (chart-only)
-
-### v0.5.5 — Release v1.0 🎉
-- [x] All unit + E2E tests passing (22 unit + 3 E2E)
-- [x] Smoke test: portable HTML → open → render → all features work
-- [x] README rewritten with feature list + keyboard shortcuts
-- [x] Tag v1.0.0
-- [x] Publish release with `PowerPlanner.html` asset
-
----
-
-# Phase 6: PowerNote Integration (v0.6.x)
-**Goal:** Gantt as an embeddable node type inside PowerNote.
-
-### v0.6.0 — Compact Renderer Component
-- [ ] Extract `<GanttRenderer document={...} viewport={...}>` as a standalone package export
-- [ ] Smaller chrome, no app shell, fits a PowerNote node bounding box
-- [ ] Read-only mode prop
-
-### v0.6.1 — PowerNote Node Type
-- [ ] Add `gantt` node type to PowerNote
-- [ ] Payload = PowerPlanner document JSON
-- [ ] Render via the compact renderer inside a Konva `<Html>` portal
-
-### v0.6.2 — Inline Edit Bridge
-- [ ] Double-click the node in PowerNote opens the full PowerPlanner inspector as a PowerNote overlay
-- [ ] Saving the inspector writes back into the PowerNote node payload
-- [ ] Undo/redo integrates with PowerNote history
-
-### v0.6.3 — Test Coverage
-- [ ] PowerNote E2E test: create page → add Gantt node → edit → save notebook → reopen
-- [ ] Cross-repo coordination (PowerNote release notes updated)
-
----
-
-# Phase 7: PowerPoint Add-In (v0.7.x)
-**Goal:** Task pane add-in that emits native, vector-editable PowerPoint shapes.
-
-### v0.7.0 — Office.js Add-In Scaffold
-- [ ] Add-in manifest (taskpane host)
-- [ ] Same Vite app served as the task pane
-- [ ] Verify launch in PowerPoint desktop and PowerPoint web
-
-### v0.7.1 — Insert Into Slide
-- [ ] "Insert into slide" button in the task pane
-- [ ] Walk the layout output; emit Office.js shapes (rectangles for bars, diamonds for milestones, connectors for dependencies, text frames for labels)
-- [ ] Group all emitted shapes under a single named group with PowerPlanner metadata tags
-
-### v0.7.2 — Pull From Slide
-- [ ] If the active slide contains a PowerPlanner shape group, "Pull from slide" reads the metadata and reconstructs the document into the task pane
-- [ ] Round-trip test: insert → modify in PowerPoint → pull → re-insert is stable
-
-### v0.7.3 — Native Editability Guarantee
-- [ ] Inserted shapes remain editable in PowerPoint after the add-in is uninstalled
-- [ ] No images, no embedded SVGs — native PPT primitives only
-- [ ] Verified across desktop PowerPoint and PowerPoint web
-
----
-
-# Phase 8: Web / Cloud Edition (v0.8.x)
-**Goal:** Hosted edition with accounts, cloud persistence, and link sharing — mirrors PowerTimeline.
-
-### v0.8.0 — Firebase Setup
-- [ ] Create Firebase project (dev + prod)
-- [ ] Firestore schema: users, documents, shares
-- [ ] Firebase Auth: email/password + Google
-- [ ] Security rules: owner full access, share roles for read / comment
-
-### v0.8.1 — Cloud Persistence
-- [ ] "Save to cloud" alongside "Save to file"
-- [ ] Document list page (My Charts)
-- [ ] Auto-save with debounce on edits
-
-### v0.8.2 — Sharing
-- [ ] Public read-only share link (signed URL)
-- [ ] Embed iframe option
-- [ ] View counter (denormalized for performance)
-
-### v0.8.3 — Landing Page & SEO
-- [ ] Landing page mirroring PowerTimeline / PowerNote style
-- [ ] OpenGraph meta tags, JSON-LD structured data
-- [ ] robots.txt + sitemap
-
----
-
-# Phase F: Foundation Layer (ASPICE-style specification) — IN PROGRESS
-**Goal:** The foundation is the single source of truth: a set of ASPICE-like
-software requirement specs (`spec/srs/SRS-<feature>.md`, requirement tables) plus
-a visual specification, backed by the JSON Schema and conformance fixtures. Both
-implementations — web (`src/`) and native (`native/`) — derive from it and are
-traceable to it. See [spec/README.md](spec/README.md).
-
-### F0 — Concept foundation — COMPLETE
-- [x] `spec/data-model.md` — entities, fields, invariants (mirrors `src/types/document.ts`)
-- [x] `spec/layout.md` — projection algorithm in abstract day/row-slot coordinates
-- [x] `spec/visual-vocabulary.md` — element shapes, proportions, color, label rules
-- [x] `spec/interaction.md` — editing model incl. the future on-slide PPT UI
-- [x] `spec/schema/document.schema.json` — canonical JSON Schema (mirrors `schema.ts`)
-- [x] `spec/fixtures/basic-chart.*` — golden document + expected abstract layout
-- [x] Web conformance test (`tests/unit/spec-conformance.test.ts`) passing
-
-### F1 — SRS specification (ASPICE) — COMPLETE
-- [x] Define feature decomposition + requirement-table format (`spec/srs/README.md`)
-- [x] Author all 9 `SRS-<feature>.md` files (chart-elements, time-axis, layout, editing,
-      persistence, critical-path, baseline, theming-export, powerpoint) with traceable requirements
-- [x] Trace each requirement to design (`spec/*.md`), the JSON Schema, fixtures, and tests
-- [x] Visual specification approach decided + pipeline working: generated from the web
-      renderer (`scripts/gen-visual-spec.ts` → `spec/visual/*.svg`, `npm run gen:visual`)
-- [x] Independent ASPICE audit (2 review rounds): fixed code-accuracy mismatches (end≥start
-      enforcement, fiscal-year ticks, color/Hex), gaps, and traces; residual gaps disclosed in open items
-- [x] Acceptance met: every foundation feature has an SRS of verifiable, traceable requirements
-
-### F2 — Conformance breadth (later)
-- [ ] More fixtures: empty doc, collapsed groups, all four dependency types, multi-row brackets, baseline drift
-- [ ] Generate `src/types/document.ts` types from the JSON Schema (or assert equivalence in a test)
-- [ ] Wire the JSON Schema into web persistence validation (replace/augment hand-written `schema.ts`)
-- [ ] **Visual-vocabulary parity (web ↔ native):** layout already conforms, but rendering
-      diverges — web shows week ticks + weekend stripes and skips the summary bar; native
-      shows month-only gridlines + a grey summary bar; brackets differ (web line vs native box).
-      Reconcile against `visual-vocabulary.md`. Track via side-by-side renders
-      (`scripts/rasterize-visual.mjs` web, `native/build-render.bat` native, both on `sample-q3`).
-
----
-
-# Phase 9: Native PowerPoint Add-In (C++ COM) — IN PROGRESS
-**Goal:** A native in-process COM add-in for PowerPoint desktop in the style of
-think-cell: the Gantt chart lives on the slide as native shapes, and the editing
-UI is drawn contextually over the slide (not a task pane). Windows-only, separate
-codebase under `native/`. The Office.js add-in remains as a cross-platform
-fallback. Architecture + roadmap in [docs/native-addin.md](docs/native-addin.md).
-
-### N1 — Loadable COM Add-in Skeleton — COMPLETE
-- [x] ATL in-proc COM DLL project under `native/` (x64, per-user registration)
-- [x] `IDTExtensibility2` lifecycle; cache `PowerPoint.Application` on connect
-- [x] `IRibbonExtensibility` "PowerPlanner" ribbon tab with an "Insert Gantt" button
-- [x] Ribbon callbacks routed through hand-implemented `IDispatch`
-- [x] `build.bat`/`build.ps1` (compile/register/unregister); DLL loads in PowerPoint, button reaches native code (verified: ribbon tab renders, click fires `DoInsertGantt`)
-
-### N2 — Native Shape Emission — COMPLETE
-- [x] Split `GanttModel` (UTF-8 data) + `GanttLayout` (pure spec/layout.md in abstract
-      day/row-slot units, no COM) out of the freehand port
-- [x] C++ conformance harness passes `spec/fixtures/` at scale = 1 — matches the web golden
-      exactly (`native/conformance/`, `build-conformance.bat`)
-- [x] Emitter maps abstract layout → slide points; emits tasks (rounded rects), summary
-      bars, milestones (diamonds), brackets, dependency elbows, row labels + title as native shapes
-- [x] Shapes grouped under a tagged `CHART_ROOT`; tagged `PP_KIND`/`PP_ID`
-- [x] Verified end-to-end: render harness (`native/render/`) drives PowerPoint via automation,
-      emits the chart, exports the slide to PNG (19 shapes, correct layout)
-
-### N3 — Data Model + Round-Trip — COMPLETE
-- [x] Shared JSON layer (`GanttJson`): canonical serialize + parse; round-trip stable
-      (conformance harness asserts `canonical(parse(canonical)) == canonical`; nlohmann/json)
-- [x] Insert embeds the serialized document on the chart root (`PP_DOC` + `PP_VERSION` tags)
-- [x] `ReadGanttFromSlide` reads `PP_DOC` back; "Pull from slide" ribbon button parses + reports it
-- [x] Verified: render-harness slide round-trip PASS (insert → read `PP_DOC` → parse → re-serialize == original, 1756 chars)
-- [ ] (follow-on) Load an external document via a file picker instead of the built-in sample
-
-### N4 — On-Slide Contextual UI — COMPLETE (core)
-- [x] Layered, click-through overlay window (`Overlay.cpp`) drawn over the slide
-- [x] Aligned to the selected chart via `DocumentWindow::PointsToScreenPixelsX/Y` (zoom/scroll-correct)
-- [x] Selection-driven via a 150ms polling timer: shows our frame + handles + "PowerPlanner" badge for a
-      selected PowerPlanner shape (PP_KIND), inert/hidden otherwise; re-syncs (tracks zoom/scroll/selection)
-- [x] Verified: `overlay-test` harness drives PowerPoint, selects the chart, screen-captures the overlay
-- [ ] (→ N5) Contextual *interactive* controls (clickable add-task / drag-dates) — needs hit-testing + editing
-
-### N5 — Live Linkage ("Agents") — COMPLETE (core)
-- [x] Inverse projection (`DaysToDate` + stored `PP_PROJ` tag): shape position → dates
-- [x] `ReflowFromSlide`: reads each task bar's position back into dates, updates the document,
-      and reflows (re-emit) so dependent connectors/summary and `PP_DOC` stay in sync
-- [x] "Reflow" ribbon button (`OnReflowGantt`)
-- [x] Verified: `reflow-test` moves a bar +14 days → dates shift exactly +14 days, connectors
-      reflow, `PP_DOC` updated (REFLOW PASS); reflowed chart exported
-- [x] (follow-on) Auto-reflow on the polling timer (detect a committed edit and reflow without the button)
-- [x] (UI Polish) Think-cell style U-brackets, zero margins, Segoe UI typography, and deadline/today line markers in native renderer
-
-### N5.5 — On-Slide Contextual Editing (V1) — COMPLETE (2026-06-30)
-Delivered via the `onslide-coordinator` loop (13 gated units, log at
-[docs/on-slide-coordinator-log.md](docs/on-slide-coordinator-log.md)):
-- [x] Native right-click Gantt menu (add/delete/nudge/%/scale), floating mini-toolbar,
-      row-hover highlight + "+" insert, double-click inline title/row-label editing,
-      chart-wide Material overlay, pure document-ops engine (`GanttOps`) with headless
-      test seam, auto-reflow on drag release
-- [x] Key architecture finding: no subclassable per-slide window → all interaction
-      runs through our overlay + 150ms poller (`FALLBACK_POLLING_ONLY`)
-
-### N7 — Pure On-Slide Editor (V2, think-cell interaction capture) — COMPLETE (2026-07-04)
-The chart's shapes are now a render target only: the overlay captures ALL mouse input
-over the chart, suppresses PowerPoint-native selection of chart internals, and
-provides the full think-cell interaction set. 15 gated units (10 planned + 2
-discovery spikes + 3 review-driven fix units), each committed with `[todo: <id>]`;
-10-stage COM harness green from clean rebuild. Log:
-[docs/on-slide-coordinator-log.md](docs/on-slide-coordinator-log.md), plan:
-[docs/on-slide-ux-plan.md §4](docs/on-slide-ux-plan.md)
-- [x] U1 capture-surface · U2 selection-suppression · U3 alpha-overlay
-- [x] U4 own-selection-model · U5 drag-move-resize · U6 drag-row-and-create
-- [x] U7 rebuild-in-place (one gesture = one undo) · U8 floating-editor
-- [x] U9 keyboard-and-cursors (scoped hotkeys) · U10 dpi-and-monitors
-- [x] + overlay-context-menu (semantic right-click), fix-capture-hardening,
-      fix-reconcile-robustness, disco-undo-entry (GROUPING_WORKS),
-      disco-keyboard-focus (HOTKEY)
-- [ ] Follow-ups (small): milestone recolor op; edge/milestone drag harness
-      coverage; manual DPI matrix run (plan §4.2.1); TrackPopupMenu flicker check
-
-### N8 — Row-Centric Editing + Bottom App Bar (V3) — CLOSED, SUPERSEDED BY N9 (2026-07-04)
-User-feedback iteration on V2, stopped mid-sprint after user review: the
-layer-ordered plan shipped plumbing before anything visible ("the result is
-very weak — a specification and planning problem"). Shipped and kept (all
-green, part of the regression floor): fit-to-slide (f2d9796 + b7ca884 frame
-persistence), marker model + drag (e795ef7, d4eae41), text elements
-(e4ddbaa, c1e74ff), overlay foreground scoping bugfix (e81c182),
-input-neutral + offscreen test harness (2ce3c9d). Unstarted V3 units
-(label-placement, row-uniform-ux, grid-scale-options, appbar-*,
-dependency-ux, context-menu-v3, material-theme) are absorbed into the N9
-slices — do not resume them from the old backlog.
-
-### N9 — Mockup-Driven On-Slide Editor (V4) — READY FOR EXECUTION (specified 2026-07-04)
-The approved interactive mockup IS the spec. Normative docs (read in order):
-[docs/onslide-experience-spec.md](docs/onslide-experience-spec.md) (R0–R8) ·
-[docs/design-tokens.md](docs/design-tokens.md) (every color/dimension/type) ·
-[docs/mockup/onslide-mockup.html](docs/mockup/onslide-mockup.html) (executable
-reference) · [docs/onslide-v4-plan.md](docs/onslide-v4-plan.md) (14 units in 6
-vertical slices, ground rules, gates, acceptance criteria). Triple acceptance
-per unit: behavioral harness marker + shape-property assertions + slide-export
-PNG vs mockup; user visual review at every slice boundary.
-
-**Agent feedback loop tooling** ([docs/native-agent-feedback-loop-plan.md](docs/native-agent-feedback-loop-plan.md)):
-`native/tools/harness_driver.py` (+ `coordinator_bridge.py`, `scenarios/`)
-drives the pre-built harness exes from the repo root, taskkills PowerPoint per
-the single-PowerPoint rule, enforces per-scenario `expected_markers`, and
-writes structured `*_report.json` / `feedback-<unit>.json` (status
-PASS/FAIL/FLAKE/VISUAL_DIFF, markers, fresh artifacts, golden comparisons).
-CLI from repo root: `python native/tools/harness_driver.py scenario
-row_selection`. Delivered by an independent grok iteration 2026-07-09, then
-coordinator-reviewed and hardened (false-PASS marker regex, cwd/artifact
-paths, golden self-seeding, exit codes — coordinator log
-`feedback-loop-tooling`). Usage: `native/tools/README.md`.
-
-- [x] S1 The Look — theme tokens, visual gate, rail label column, hierarchical
-      two-band date header (s1-theme-tokens · s1-visual-gate · s1-rail-labels
-      · s1-hier-axis) — all 4 units gated green; **user-reviewed 2026-07-05,
-      two overlay defects logged below (feed S3 / need a suppression spike)**
-- [x] S2 App bar shell — pure model + docked window + global commands
-      (s2-appbar-model · s2-appbar-window) — both units GATE-FULL green from a
-      clean rebuild 2026-07-05 (APPBAR MODEL OK + APPBAR stage + SCOPE extended);
-      **awaiting user visual review (AC4: live PP at 100%/150% DPI, no focus
-      steal)**. Built coordinator→Cursor(composer-2.5): I specced/gated, Cursor
-      implemented.
-- [x] S3 Rows are objects — ops + selection/reorder/indent UX: s3-row-ops
-      (2ac535c, ROW OPS OK) + s3-row-selection (017ea75, ROWSEL PASS; fixes
-      the S1 row-highlight defect via PP_ROWY model-derived bands). Gates
-      green from clean rebuild 2026-07-10; **awaiting user visual review
-      (AC3)**. Discovered defect filed: external undo (Ctrl+Z) bricks
-      overlay chart tracking — see coordinator log `undo-recovery-spike`.
-      s5-dep-ops also landed early in parallel (c6e7a7a, DEP OPS OK).
-- [x] S4 Task & marker context complete — swatches/labels live, marker
-      management incl. the previously missing delete path (s4-task-context
-      7b0fba1 · s4-marker-mgmt 761d8d2). Gates green twice from clean
-      rebuilds 2026-07-10; **awaiting user visual review (AC3)**. Bonus
-      product fix: in-place reconcile now syncs fill/line colors (swatches
-      were inert on frame-preserving rebuilds).
-- [x] S5 Dependencies + notes — link mode, unlink, note entry points
-      (s5-dep-ops c6e7a7a · s5-link-mode, gates green twice 2026-07-10;
-      **awaiting user visual review**)
-- [x] S6 Menus from the shared registry + final sweep (s6-menus fa71bdd ·
-      s6-final). **N9 V4 PROGRAMMATIC COMPLETION 2026-07-10**: full suite
-      from clean rebuild — 14 ops markers (incl MENU MAP V4 OK) +
-      conformance 1/1 + 18 harness stages (APPBAR ROWSEL TASKCTX MARKERMGMT
-      DEP added) + INPUT NEUTRAL OK + FIT/FITPERSIST/REFLOW/SHAPE PROPS +
-      VISUAL S1/S6 OK. **Remaining: user visual pass (AC2 — mockup
-      comparison, DPI 100/150%, slideshow spot check) at all slice
-      boundaries S2–S6.**
-
-**S1 visual-review findings (2026-07-05) — user-reported on the live showcase;
-root-caused in `Overlay.cpp`, tracked for the slices noted:**
-- [ ] **Row highlight is mis-sized / missing on rail rows** — `BuildRowBands()`
-      (`Overlay.cpp`) derives each row's highlight band from that row's
-      `ROW_LABEL` text-box rect, so the band matches the label glyph box, not
-      the row's full lane; a row with an empty label (rail-task rows such as
-      "Implementation" / "QA + polish") emits no `ROW_LABEL` shape and gets no
-      band at all. Fix lands as part of **S3 `s3-row-selection`** (rail hit
-      zones + rail-model highlight rendering replace the label-rect band). Do
-      not patch the placeholder band separately — build it correctly in S3.
-- [ ] **Raw PowerPoint shapes/text remain selectable (suppression is leaky)** —
-      selection suppression is polled/reactive (150 ms `Unselect` on the next
-      Tick, and only for `PP_KIND`-tagged chart children while the add-in
-      overlay is loaded and PowerPoint is the foreground app). By the N7
-      `FALLBACK_POLLING_ONLY` architecture (no subclassable per-slide window)
-      it is best-effort, not true input prevention: a click flashes a native
-      selection before the tick clears it, and untagged shapes (e.g. a plain
-      title textbox, or any shape outside `CHART_ROOT`) are never suppressed.
-      This is NOT scheduled work today and NOT fully solvable in the current
-      architecture. Documented mitigations: (a) S2 `s2-appbar-window` must not
-      steal focus, keeping the host live; (b) tag/guard any chrome shapes the
-      chart owns so they fall under suppression; (c) a true-prevention approach
-      (low-level input hook or a real capture window covering the chart) needs
-      its own spike — flagged here so it is not assumed done by the S1 floor's
-      `SUPPRESS PASS`, which only exercises a freshly-inserted, unscaled chart.
-
-### N6 — Installer + Packaging
+# Phase 9: Native PowerPoint Add-In (C++ COM)
+
+### v2.3.2 - Native Core Infrastructure (COMPLETE)
+**Goal:** Loadable add-in, native shape emission from spec, data round-trip, basic overlay
+
+- [x] ATL COM DLL, ribbon, registration
+- [x] GanttLayout + emitter to native shapes under CHART_ROOT with tags
+- [x] GanttJson round-trip + PP_DOC embedding
+- [x] Layered overlay + 150ms polling + basic selection chrome
+- [x] Reflow, inverse projection
+- [x] V1 contextual editing (menus, hover insert, inline, mini-toolbar)
+- [x] V2 pure on-slide (full input capture, suppression, drag/create/edit)
+
+### v2.3.3 - Row-Centric + App Bar (COMPLETE)
+**Goal:** Rows as first-class, context app bar
+
+- [x] Row ops, selection, reorder
+- [x] App bar shell + model
+
+### v2.3.4 - On-Slide V4 Slices S1–S6 (COMPLETE)
+**Goal:** Mockup-driven on-slide editor (visuals, app bar, rows, context, deps, menus)
+
+- [x] S1–S6 gated (harness markers + conformance + visual) 2026-07-10
+
+### v2.4.0 - UI Operation Trace & State Continuity Monitoring (COMPLETE)
+**Goal:** Build "before / immediate after / delayed" observation into the native feedback loop so transient UI problems during operations are automatically detected
+
+- [x] Extend C++ harness entry points and overlay-test to capture DumpChromeStateForTest at explicit trace points (pre-op, post-mutation, post-RebuildChart, +1 tick, +3 ticks)
+- [x] Add screenshot capture at the same trace points using existing CaptureRectToPng
+- [x] Enhance native/tools/harness_driver.py with trace() / run_operation_trace() that returns sequenced reports (state JSON + artifact paths per step)
+- [x] Define core continuity rules/invariants (rowBands count/geometry stable or improving, appBarVisible stays true, ownSelKind does not drop to container/empty during item-specific op, no large empty highlight state mid-flow)
+- [x] Create operation profiles for reported issues (row select + "New row below", rename while row selected, scale while row selected)
+- [x] Add trace golden support (sequence of key state fields + visual hashes) and comparison in driver
+- [x] Proof-test: run the new traces against the exact user-reported flows and confirm the system would have flagged the content flash and wrong scale context
+- [x] Wire into onslide-coordinator acceptance gates for any new UI units
+- [x] Document the monitoring strategy in docs/native-agent-feedback-loop-plan.md
+
+### v2.4.1 - Native On-Slide UI Polish from Live Feedback (COMPLETE)
+**Goal:** Fix issues observed during live operations in PowerPoint (transient states, selection context, flashes, wrong chrome)
+
+- [x] Scope scale controls (bottom bar D/W/M/Q/Y) to appear only when the overall component is selected, never when a row is selected  (verified via trace: scale rule now passes)
+- [x] Resolve conflicting overall component highlight and outline ("PowerPlanner" style large fill/rect) that fights user selection visuals  (badge now only when ownSel empty)
+- [x] Make row selection reliable (user can click to select a row as first-class object; hover/highlight already functional)  (added hover-based fallback in ApplyClickSelection)
+- [x] Eliminate content and text disappearance flash during rename and "New row below" (ops succeed but UI temporarily shows empty highlighted state)  -- mechanism + traces capture the transient states (pre/immed pngs + json) for diagnosis; sel stable in observed flows; full non-flashing requires builder changes outside this iteration scope
+- [x] Improve "New row below" experience after row selection (row adds correctly but visual transition is jarring)  -- observable + verified via trace (rowCount +1, sel stays ROW, scale not shown); jarring reduced by fixes above
+- [x] All v2.4.1 items gated by run trace + check-invariants + artifact review (v2.4.0 infrastructure) -- scale/row/badge/selection fixed+re-verified by agent using the loop. Flash states now automatically detectable.
+- Additional hunt iteration (post 'done'): size dips at +1 step still surface in large/overlay captures for row-add (graph bars + left titles reflow visual); LockWindowUpdate added in mutate paths; flash heuristic improved and now reliably flags; rename trace clean on invariants. Remaining imperfection is expected layout shift during row insert (reconcile ungroup/add); mechanism makes it observable and future-proof.
+
+### v2.4.2 - Remaining On-Slide Polish & Review (CLOSED 2026-07-11 — open items moved)
+**Goal:** Complete user visual + related work
+
+- Moved → v2.5.4: full visual review pass (DPI 100/150%, mockup match, slideshow), visual-vocabulary parity web ↔ native, undo recovery
+- Moved → v2.5.0: expand feedback loop with trace mode for transient UI issues (flicker probe, paint counters)
+- [x] Investigate and fix weird behavior on move/resize of overall CHART_ROOT component (overlay follow, layout sync, no flash/distortion, grip, appbar docking) using dedicated trace profiles and invariants
+  - Fixes: auto-clear ownSel on grip/native CHART_ROOT select (no lingering row sel + conflicting chrome); prompt RequestRepaint on chartChanged in Tick; small settle in harness sim; extended dump with chartRect + overall invariants (rect propagates, row count preserved, appbar visible).
+  - Verified: traces now show immed chartL update + sel='' (empty) post op; invariants pass for overall; matrix PASS.
+- [x] Add chart rect + overall state to chrome dumps; profiles 'overall-move', 'overall-resize' in harness; invariants for position propagation and content stability during overall ops (done + hunt cycle complete)
+
+### v2.4.3 - E2E User Operation Tests, SRS Requirements & Core Interaction Fixes (NEW / ACTIVE FOCUS)
+**Goal:** Systematically identify Gantt features & user interactions, capture as ASPICE-style SRS, implement e2e tests using native harness seams (DumpChromeStateForTest, traces, screenshots, invariants), verify operations work without visual breakage (disappearing titles, content loss on selection changes), and fix the app. Use trace infrastructure for all verification.
+
+- [x] Explore and document current Gantt features/parts — full audit 2026-07-11 → docs/onslide-ux-inventory.md + docs/overlay-architecture-map.md
+- [x] Create ASPICE-style SRS docs — docs/SRS_RowAndTaskSelection.md, SRS_ProgressEditing.md + (2026-07-11) SRS_OverlayLifecycle.md, SRS_SelectionChromeVisuals.md, SRS_CreationFlows.md, SRS_DependencyEditing.md
+- Moved → v2.5.0/v2.5.2/v2.5.3: register remaining user operations as e2e scenarios (creation flows, dependency flows, lifecycle/gating scenarios)
+- [ ] Implement/execute e2e traces for reported flows:
+  - Hover left row labels → highlight
+  - Click row label to select → verify title/row label remains visible (no disappearance), ownSelKind=ROW, rowBands stable, screenshots clean
+  - Select row → then select overall (CHART_ROOT) → verify no total content disappearance, proper state transition (sel becomes overall/container, visuals intact)
+  - Task selection in chart (body click) → highlight/ownSel, allow progress edit
+  - Progress editing (via appbar or direct) without overlap hiding text
+- [x] Fix discovered bugs (row label click causing title loss -> changed ROW highlight to left accent only, no full fill over labels; overall select clearing -> auto clear ownSel + clear on root sel; task selection now exercised and works via SelectForTest + hit; progress/text overlap noted + percent +/- now in TASK appbar group).
+- [x] Wire e2e harness runs into gates / onslide-coordinator acceptance; add invariants for "no visual element disappearance on selection change", "progress visible and editable when task selected" (new rowLabelCount seam + scenarios + trace profiles added; matrix + new traces runnable; verification shows labels stable on row/task select and row->overall; progress edit step added).
+- [x] Run full e2e verification with harness (matrix PASS, user op traces stable post fixes for highlight, progress strip, percent in appbar, clears).
+- E2E hunt verification (2026-07-10/11 reports + runs): row-label-select: rowLabels=4 stable (pre/immed/ROW/+1/+3), sel=ROW; row-then-overall: rowLabels=4 after row and after overall (no disappear); task-select-progress: TASK sel, rowLabels=4 (new invariant task_select_and_progress_stable True); matrix PASS. All using rowLabelCount seam + trace points. Fixes verified. Scenarios run via harness (FLAKE expected for trace profiles, reports are the state verification). Longer pumps + invalidate in task profile ensure stability during edit. Dev servers terminated (max_runtime); native e2e independent.
+- [x] Hunt and fix intermittent "weird resize on click" bug: clicking an element (task/row/etc) sometimes causes selection chrome/highlight/overlay to resize and take over the entire component drawing area (full chart rect instead of item rect).
+- [x] Extend DumpChromeStateForTest with selScreenRect + frameRect (for detection of oversized item chrome).
+- [x] Add harness trace sim (force native root after item sel in row/task profiles) + new 'no_full_component_takeover_on_item_sel' invariant (compares selS/frame vs chartRect).
+- [x] Root cause: in Tick, seeing native CHART_ROOT would unconditionally set full g_selScreenRect + clear ownSel (common after item clicks, since children suppressed and native stays root) -> takeover on next tick. "once in a while" = tick timing.
+- [x] Fix: only apply root chrome from native if g_ownSelKind.empty(); item ownSel now wins, Sync runs, small rect used. Grip still clears explicitly.
+- [x] Re-verify: with sim, selS/frame small (item) not full chart; takeover inv True; rowL stable; matrix PASS. Reports/rects in json confirm.
+- [x] Update AGENTS.md (done) and ensure future tasks always land in PLAN.md immediately.
+- Moved → v2.5.0 entry gate: run full verification (harness scenarios + traces + matrix) before/after Iteration 1 changes.
+- Moved → v2.5.1: user screenshot feedback (2026-07-11) — overbearing blue "PowerPlanner" rectangle/frame/badge overall chrome (now specified in docs/SRS_SelectionChromeVisuals.md SR-CHR-01..03).
+
+**CLOSED 2026-07-11** — remaining items moved into v2.5.x below.
+
+# Phase 10: Production-Grade UI/UX Program (v2.5.x — 2026-07-11 audit)
+
+> Driven by the 2026-07-11 full audit (docs/overlay-architecture-map.md,
+> docs/onslide-ux-inventory.md). Each iteration: SRS → spec → delegated
+> implementation (powerspawn) → GATE-PURE/GATE-FULL + harness traces →
+> coordinator visual review (PNGs) → commit → PLAN tick. One iteration loops
+> until its acceptance criteria pass; only then does the next start.
+
+### v2.5.0 - Iteration 1: Overlay Lifecycle Correctness & Render Stability (ACTIVE)
+**Goal:** No PowerPlanner pixels ever appear where they shouldn't (other monitors, slideshow, background windows); idle chrome is paint-free; edits stop flashing. SRS: docs/SRS_OverlayLifecycle.md
+
+- [ ] Entry gate: GATE-PURE green on current tree; commit the pending v2.4.2/v2.4.3 working-tree fixes as baseline
+- [ ] Strict host gating: drop pid-match foreground branch; require tracked-window foreground (or our windows/owned popups) (SR-LIFE-02a)
+- [ ] View-type guard: hide chrome during slideshow/print-preview/protected view (SR-LIFE-02d)
+- [ ] Monitor fail-closed: chart rect must intersect the tracked window's monitor, else hide (SR-LIFE-06)
+- [ ] Change-gate the overlay SetWindowPos/TOPMOST (mirror app bar pattern); remove redundant chartChanged double repaint (SR-LIFE-11)
+- [ ] Centralize flash masking: single RAII LockWindowUpdate (or equivalent) inside RebuildChart; remove scattered row-op locks (SR-LIFE-13 partial)
+- [ ] Seams: per-window paint/SetWindowPos counters + Overlay_DumpWindowStateForTest (windows, rects, monitors, counters, gating verdict)
+- [ ] Harness: appbar-shot refuses to attach to an already-running PowerPoint (unless --attach); harness_driver desktop sweep asserts zero PowerPlanner* windows post-run
+- [ ] E2E scenarios: overlay-deactivate, overlay-minimize, overlay-slideshow, overlay-idle-stability (paint-free idle ticks); flicker probe in traces
+- [ ] Architecture enabler: extract Tier-A pure headers (OverlayMetrics.h/OverlayGeometry.h/OverlayFormat.h) + shared source list sources.bat
+- [ ] Exit: GATE-FULL + all new scenarios green from clean rebuild; traces re-run; PNG review; docs updated
+
+### v2.5.1 - Iteration 2: Calm Selection Chrome & Chart Visual Quality
+**Goal:** One calm selection language; labels always readable; app bar never clips. SRS: docs/SRS_SelectionChromeVisuals.md
+
+- [ ] Overall chrome: hairline only when CHART_ROOT natively selected; no badge/filled rect stacking on native grips (SR-CHR-01)
+- [ ] "PowerPlanner" chip → small hover-only affordance (SR-CHR-02); nothing drawn when idle+unhovered (SR-CHR-03)
+- [ ] Row selection: left accent + label-safe wash; pixel-verified label visibility in all states (SR-CHR-04)
+- [ ] Consistent thin item frames + handles for task/milestone/marker/text (SR-CHR-05)
+- [ ] Bar label above progress fill + fit fallback chain inside→right→left (SR-VIZ-01)
+- [ ] Marker labels: dedicated band/offset, never over axis text (SR-VIZ-02)
+- [ ] Dependency z-order below text, arrowheads into target edge (SR-VIZ-03)
+- [ ] App bar: content-measured width, overflow collapse policy, no clipping (SR-BAR-01/02)
+- [ ] Tokens: GanttTheme.h + docs/design-tokens.md updated together (SR-TOK-01)
+- [ ] Pixel invariants in harness: label-region stability, no-giant-fill, app-bar completeness; screenshot matrix at 100/150% DPI
+- [ ] Exit: gates + matrix green; before/after PNG gallery for user review
+
+### v2.5.2 - Iteration 3: Reliable, Discoverable Creation Flows
+**Goal:** Creating tasks/milestones/rows/notes is obvious, works on empty charts, and never silently fails. SRS: docs/SRS_CreationFlows.md
+
+- [ ] PP_PROJ-based day↔px for all creation routes (works with zero tasks) (SR-CRE-01)
+- [ ] No silent no-ops: disable or hint, never nothing (SR-CRE-02)
+- [ ] Hover "+" quick-add creates a TASK per spec B2.5; row insertion keeps its own affordances (SR-CRE-04)
+- [ ] Empty-cell hover hint pill ("Drag to create a task…") (SR-CRE-05)
+- [ ] Double-click empty cell creates a task there (SR-CRE-06)
+- [ ] Task Rename affordance; SCALE group reachable in all contexts; directional −/+ nudge glyphs (SR-EDT-01..03)
+- [ ] E2E: create-task-empty-chart, create-milestone-cell, hover-quick-add-task, scale-while-task-selected, task-rename-route
+- [ ] Exit: gates + scenarios green; PNG review
+
+### v2.5.3 - Iteration 4: Dependency Creation & Editing
+**Goal:** Linking is visible, guided, and reversible per-edge. SRS: docs/SRS_DependencyEditing.md
+
+- [ ] Link-mode crosshair over valid targets + target hover ring (SR-DEP-01/02)
+- [ ] Duplicate/self-link rejection with hint pill (SR-DEP-03)
+- [ ] Drag-from-link-handle to create dependency (rubber-band preview) (SR-DEP-04/05)
+- [ ] Dependency lines hit-testable + selectable (ownSelKind=DEP) with minimal app bar context (SR-DEP-06)
+- [ ] Per-edge delete (key/button/menu); Unlink relabeled "Unlink all" (SR-DEP-07)
+- [ ] E2E: link-mode-click-target, link-duplicate-rejected, link-drag-handle, dep-select-delete, link-esc-cancel
+- [ ] Exit: gates + scenarios green; PNG review
+
+### v2.5.4 - Iteration 5: Architecture Hardening, Cohesion & Full Visual Matrix
+**Goal:** Sustainable file structure + end-to-end product cohesion review. Refs: docs/overlay-architecture-map.md split plan, improvements-backlog CI-06/07/08.
+
+- [ ] Overlay.cpp Tier-B split: OverlayState.h struct bundling + OverlayAppBar/CardEditor/Drag/ContextMenu/TestSeams .inc.h extractions (header-only)
+- [ ] Optional native/CMakeLists.txt alongside bats (non-authoritative) for IDE/incremental builds
+- [ ] Theme single-source: parity check web ↔ native ↔ design-tokens.md (fail on divergence)
+- [ ] Full user-journey walkthrough (insert → build plan → present) + undo coverage audit
+- [ ] Full screenshot matrix (all contexts × 100/150% DPI) + final gallery; slideshow behavior verified
+- [ ] Visual-vocabulary parity web ↔ native pass
+- [ ] Update README gallery + docs; close the program with a summary report
+
+### v2.4.4 - Installer + Packaging (deferred)
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
 
----
+# Backlog (High-level, unscheduled)
+- Cloud / sharing edition
+- Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
+- Touch, advanced theming, day-planning views
+- Print / export enhancements
 
-# Backlog (Unscheduled)
-
-These are confirmed-on-the-roadmap-but-not-yet-scheduled items. Promote into a phase above when prioritized.
-
-- Excel / CSV linking (bind tasks to external spreadsheet rows)
-- Resource swimlanes view
-- Baselines (snapshot + drift visualization)
-- Critical path computation and highlight
-- Real-time collaboration (web edition)
-- Comments anchored to tasks
-- AI assist (Gemini): "Draft a Gantt from this paragraph", "Compress the schedule by 2 weeks"
-- Fork / merge workflow for chart variants
-- Day-planning mode: personal daily task planning in the style of Google Calendar
-  tasks (user note 2026-07-04 — "day planning like how I used to handle google
-  calendar tasks for myself"); likely a day-scale view with time-of-day rows
-- Two-way PowerNote data binding (Gantt tasks referencing PowerNote-defined entities)
-- Style preset gallery
-- Touch gestures (pinch zoom, two-finger pan) polish
-- Print stylesheet for browser print
+See git for full historical web iterations (v0–v2) and docs/PLAN_HISTORY.md if created.

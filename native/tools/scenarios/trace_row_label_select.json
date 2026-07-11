@@ -1,0 +1,9 @@
+{
+  "name": "trace_row_label_select",
+  "description": "E2E: Hover left row labels (highlight), click to select row. Verify ownSelKind=ROW, rowLabelCount stable (no title disappearance), rowBands stable, no content flash, appbar correct for row.",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "row-label-select"],
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true
+}

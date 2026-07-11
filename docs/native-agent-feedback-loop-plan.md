@@ -170,6 +170,38 @@ Make the feedback loop a first-class part of how agents work on the native code:
 - [x] End-to-end documented in native/tools/README.md and this plan. Example: run_scenario → report → golden check → bridge summary for coordinator log.
 - [x] Integrated into onslide-coordinator (updated SKILL.md to call driver/bridge after unit validation; see cycle steps).
 
+## v2.4.0 Extension: Operation Trace & Continuity Monitoring (added 2026-07-10)
+
+To close the loop on transient bugs (flashes during rebuild, selection context loss mid-op, wrong chrome like scale controls while a row is selected), the harness now supports sequenced observation:
+
+- New seams: `Overlay_PerformAppBarCommandForTest(cmd)`, richer `Overlay_DumpChromeStateForTest` (adds `rowCount`, `scale`, `hasScaleGroup`, `appBarGroups`, full row rects already present).
+- Harness (appbar-shot --trace <profile>): emits TRACE <step>: {json} + ARTIFACTS lines at pre / immed / +1tick / +3ticks and writes step-specific PNGs (appbar + ctx + overlay rects) using CaptureRectToPng.
+- Python: `run_operation_trace("row-add-below")`, `OperationTraceReport` with `steps[]`, `check_trace_invariants()` implementing:
+  - row_sel_stable_during_item_op
+  - appbar_visible_stable
+  - no_large_sel_drop_to_empty
+  - rowband_count_stable_or_increases
+  - scale_not_present_for_row_sel
+- Profiles: trace_row_add_below / row-rename / row-scale (and via `run_scenario("trace_row_add_below")`).
+- Trace key snapshot + `compare_trace_to_golden` for seq regression.
+- Proof: live runs show 4-step captures; invariants correctly flag `hasScaleGroup=true` while `ownSelKind=ROW` (directly detects a v2.4.1 complaint); also ready to catch drops or band anomalies. Screenshots at each step capture any visual flash of content/chrome.
+- Usage: `python native/tools/harness_driver.py trace row-add-below --check-invariants`
+- This mechanism is now the required path for validating any UI change that mutates selection, rows, appbar or triggers RebuildChart.
+
+Additional user report + hunt cycle (overall component move/resize weirdness):
+- Extended chrome dump with chartRect + new trace profiles/scenarios for overall-move/resize.
+- Observed via traces: chart rect update delayed until after tick (lag), ownSel (e.g. ROW) lingered causing weird combined container/item chrome while operating on overall.
+- Fixes implemented and verified with traces:
+  - Grip SelectChartRoot + Tick (on CHART_ROOT native sel) now ClearOwnSelection() to avoid conflicting highlights/appbar.
+  - Tick forces RequestOverlayRepaint immediately on chartChanged for faster follow of moved/resized group.
+  - Overall invariants (rect propagates promptly, row count stable, appbar visible) + content flash hunter.
+- Results: traces now show empty sel + updated chartL in 'immed' step; all relevant invariants pass; no regression on matrix/row traces.
+- Remaining possible weird: 150ms poll lag during continuous live drag of group; no auto-reflow on user resize (shapes may stretch until manual). Tools now surface these for future work. Updated PLAN + this doc.
+
+Post-delivery hunt (additional independent iteration): even after LockWindowUpdate in mutate paths and prior polish, trace runs surface consistent PNG size drops at +1 step for row-add-below (large/overlay/ctx captures). The 'no_content_flash_in_trace' invariant flags it. This corresponds to user-observed graph bars and left/task titles temporarily less present or reflowed during/after row insert (reconcile structural add/remove of prims). Rename trace was clean. The tools now make this class of imperfection automatically detectable; full elimination may require builder changes (pre-shift space, double buffer shapes, or label in-place only updates). All memory files and PLAN updated.
+
+All prior phases remain green; trace augments them for transient/continuity bugs.
+
 ## Files and Touch Points (updated for full completion)
 
 - `native/PowerPlannerAddin/Overlay.h` and `Overlay.cpp` (added Overlay_DumpChromeStateForTest for rich row bands, selection, drag, appbar state)

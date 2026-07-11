@@ -1,0 +1,9 @@
+{
+  "name": "trace_row_then_overall",
+  "description": "E2E: Select a row, then select overall CHART_ROOT. Verify no disappearance of graph/titles, clean transition (sel to overall/empty), rowLabelCount preserved, visuals stable in captures.",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "row-then-overall"],
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true
+}

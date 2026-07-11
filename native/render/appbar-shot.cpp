@@ -12,6 +12,7 @@
 #include "../PowerPlannerAddin/GanttBuilder.h"
 #include "../PowerPlannerAddin/GanttModel.h"
 #include "../PowerPlannerAddin/Overlay.h"
+#include "../PowerPlannerAddin/GanttHitTest.h"
 // GDI+ headers use unqualified min/max; provide them if a prior include pulled
 // in NOMINMAX (matches how the addin's own GDI+ TU gets them from windows.h).
 #ifndef min
@@ -215,6 +216,272 @@ int wmain(int argc, wchar_t** argv) {
 			if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
 			::CoUninitialize();
 			return reportOk ? 0 : 1;
+		}
+
+		// --trace <op> : v2.4.0 operation trace for before/immediate/delayed observation.
+		// Drives select + op using seams, emits TRACE <step>: {chrome json} and saves
+		// step-named PNGs (appbar + wide context including chart body) to detect flashes,
+		// sel drops, wrong chrome (e.g. scale on row).
+		bool wantTrace = false;
+		const wchar_t* traceProfile = nullptr;
+		for (int i = 1; i < argc; ++i) {
+			if (wcscmp(argv[i], L"--trace") == 0 && i + 1 < argc) {
+				wantTrace = true;
+				traceProfile = argv[i + 1];
+				break;
+			}
+		}
+		if (wantTrace) {
+			Overlay_SetHostActiveOverrideForTest(1);
+			PumpFor(1200);
+
+			// Stable chart rect for consistent content captures across steps (detect graph + left title disappearance)
+			RECT stableChartRect = {0,0,0,0};
+			try {
+				PowerPoint::DocumentWindowPtr w = app->GetActiveWindow();
+				PowerPoint::_SlidePtr sl = w->GetView()->GetSlide();
+				PowerPoint::ShapePtr ch;
+				PowerPoint::ShapesPtr shs = sl->GetShapes();
+				long nn = shs->GetCount();
+				for (long ii = 1; ii <= nn; ++ii) {
+					PowerPoint::ShapePtr s = shs->Item(_variant_t(ii));
+					_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+					if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") { ch = s; break; }
+				}
+				if (ch) {
+					float cl = ch->GetLeft(), ct = ch->GetTop(), cw = ch->GetWidth(), chh = ch->GetHeight();
+					stableChartRect.left = w->PointsToScreenPixelsX(cl) - 140; // include left titles
+					stableChartRect.top = w->PointsToScreenPixelsY(ct) - 30;
+					stableChartRect.right = w->PointsToScreenPixelsX(cl + cw) + 60;
+					stableChartRect.bottom = w->PointsToScreenPixelsY(ct + chh) + 80;
+					RECT scr{0,0,::GetSystemMetrics(SM_CXSCREEN),::GetSystemMetrics(SM_CYSCREEN)};
+					if (stableChartRect.left < scr.left) stableChartRect.left = scr.left;
+					if (stableChartRect.top < scr.top) stableChartRect.top = scr.top;
+				}
+			} catch (...) {}
+
+			auto captureStep = [&](const char* step, const wchar_t* profile) -> std::wstring {
+				const char* state = Overlay_DumpChromeStateForTest();
+				wchar_t appPng[256], ctxPng[256];
+				swprintf_s(appPng, 256, L"native\\build\\trace_%ls_%hs_appbar.png", profile ? profile : L"op", step);
+				swprintf_s(ctxPng, 256, L"native\\build\\trace_%ls_%hs_ctx.png", profile ? profile : L"op", step);
+				bool ok = false;
+				HWND ab = OverlayAppBarHwnd();
+				if (ab && ::IsWindowVisible(ab)) {
+					RECT r{}; ::GetWindowRect(ab, &r);
+					ok = CaptureRectToPng(r, appPng);
+					// wide context shifted to include chart body above bar
+					RECT wide = r;
+					wide.top -= 380; wide.left -= 120; wide.right += 120; wide.bottom += 30;
+					RECT scr{ 0, 0, ::GetSystemMetrics(SM_CXSCREEN), ::GetSystemMetrics(SM_CYSCREEN) };
+					if (wide.top < scr.top) wide.top = scr.top;
+					if (wide.left < scr.left) wide.left = scr.left;
+					if (wide.right > scr.right) wide.right = scr.right;
+					if (wide.bottom > scr.bottom) wide.bottom = scr.bottom;
+					ok = ok && CaptureRectToPng(wide, ctxPng);
+				}
+				// Also capture main overlay area for full chrome+content visibility
+				HWND ov = OverlayHwnd();
+				wchar_t ovPng[256];
+				swprintf_s(ovPng, 256, L"native\\build\\trace_%ls_%hs_overlay.png", profile ? profile : L"op", step);
+				if (ov && ::IsWindowVisible(ov)) {
+					RECT or{}; ::GetWindowRect(ov, &or);
+					// expand a bit to ensure chart content
+					or.top -= 80; or.left -= 40; or.right += 40; or.bottom += 20;
+					CaptureRectToPng(or, ovPng);
+				}
+				// Stable content rect capture (same pixels every step) to hunt disappearing graph bars and left titles
+				wchar_t chartPng[256];
+				swprintf_s(chartPng, 256, L"native\\build\\trace_%ls_%hs_chart.png", profile ? profile : L"op", step);
+				if (stableChartRect.right > stableChartRect.left + 10) {
+					CaptureRectToPng(stableChartRect, chartPng);
+				}
+				// Extra large consistent region capture (generous around overlay) for reliable visual diff of content presence
+				wchar_t largePng[256];
+				swprintf_s(largePng, 256, L"native\\build\\trace_%ls_%hs_large.png", profile ? profile : L"op", step);
+				if (ov && ::IsWindowVisible(ov)) {
+					RECT lr{}; ::GetWindowRect(ov, &lr);
+					lr.left -= 220; lr.top -= 120; lr.right += 80; lr.bottom += 180;
+					RECT scr{0,0,::GetSystemMetrics(SM_CXSCREEN),::GetSystemMetrics(SM_CYSCREEN)};
+					if (lr.left<scr.left) lr.left=scr.left; if (lr.top<scr.top) lr.top=scr.top;
+					CaptureRectToPng(lr, largePng);
+				}
+				wprintf(L"TRACE %hs: %hs\n", step, state ? state : "{}");
+				wprintf(L"TRACE %hs ARTIFACTS: %ls %ls %ls %ls %ls\n", step, appPng, ctxPng, ovPng, chartPng, largePng);
+				return std::wstring(appPng);
+			};
+
+			// Pre setup depends on profile
+			if (traceProfile && (wcsstr(traceProfile, L"row-") || wcsstr(traceProfile, L"task-") || wcsstr(traceProfile, L"overall-"))) {
+				Overlay_SelectForTest("", ""); // clean start for these flows
+			} else {
+				Overlay_SelectForTest("ROW", "research");
+			}
+			PumpFor(300);
+			captureStep("pre", traceProfile);
+
+			// overall component (CHART_ROOT) move/resize simulation for hunting weird UX
+			// (user drag on group or grip). We mutate the native shape directly then
+			// observe overlay/appbar/rowBands/chartRect recovery over ticks + captures.
+			PowerPoint::ShapePtr overallChart;
+			try {
+				PowerPoint::DocumentWindowPtr w2 = app->GetActiveWindow();
+				PowerPoint::_SlidePtr sl2 = w2->GetView()->GetSlide();
+				PowerPoint::ShapesPtr shs = sl2->GetShapes();
+				long n = shs->GetCount();
+				for (long i=1; i<=n; ++i) {
+					auto s = shs->Item(_variant_t(i));
+					_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+					if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") { overallChart = s; break; }
+				}
+			} catch (...) {}
+
+			if (traceProfile && (wcscmp(traceProfile, L"overall-move") == 0 || wcscmp(traceProfile, L"overall-resize") == 0) && overallChart) {
+				float origL = overallChart->GetLeft();
+				float origT = overallChart->GetTop();
+				float origW = overallChart->GetWidth();
+				float origH = overallChart->GetHeight();
+				if (wcscmp(traceProfile, L"overall-move") == 0) {
+					overallChart->PutLeft(origL + 60.0f);  // discrete move
+					overallChart->PutTop(origT + 20.0f);
+				} else {
+					overallChart->PutWidth(origW + 120.0f);  // resize wider
+					overallChart->PutHeight(origH + 40.0f);
+				}
+				// exercise native select of root (like grip) to trigger auto-clear of item sel + chart follow
+				try { overallChart->Select(Office::msoTrue); } catch(...) {}
+				PumpFor(80);  // let at least one partial Tick run to update g_chartScreenRect, bands, possibly clear ownSel
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+				// restore for cleanliness (not required but keeps harness state nice)
+				try {
+					overallChart->PutLeft(origL);
+					overallChart->PutTop(origT);
+					overallChart->PutWidth(origW);
+					overallChart->PutHeight(origH);
+				} catch(...) {}
+				// fall through to stop
+			}
+
+			if (traceProfile && wcscmp(traceProfile, L"row-add-below") == 0) {
+				// "New row below" while row selected -- primary reported flash / sel issue
+				Overlay_PerformAppBarCommandForTest(HtCmd_AddRowBelow);
+				captureStep("immed", traceProfile);
+				PumpFor(150); // one tick
+				captureStep("+1", traceProfile);
+				PumpFor(450); // +3 total
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"row-rename") == 0) {
+				// Rename row (opens inline editor; commit will rebuild)
+				Overlay_PerformAppBarCommandForTest(HtCmd_Rename);
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				// For rename trace we stop here; full commit would require editor drive (see overlay-test)
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"row-scale") == 0) {
+				// Attempt scale while row selected (should not show scale chrome per v2.4.1)
+				// Just select row + observe (no scale op since global)
+				// Dump already shows hasScaleGroup and scale
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				Overlay_PerformAppBarCommandForTest(HtCmd_ScaleWeek); // try anyway to exercise
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && (wcscmp(traceProfile, L"overall-move") == 0 || wcscmp(traceProfile, L"overall-resize") == 0)) {
+				// handled above
+			} else if (traceProfile && wcscmp(traceProfile, L"row-label-select") == 0) {
+				// Simulate hover (via bands) then click select row. Check rowLabelCount does not drop (title must not disappear).
+				Overlay_SelectForTest("ROW", "research");
+				// Simulate the common case (native PPT sel remains CHART_ROOT group after item click, because we suppress children).
+				// Pre-fix this would cause Tick to set full-chart selScreenRect/frameRect (taking over entire drawing area).
+				try {
+					PowerPoint::ShapesPtr shs = slide->GetShapes();
+					long nn = shs->GetCount();
+					for (long ii=1; ii<=nn; ++ii) {
+						auto s = shs->Item(_variant_t(ii));
+						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+							s->Select(Office::msoTrue);
+							break;
+						}
+					}
+				} catch(...) {}
+				PumpFor(200);
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"row-then-overall") == 0) {
+				// Select row, then overall component. Must not cause content (graph + titles) to disappear.
+				Overlay_SelectForTest("ROW", "research");
+				PumpFor(150);
+				captureStep("row-sel", traceProfile);
+				// Select overall (native root like grip or direct)
+				try {
+					PowerPoint::ShapesPtr shs = slide->GetShapes();
+					long nn = shs->GetCount();
+					for (long ii=1; ii<=nn; ++ii) {
+						auto s = shs->Item(_variant_t(ii));
+						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+							s->Select(Office::msoTrue);
+							break;
+						}
+					}
+				} catch(...) {}
+				PumpFor(200);
+				captureStep("overall-after", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"task-select-progress") == 0) {
+				// Select a task body, verify TASK sel, progress should be actionable and visible.
+				Overlay_SelectForTest("TASK", "discovery");
+				// Simulate the common case (native PPT sel remains CHART_ROOT group after item click).
+				// Pre-fix this caused full-chart takeover in selScreenRect/frameRect.
+				try {
+					PowerPoint::ShapesPtr shs = slide->GetShapes();
+					long nn = shs->GetCount();
+					for (long ii=1; ii<=nn; ++ii) {
+						auto s = shs->Item(_variant_t(ii));
+						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+							s->Select(Office::msoTrue);
+							break;
+						}
+					}
+				} catch(...) {}
+				Overlay_InvalidateAppBarForTest();
+				PumpFor(400);  // longer settle for bands after select
+				captureStep("task-sel", traceProfile);
+				// Test edit without breaking visuals (percent controls now in TASK appbar).
+				Overlay_PerformAppBarCommandForTest(HtCmd_PercentPlus10);
+				Overlay_InvalidateAppBarForTest();
+				PumpFor(400);  // longer for rebuild after edit
+				captureStep("+1", traceProfile);
+				Overlay_PerformAppBarCommandForTest(HtCmd_PercentMinus10);
+				Overlay_InvalidateAppBarForTest();
+				PumpFor(400);
+				captureStep("+3", traceProfile);
+			} else {
+				// default: just exercise select + a row op
+				Overlay_PerformAppBarCommandForTest(HtCmd_AddRowBelow);
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			}
+
+			OverlayStop();
+			if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
+			::CoUninitialize();
+			return 0;
 		}
 
 		Overlay_SetHostActiveOverrideForTest(1);

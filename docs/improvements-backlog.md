@@ -1,5 +1,7 @@
 # PowerPlanner — Improvements Backlog (handoff)
 
+> Agent self-improvement note (2026-07-10): v2.4.0 added robust before/immed/delayed trace + invariants in native/tools/harness_driver + C++ seams. Always use `python native/tools/harness_driver.py trace <profile> --check-invariants` (and scenario) + screenshots when touching selection, appbar, row ops, or RebuildChart paths. Update this file + PLAN.md + docs/native-agent-feedback-loop-plan.md after learnings.
+
 A broad brainstorm of improvements and tests, grouped by area and ID-prefixed so
 they're easy to reference/assign. Not prioritized; pick by value. Items reference
 real files where useful. "(spec)" means it should be reflected in `spec/`.

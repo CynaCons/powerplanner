@@ -1,0 +1,9 @@
+{
+  "name": "trace_task_select_progress",
+  "description": "E2E: Click task body to select (TASK), verify highlight and that progress editing is available and visible (no overlap hiding text or controls). Change percent, verify state and no visual breakage.",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "task-select-progress"],
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true
+}
