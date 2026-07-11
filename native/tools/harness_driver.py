@@ -558,7 +558,7 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
     # markers (no chrome-state fields), so exclude them from generic step
     # invariants -- otherwise missing ownSelKind/appBarVisible/rowCount/etc.
     # would read as defaults and trip false positives on every other rule.
-    steps = [s for s in tr.steps if s.step not in ("OPDISPATCH", "OPLATENCY")]
+    steps = [s for s in tr.steps if s.step not in ("OPDISPATCH", "OPLATENCY", "OPPHASES")]
     if not steps:
         results.append({"rule": "has_trace_steps", "passed": False, "detail": "no steps captured"})
         return results
@@ -699,12 +699,8 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
     item_kinds = {'ROW', 'TASK', 'MILESTONE', 'MARKER', 'TEXT'}
     takeover = False
     for s in steps:
-        # Skip the immed step while the wholesale RebuildChart window is open
-        # (taskCount dips to 0; sel rect falls back chart-sized until shapes
-        # re-emit). KNOWN v2.5.3 smoothness defect (SR-SMO-01) — once in-place
-        # reconcile lands, drop this skip so transients fail hard again.
-        if s.step == 'immed' and s.state.get('taskCount', -1) == 0:
-            continue
+        # v2.5.3: in-place reconcile landed (SR-SMO-01) — the immed step is no
+        # longer skipped; transient takeovers now fail hard.
         kind = s.state.get('ownSelKind', '')
         if kind in item_kinds:
             cr = s.state.get('chartRect') or {}
@@ -746,12 +742,9 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
 
     if profile and profile == "hover-quick-add-task":
         pre_tasks = steps[0].state.get("taskCount", 0) if steps else 0
-        # Settled-state semantics: the wholesale RebuildChart briefly deletes
-        # all task shapes, so the immed capture can read taskCount=0 (KNOWN
-        # v2.5.3 smoothness defect — SR-SMO-01 in-place reconcile will make
-        # the dip a hard failure via a no_content_dip invariant; until then
-        # assert the settled steps only).
-        settled_steps = [s for s in steps if s.step in ("+1", "+3")]
+        # v2.5.3: SR-SMO-01 in-place reconcile landed — assert immed too, so a
+        # rebuild dip (taskCount falling back to 0 mid-op) fails hard.
+        settled_steps = [s for s in steps if s.step in ("immed", "+1", "+3")]
         post_steps = [s for s in steps if s.step in ("immed", "+1", "+3")]
         task_delta_ok = all(
             s.state.get("taskCount", 0) == pre_tasks + 1 for s in settled_steps

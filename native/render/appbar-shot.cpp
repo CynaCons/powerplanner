@@ -582,6 +582,10 @@ int wmain(int argc, wchar_t** argv) {
 				Overlay_PerformAppBarCommandForTest(cmd);
 				const ULONGLONG elapsed = ::GetTickCount64() - t0;
 				wprintf(L"TRACE OPLATENCY: {\"ms\":%llu}\n", (unsigned long long)elapsed);
+				char phaseBuf[512];
+				const int phaseLen = Gantt_GetLastOpPhasesForTest(phaseBuf, (int)sizeof(phaseBuf));
+				if (phaseLen > 0)
+					wprintf(L"TRACE OPPHASES: %hs\n", phaseBuf);
 			};
 
 			// Pre setup depends on profile. Flows whose op IS the selection

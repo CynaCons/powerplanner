@@ -12,6 +12,7 @@
 #include <vector>
 #include <cstdio>
 #include <cmath>
+#include <cstring>
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -94,7 +95,10 @@ void WriteChartRootTags(PowerPoint::ShapePtr group, const PpDocument& doc, const
 }
 
 namespace {
-static void CommitSceneCacheFromGroup(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc);
+static void CommitSceneCacheFromGroup(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc,
+	const std::string& minD, const std::string& maxD, long pad, float ptPerDay);
+static float GetSlideWidthCached(const PowerPoint::_ApplicationPtr& app, IDispatch* pApp);
+static void StoreCacheSlideId(const PowerPoint::_SlidePtr& slide);
 }
 
 HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, const std::string& selectId) {
@@ -102,8 +106,9 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, 
 	int count = 0;
 	PowerPoint::_ApplicationPtr app(pApp);
 	try {
-		PowerPoint::_PresentationPtr pres = app->GetActivePresentation();
-		const float slideW = (float)pres->GetPageSetup()->GetSlideWidth();
+		// Route through the per-app cache so the FIRST fast-path op after a
+		// fresh insert reuses this width instead of paying the COM chain again.
+		const float slideW = GetSlideWidthCached(app, pApp);
 		PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
 		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
 		PowerPoint::ShapesPtr shapes = slide->GetShapes();
@@ -143,7 +148,8 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, 
 					}
 				}
 			}
-			CommitSceneCacheFromGroup(group, sc, doc);
+			CommitSceneCacheFromGroup(group, sc, doc, minD, maxD, pad, ptPerDay);
+			StoreCacheSlideId(slide);
 		}
 	}
 	catch (const _com_error& e) {
@@ -204,14 +210,100 @@ static Scene g_lastScene;
 static std::map<ShapeMapKey, PowerPoint::ShapePtr> g_shapeMap;
 static bool g_sceneCacheValid = false;
 static long g_chartRootShapeId = 0;
+// Cached CHART_ROOT group ShapePtr + the id of the slide it lives on (same
+// trust model / dangle guard as g_shapeMap). Lets UpdateGantt's fast path reuse
+// the group WITHOUT re-walking the slide — but ONLY after confirming the ACTIVE
+// slide id still matches g_cacheSlideId (guards against slide/presentation
+// switches leaving a valid-but-foreign group ptr) AND GetId()==g_chartRootShapeId
+// (dangling/re-grouped charts throw or fail and fall through to the full walk).
+static PowerPoint::ShapePtr g_cacheGroup;
+static long g_cacheSlideId = 0;
 static std::string g_cacheDocJson;
+// Parsed form of g_cacheDocJson (== the doc last written to PP_DOC). Op paths
+// copy this out via Gantt_TryGetCachedDoc to skip a PP_DOC tag read + parse.
+static PpDocument g_cacheDoc;
+static std::string g_cacheMinD, g_cacheMaxD;
+static long g_cachePad = 0;
+static float g_cachePtPerDay = 0.0f;
+// Slide width in points, cached per Application (constant unless page setup
+// changes). Frozen alongside the scene projection so consecutive fast-path ops
+// skip the GetActivePresentation->GetPageSetup->GetSlideWidth COM chain; any
+// cache invalidation (structural edit, fast-path miss) forces a refetch.
+static IDispatch* g_cacheSlideWApp = nullptr;
+static float g_cacheSlideW = 0.0f;
+static std::string g_lastAppliedSelectId;
+// Set by ReadGanttDocFromSlide when it resolves the active slide; consumed once
+// by UpdateGantt on the same op thread to skip a duplicate GetActiveWindow chain.
+static long g_opHandoffSlideId = 0;
+static PowerPoint::_SlidePtr g_opHandoffSlide;
+
+struct OpPhaseTimings {
+	uint64_t sceneBuildMs = 0;
+	uint64_t keyCompareMs = 0;
+	uint64_t primWritesMs = 0;
+	int primWriteCount = 0;
+	uint64_t docTagWriteMs = 0;
+	uint64_t framePreserveMs = 0;
+	uint64_t reselectMs = 0;
+	bool fastPathHit = false;
+	// Cost of obtaining the document(s) for the op in Overlay.cpp's dispatch
+	// path (op-path read + RebuildChart's structural read). Set by
+	// ReadGanttDocFromSlide BEFORE UpdateGantt runs, so ResetOpPhases (called
+	// at UpdateGantt entry) deliberately preserves these three fields.
+	uint64_t docReadMs = 0;
+	bool docReadCached = false;   // every doc read this op was served from cache
+	uint64_t dispatchTotalMs = 0; // full app-bar op dispatch wall time (0 = unmeasured)
+};
+static OpPhaseTimings g_lastOpPhases;
+
+static void ResetOpPhases() {
+	// Preserve the doc-read / dispatch fields: they are recorded by the
+	// Overlay op-dispatch path BEFORE UpdateGantt (hence before this reset),
+	// so zeroing them here would erase the very measurement we report.
+	const uint64_t docRead = g_lastOpPhases.docReadMs;
+	const bool docCached = g_lastOpPhases.docReadCached;
+	const uint64_t dispatch = g_lastOpPhases.dispatchTotalMs;
+	g_lastOpPhases = {};
+	g_lastOpPhases.docReadMs = docRead;
+	g_lastOpPhases.docReadCached = docCached;
+	g_lastOpPhases.dispatchTotalMs = dispatch;
+}
+
+static uint64_t ElapsedMs(ULONGLONG t0) {
+	return ::GetTickCount64() - t0;
+}
 
 static void InvalidateSceneCache() {
 	g_sceneCacheValid = false;
 	g_shapeMap.clear();
 	g_lastScene.prims.clear();
 	g_chartRootShapeId = 0;
+	g_cacheGroup = nullptr;
+	g_cacheSlideId = 0;
 	g_cacheDocJson.clear();
+	g_cacheDoc = PpDocument{};
+	g_cacheMinD.clear();
+	g_cacheMaxD.clear();
+	g_cachePad = 0;
+	g_cachePtPerDay = 0.0f;
+	g_cacheSlideWApp = nullptr;
+	g_cacheSlideW = 0.0f;
+	GanttJson_InvalidateParsedCache();
+}
+
+// Slide width (points) cached per Application; refetched when the cache was
+// invalidated or the app object changed. See g_cacheSlideW rationale above.
+static float GetSlideWidthCached(const PowerPoint::_ApplicationPtr& app, IDispatch* pApp) {
+	if (pApp && pApp == g_cacheSlideWApp && g_cacheSlideW > 0.0f) return g_cacheSlideW;
+	const float w = (float)app->GetActivePresentation()->GetPageSetup()->GetSlideWidth();
+	if (w > 0.0f) { g_cacheSlideWApp = pApp; g_cacheSlideW = w; }
+	return w;
+}
+
+// Bind the cached CHART_ROOT group to the slide it was just committed on, so
+// UpdateGantt's fast path only reuses it while that slide is the active one.
+static void StoreCacheSlideId(const PowerPoint::_SlidePtr& slide) {
+	try { g_cacheSlideId = slide ? slide->GetSlideID() : 0; } catch (...) { g_cacheSlideId = 0; }
 }
 
 static std::vector<MatchKey> BuildScenePrimKeys(const Scene& sc) {
@@ -228,6 +320,23 @@ static bool PrimKeyMultisetEqual(const Scene& a, const Scene& b) {
 	std::sort(ka.begin(), ka.end());
 	std::sort(kb.begin(), kb.end());
 	return ka == kb;
+}
+
+// O(n) fast-path key gate: emission order is stable for in-place reconcile ops
+// (nudge/color/percent). Falls back to the sorted multiset check on mismatch so
+// we never reject a valid fast path when only prim order permutes.
+static bool PrimKeysFastPathEqual(const Scene& a, const Scene& b) {
+	if (a.prims.size() != b.prims.size()) return false;
+	for (size_t i = 0; i < a.prims.size(); ++i) {
+		if (a.prims[i].tagKind != b.prims[i].tagKind || a.prims[i].tagId != b.prims[i].tagId)
+			return PrimKeyMultisetEqual(a, b);
+	}
+	std::vector<MatchKey> ka = BuildScenePrimKeys(a);
+	std::vector<MatchKey> kb = BuildScenePrimKeys(b);
+	for (size_t i = 0; i < ka.size(); ++i) {
+		if (ka[i] < kb[i] || kb[i] < ka[i]) return PrimKeyMultisetEqual(a, b);
+	}
+	return true;
 }
 
 static bool PrimVisualFieldsEqual(const Prim& a, const Prim& b) {
@@ -251,6 +360,12 @@ static void ApplyPrimWriteDelta(PowerPoint::ShapePtr ch, const Prim& oldP, const
 	const Style& os = oldP.style;
 	const Style& ns = newP.style;
 
+	const bool styleChanged = os.fill != ns.fill || os.fillBgr != ns.fillBgr
+		|| os.line != ns.line || os.lineBgr != ns.lineBgr || os.lineWeight != ns.lineWeight
+		|| os.textBgr != ns.textBgr || os.fontSize != ns.fontSize || os.bold != ns.bold
+		|| os.align != ns.align || os.arrowEnd != ns.arrowEnd || os.corner != ns.corner
+		|| os.dash != ns.dash;
+
 	if (newP.kind == PrimKind::Line || newP.kind == PrimKind::Connector) {
 		if (oldP.x != newP.x || oldP.y != newP.y || oldP.x2 != newP.x2 || oldP.y2 != newP.y2) {
 			ch->PutLeft((float)std::min(newP.x, newP.x2));
@@ -259,17 +374,19 @@ static void ApplyPrimWriteDelta(PowerPoint::ShapePtr ch, const Prim& oldP, const
 			ch->PutWidth(w > 0.0f ? w : 0.01f);
 			ch->PutHeight(h > 0.0f ? h : 0.01f);
 		}
-		PowerPoint::LineFormatPtr lf = ch->GetLine();
-		if (os.lineBgr != ns.lineBgr)
-			lf->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.lineBgr);
-		if (os.lineWeight != ns.lineWeight)
-			lf->PutWeight(ns.lineWeight);
-		if (newP.kind == PrimKind::Connector && os.arrowEnd != ns.arrowEnd) {
-			lf->PutBeginArrowheadStyle(Office::msoArrowheadNone);
-			lf->PutEndArrowheadStyle(ns.arrowEnd ? Office::msoArrowheadTriangle : Office::msoArrowheadNone);
+		if (styleChanged || LineDashStyle(oldP) != LineDashStyle(newP)) {
+			PowerPoint::LineFormatPtr lf = ch->GetLine();
+			if (os.lineBgr != ns.lineBgr)
+				lf->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.lineBgr);
+			if (os.lineWeight != ns.lineWeight)
+				lf->PutWeight(ns.lineWeight);
+			if (newP.kind == PrimKind::Connector && os.arrowEnd != ns.arrowEnd) {
+				lf->PutBeginArrowheadStyle(Office::msoArrowheadNone);
+				lf->PutEndArrowheadStyle(ns.arrowEnd ? Office::msoArrowheadTriangle : Office::msoArrowheadNone);
+			}
+			if (LineDashStyle(oldP) != LineDashStyle(newP))
+				lf->PutDashStyle(LineDashStyle(newP) ? Office::msoLineDashDot : Office::msoLineDash);
 		}
-		if (LineDashStyle(oldP) != LineDashStyle(newP))
-			lf->PutDashStyle(LineDashStyle(newP) ? Office::msoLineDashDot : Office::msoLineDash);
 		return;
 	}
 
@@ -278,20 +395,22 @@ static void ApplyPrimWriteDelta(PowerPoint::ShapePtr ch, const Prim& oldP, const
 	if (oldP.w != newP.w) ch->PutWidth(newP.w > 0.0f ? newP.w : 0.01f);
 	if (oldP.h != newP.h) ch->PutHeight(newP.h > 0.0f ? newP.h : 0.01f);
 
-	PowerPoint::FillFormatPtr fill = ch->GetFill();
-	if (os.fill != ns.fill)
-		fill->PutVisible(ns.fill ? Office::msoTrue : Office::msoFalse);
-	if (ns.fill && os.fillBgr != ns.fillBgr)
-		fill->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.fillBgr);
+	if (styleChanged) {
+		PowerPoint::FillFormatPtr fill = ch->GetFill();
+		if (os.fill != ns.fill)
+			fill->PutVisible(ns.fill ? Office::msoTrue : Office::msoFalse);
+		if (ns.fill && os.fillBgr != ns.fillBgr)
+			fill->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.fillBgr);
 
-	PowerPoint::LineFormatPtr line = ch->GetLine();
-	if (os.line != ns.line)
-		line->PutVisible(ns.line ? Office::msoTrue : Office::msoFalse);
-	if (ns.line) {
-		if (os.lineBgr != ns.lineBgr)
-			line->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.lineBgr);
-		if (os.lineWeight != ns.lineWeight)
-			line->PutWeight(ns.lineWeight);
+		PowerPoint::LineFormatPtr line = ch->GetLine();
+		if (os.line != ns.line)
+			line->PutVisible(ns.line ? Office::msoTrue : Office::msoFalse);
+		if (ns.line) {
+			if (os.lineBgr != ns.lineBgr)
+				line->GetForeColor()->PutPpRGB((Office::MsoRGBType)ns.lineBgr);
+			if (os.lineWeight != ns.lineWeight)
+				line->PutWeight(ns.lineWeight);
+		}
 	}
 
 	if (newP.kind == PrimKind::RoundRect && os.corner != ns.corner && ns.corner > 0.0f) {
@@ -327,10 +446,21 @@ static void ApplyPrimWriteDelta(PowerPoint::ShapePtr ch, const Prim& oldP, const
 }
 
 static void CommitSceneCache(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc,
-	const std::vector<PowerPoint::ShapePtr>& shapesByPrimIndex) {
+	const std::vector<PowerPoint::ShapePtr>& shapesByPrimIndex,
+	const std::string& minD, const std::string& maxD, long pad, float ptPerDay,
+	const std::string* precomputedDocJson = nullptr) {
 	g_lastScene = sc;
-	g_cacheDocJson = DocumentToJson(doc);
+	// Reuse the JSON already serialized for the PP_DOC tag write when the caller
+	// has it (fast path) — avoids a second DocumentToJson of the same document.
+	g_cacheDocJson = precomputedDocJson ? *precomputedDocJson : DocumentToJson(doc);
+	GanttJson_CommitParsedCache(g_cacheDocJson);
+	g_cacheDoc = doc;
 	g_chartRootShapeId = group->GetId();
+	g_cacheGroup = group;
+	g_cacheMinD = minD;
+	g_cacheMaxD = maxD;
+	g_cachePad = pad;
+	g_cachePtPerDay = ptPerDay;
 	g_shapeMap.clear();
 	std::vector<MatchKey> primKeys = BuildScenePrimKeys(sc);
 	for (size_t p = 0; p < sc.prims.size() && p < shapesByPrimIndex.size(); ++p) {
@@ -339,7 +469,21 @@ static void CommitSceneCache(PowerPoint::ShapePtr group, const Scene& sc, const 
 	g_sceneCacheValid = true;
 }
 
-static void CommitSceneCacheFromGroup(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc) {
+static bool BuildSceneForUpdate(const PpDocument& doc, float slideW, Scene* outScene,
+	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
+	if (g_sceneCacheValid && !g_cacheMinD.empty() && !g_cacheMaxD.empty()
+		&& DocDatesFitPaddedWindow(doc, g_cacheMinD, g_cacheMaxD, g_cachePad)) {
+		*outMinD = g_cacheMinD;
+		*outMaxD = g_cacheMaxD;
+		*outPad = g_cachePad;
+		*outPtPerDay = g_cachePtPerDay;
+		return BuildSceneWithProjection(doc, slideW, outScene, *outMinD, *outMaxD, *outPad, *outPtPerDay);
+	}
+	return BuildProjectedScene(doc, slideW, outScene, outMinD, outMaxD, outPad, outPtPerDay);
+}
+
+static void CommitSceneCacheFromGroup(PowerPoint::ShapePtr group, const Scene& sc, const PpDocument& doc,
+	const std::string& minD, const std::string& maxD, long pad, float ptPerDay) {
 	PowerPoint::GroupShapesPtr items = group->GetGroupItems();
 	long childCount = items->GetCount();
 	std::vector<std::pair<std::string, std::string>> childKindIds(childCount ? childCount : 0);
@@ -363,13 +507,22 @@ static void CommitSceneCacheFromGroup(PowerPoint::ShapePtr group, const Scene& s
 		auto it = childByKey.find(primKeys[p]);
 		if (it != childByKey.end()) byPrim[p] = it->second;
 	}
-	CommitSceneCache(group, sc, doc, byPrim);
+	CommitSceneCache(group, sc, doc, byPrim, minD, maxD, pad, ptPerDay);
+}
+
+// Fast-path tag write: PP_DOC only. PP_PROJ/PP_ROWY are unchanged when prim
+// keys are stable (color/nudge/percent within the frozen projection window).
+// Takes the pre-serialized JSON so the caller can reuse it for the scene cache.
+static void WriteChartRootDocTag(PowerPoint::ShapePtr group, const std::string& docJson) {
+	group->GetTags()->Add(_bstr_t(L"PP_DOC"), _bstr_t(Widen(docJson).c_str()));
 }
 
 // §2 fast path: pure C++ scene diff + write-only COM deltas (~10 calls/edit).
 static bool TryApplySceneDiffFast(PowerPoint::ShapePtr group, const PpDocument& doc, const Scene& newSc,
-	const std::string& minD, long pad, float ptPerDay, float slideW, const std::string& selectId) {
+	const std::string& minD, const std::string& maxD, long pad, float ptPerDay,
+	const std::string& selectId) {
 	try {
+		const ULONGLONG tPrim0 = ::GetTickCount64();
 		std::vector<MatchKey> newKeys = BuildScenePrimKeys(newSc);
 		std::map<ShapeMapKey, const Prim*> oldPrimByKey;
 		std::vector<MatchKey> oldKeys = BuildScenePrimKeys(g_lastScene);
@@ -383,26 +536,34 @@ static bool TryApplySceneDiffFast(PowerPoint::ShapePtr group, const PpDocument& 
 			if (oldIt == oldPrimByKey.end() || shIt == g_shapeMap.end()) return false;
 			const Prim& oldP = *oldIt->second;
 			const Prim& newP = newSc.prims[p];
-			if (!PrimVisualFieldsEqual(oldP, newP))
+			if (!PrimVisualFieldsEqual(oldP, newP)) {
 				ApplyPrimWriteDelta(shIt->second, oldP, newP);
+				++g_lastOpPhases.primWriteCount;
+			}
 		}
+		g_lastOpPhases.primWritesMs = ElapsedMs(tPrim0);
 
-		WriteChartRootTags(group, doc, minD, pad, ptPerDay, slideW);
+		const ULONGLONG tDoc0 = ::GetTickCount64();
+		std::string docJson = GanttJson_TryPatchFast(g_cacheDoc, doc);
+		if (docJson.empty()) docJson = TryPatchDocJson(g_cacheDoc, doc, g_cacheDocJson);
+		if (docJson.empty()) docJson = DocumentToJson(doc);
+		WriteChartRootDocTag(group, docJson);
+		g_lastOpPhases.docTagWriteMs = ElapsedMs(tDoc0);
+
 		std::vector<PowerPoint::ShapePtr> byPrim(newSc.prims.size());
 		for (size_t p = 0; p < newSc.prims.size(); ++p) {
 			auto it = g_shapeMap.find(ToShapeMapKey(newKeys[p]));
 			if (it != g_shapeMap.end()) byPrim[p] = it->second;
 		}
-		CommitSceneCache(group, newSc, doc, byPrim);
+		CommitSceneCache(group, newSc, doc, byPrim, minD, maxD, pad, ptPerDay, &docJson);
 
-		if (!selectId.empty()) {
-			for (size_t p = 0; p < newSc.prims.size(); ++p) {
-				if (newSc.prims[p].tagId == selectId) {
-					auto it = g_shapeMap.find(ToShapeMapKey(newKeys[p]));
-					if (it != g_shapeMap.end()) { it->second->Select(Office::msoTrue); break; }
-				}
-			}
-		}
+		// No native child re-select on the fast path: shapes were never
+		// deleted/recreated, so whatever native selection existed persists.
+		// Selecting a child here also fights the SR-SHP suppression contract
+		// (children are overlay-only selections; the poller would Unselect it
+		// within 150ms anyway) and costs a ~60ms COM Select() per op.
+		// Full reconcile keeps its re-select (shapes there ARE recreated).
+		g_lastAppliedSelectId = selectId;
 		return true;
 	} catch (const _com_error&) {
 		return false;
@@ -574,7 +735,7 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		{
 			std::vector<PowerPoint::ShapePtr> byPrim(sc.prims.size());
 			for (size_t p = 0; p < sc.prims.size(); ++p) byPrim[p] = children[primMatchChildIdx[p]];
-			CommitSceneCache(group, sc, doc, byPrim);
+			CommitSceneCache(group, sc, doc, byPrim, minD, maxD, pad, ptPerDay);
 		}
 
 		if (!selectId.empty()) {
@@ -717,7 +878,7 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		{
 			std::vector<PowerPoint::ShapePtr> byPrim(sc.prims.size());
 			for (size_t p = 0; p < sc.prims.size(); ++p) byPrim[p] = finalOrder[p];
-			CommitSceneCache(newGroup, sc, doc, byPrim);
+			CommitSceneCache(newGroup, sc, doc, byPrim, minD, maxD, pad, ptPerDay);
 		}
 
 		if (!selectId.empty()) {
@@ -770,25 +931,96 @@ static void PreserveChartRootFrame(IDispatch* pApp, PowerPoint::_SlidePtr slide,
 HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& selectId) {
 	if (!pApp) return E_POINTER;
 	PowerPoint::_ApplicationPtr app(pApp);
+	ResetOpPhases();
 
 	try {
-		PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
-		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
-		PowerPoint::ShapesPtr shapes = slide->GetShapes();
+		// Resolve the ACTIVE slide up front — needed both to gate cached-group
+		// reuse and by the slow path. Reuse the slide id ReadGanttDocFromSlide
+		// already fetched on this op thread when available (SR-SMO-02 round4).
+		long activeSlideId = 0;
+		PowerPoint::_SlidePtr slide;
+		if (g_opHandoffSlide) {
+			slide = g_opHandoffSlide;
+			g_opHandoffSlide = nullptr;
+			activeSlideId = g_opHandoffSlideId;
+			g_opHandoffSlideId = 0;
+		}
+		PowerPoint::DocumentWindowPtr win;
+		if (!slide) {
+			win = app->GetActiveWindow();
+			slide = win->GetView()->GetSlide();
+		}
+		if (activeSlideId == 0) {
+			try { activeSlideId = slide->GetSlideID(); } catch (...) { activeSlideId = 0; }
+		}
 
+		PowerPoint::ShapesPtr shapes;
+
+		// Fast-path group reuse (SR-SMO-02): reuse the cached CHART_ROOT ShapePtr
+		// (skip the per-shape slide walk) ONLY when it is (a) on the ACTIVE slide
+		// (activeSlideId == g_cacheSlideId — guards slide/presentation switches
+		// that leave a valid-but-foreign group ptr) and (b) still the same live
+		// chart (GetId()==g_chartRootShapeId; a dangling ptr throws and falls
+		// through). Same COM-failure-fallback trust model as g_shapeMap; never
+		// weakens correctness — any miss takes the authoritative walk below.
 		PowerPoint::ShapePtr group;
-		long n = shapes->GetCount();
-		for (long i = 1; i <= n; ++i) {
-			PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
-			_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
-			if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") { group = sh; break; }
+		bool groupIdValidated = false; // true when GetId() was checked THIS op (skip re-check at the fast-path gate)
+		if (g_sceneCacheValid && g_cacheGroup && activeSlideId != 0 && activeSlideId == g_cacheSlideId) {
+			try {
+				if (g_cacheGroup->GetId() == g_chartRootShapeId) { group = g_cacheGroup; groupIdValidated = true; }
+			} catch (const _com_error&) { group = nullptr; }
 		}
 		if (!group) {
-			// No existing chart to reconcile against: full emit.
-			int cnt = 0;
-			HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);
-			return hr;
+			shapes = slide->GetShapes();
+			long n = shapes->GetCount();
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+				_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") { group = sh; break; }
+			}
+			if (!group) {
+				// No existing chart to reconcile against: full emit.
+				int cnt = 0;
+				HRESULT hr = InsertGantt(pApp, doc, &cnt, selectId);
+				return hr;
+			}
 		}
+
+		const float slideW = GetSlideWidthCached(app, pApp);
+		Scene newSc; std::string minD, maxD; long pad = 0; float ptPerDay = 0.0f;
+		{
+			const ULONGLONG tScene0 = ::GetTickCount64();
+			if (!BuildSceneForUpdate(doc, slideW, &newSc, &minD, &maxD, &pad, &ptPerDay)) return E_FAIL;
+			g_lastOpPhases.sceneBuildMs = ElapsedMs(tScene0);
+		}
+
+		// §2 scene-diff fast path: skip full reconcile when prim keys are stable.
+		// Trust the in-memory scene cache (no per-op PP_DOC tag re-read — SR-SMO-02
+		// v2.5.3-latency-green); stale ShapePtrs or external tag edits fall back via
+		// TryApplySceneDiffFast / ReconcileChartRoot failure.
+		bool fastPathEligible = false;
+		{
+			const ULONGLONG tKey0 = ::GetTickCount64();
+			fastPathEligible = g_sceneCacheValid
+				&& (groupIdValidated || group->GetId() == g_chartRootShapeId)
+				&& PrimKeysFastPathEqual(newSc, g_lastScene);
+			g_lastOpPhases.keyCompareMs = ElapsedMs(tKey0);
+		}
+		if (fastPathEligible) {
+			if (TryApplySceneDiffFast(group, doc, newSc, minD, maxD, pad, ptPerDay, selectId)) {
+				g_lastOpPhases.fastPathHit = true;
+				g_cacheSlideId = activeSlideId; // keep group<->slide binding coherent
+				// Child-only deltas never move the CHART_ROOT frame — skip the
+				// slide-wide scan + frame read that PreserveChartRootFrame does.
+				return S_OK;
+			}
+			InvalidateSceneCache();
+		}
+
+		// Slow path (reconcile / re-emit) needs the live shapes; if the group came
+		// from the cache we skipped GetShapes above, so fetch it now. This is the
+		// rare path (structural edits / fast-path misses).
+		if (!shapes) shapes = slide->GetShapes();
 
 		// Capture the CHART_ROOT's frame BEFORE reconciling — this is whatever
 		// frame the chart currently has (fitted, user-resized, or natural), and
@@ -798,26 +1030,13 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		const float capWidth = group->GetWidth();
 		const float capHeight = group->GetHeight();
 
-		const float slideW = (float)app->GetActivePresentation()->GetPageSetup()->GetSlideWidth();
-		Scene newSc; std::string minD, maxD; long pad = 0; float ptPerDay = 0.0f;
-		if (!BuildProjectedScene(doc, slideW, &newSc, &minD, &maxD, &pad, &ptPerDay)) return E_FAIL;
-
-		// §2 scene-diff fast path: skip full reconcile when prim keys are stable.
-		if (g_sceneCacheValid && group->GetId() == g_chartRootShapeId && PrimKeyMultisetEqual(newSc, g_lastScene)) {
-			_bstr_t docTag = group->GetTags()->Item(_bstr_t(L"PP_DOC"));
-			std::string slideDocJson = docTag.length() ? Narrow((const wchar_t*)docTag) : "";
-			if (slideDocJson == g_cacheDocJson) {
-				if (TryApplySceneDiffFast(group, doc, newSc, minD, pad, ptPerDay, slideW, selectId)) {
-					PreserveChartRootFrame(pApp, slide, capLeft, capTop, capWidth, capHeight);
-					return S_OK;
-				}
-				InvalidateSceneCache();
-			}
-		}
-
 		HRESULT hr = ReconcileChartRoot(app, slide, group, doc, selectId);
 		if (SUCCEEDED(hr)) {
+			const ULONGLONG tFrame0 = ::GetTickCount64();
 			PreserveChartRootFrame(pApp, slide, capLeft, capTop, capWidth, capHeight);
+			g_lastOpPhases.framePreserveMs = ElapsedMs(tFrame0);
+			g_cacheSlideId = activeSlideId; // ReconcileChartRoot re-committed the cache on this slide
+			if (!selectId.empty()) g_lastAppliedSelectId = selectId;
 			return hr;
 		}
 
@@ -893,6 +1112,107 @@ std::string ReadGanttFromSlide(IDispatch* pApp) {
 		}
 	} catch (const _com_error&) { return ""; }
 	return "";
+}
+
+bool Gantt_TryGetCachedDoc(long chartRootShapeId, PpDocument* out) {
+	if (!out) return false;
+	// Same trust boundary as UpdateGantt's scene-diff fast path: valid cache
+	// AND owned by this exact group id. Deep-copies so the caller may mutate
+	// freely without touching the cache.
+	if (!g_sceneCacheValid || chartRootShapeId != g_chartRootShapeId) return false;
+	*out = g_cacheDoc;
+	return true;
+}
+
+bool Gantt_TryPeekCachedDoc(PpDocument* out) {
+	if (!out || !g_sceneCacheValid) return false;
+	*out = g_cacheDoc;
+	return true;
+}
+
+void Gantt_SetOpDispatchTotalMs(unsigned long long ms) {
+	g_lastOpPhases.dispatchTotalMs = (uint64_t)ms;
+}
+
+bool ReadGanttDocFromSlide(IDispatch* pApp, PpDocument* out, bool accumulate) {
+	if (!out) return false;
+	const ULONGLONG t0 = ::GetTickCount64();
+	if (!accumulate) {
+		// Start a fresh op doc-read window. dispatchTotalMs is (re)set here too
+		// so an op that never reaches HandleAppBarCommand's RAII timer (hotkey,
+		// drag commit, ...) honestly reports 0 rather than a stale value; the
+		// timer overwrites it at op end for app-bar dispatches.
+		g_lastOpPhases.docReadMs = 0;
+		g_lastOpPhases.docReadCached = true;
+		g_lastOpPhases.dispatchTotalMs = 0;
+	}
+	bool ok = false;
+	bool cached = false;
+	if (pApp) {
+		try {
+			// Fast path: scene cache owns the last-written doc for this chart on
+			// this slide — skip the per-shape tag walk when the active slide id
+			// still matches (same guard as UpdateGantt's cached-group reuse).
+			if (g_sceneCacheValid && g_chartRootShapeId != 0 && g_cacheSlideId != 0) {
+				PowerPoint::_ApplicationPtr app(pApp);
+				PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+				long activeSlideId = 0;
+				try { activeSlideId = slide->GetSlideID(); } catch (...) {}
+				if (activeSlideId != 0 && activeSlideId == g_cacheSlideId) {
+					g_opHandoffSlideId = activeSlideId;
+					g_opHandoffSlide = slide;
+					if (Gantt_TryGetCachedDoc(g_chartRootShapeId, out)) {
+						ok = true;
+						cached = true;
+					}
+				}
+			}
+			if (!ok) {
+				g_opHandoffSlideId = 0;
+				g_opHandoffSlide = nullptr;
+				PowerPoint::_ApplicationPtr app(pApp);
+				PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+				long activeSlideId = 0;
+				try { activeSlideId = slide->GetSlideID(); } catch (...) {}
+				if (activeSlideId != 0) {
+					g_opHandoffSlideId = activeSlideId;
+					g_opHandoffSlide = slide;
+				}
+				PowerPoint::ShapesPtr shapes = slide->GetShapes();
+				long n = shapes->GetCount();
+				for (long i = 1; i <= n; ++i) {
+					PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+					_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+					if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") {
+						const long id = sh->GetId();
+						if (Gantt_TryGetCachedDoc(id, out)) {
+							ok = true;
+							cached = true;
+						} else {
+							// Cache miss (invalid, or a different group id after an
+							// external undo/edit): full read + parse fallback.
+							std::string json = Narrow((const wchar_t*)sh->GetTags()->Item(_bstr_t(L"PP_DOC")));
+							if (!json.empty()) {
+								*out = DocumentFromJson(json);
+								ok = true;
+							}
+						}
+						break;
+					}
+				}
+			}
+		} catch (const _com_error&) {
+			g_opHandoffSlideId = 0;
+			g_opHandoffSlide = nullptr;
+			ok = false;
+			cached = false;
+		}
+	}
+	g_lastOpPhases.docReadMs += ElapsedMs(t0);
+	// docReadCached == "were ALL reads this op served from cache" (AND across
+	// the op-path read and RebuildChart's read).
+	g_lastOpPhases.docReadCached = g_lastOpPhases.docReadCached && cached;
+	return ok;
 }
 
 bool ParseProj(const std::string& projJson, PpProj* out) {
@@ -1255,4 +1575,29 @@ HRESULT FitChartRootToSlide(IDispatch* pApp) {
 	catch (const _com_error& e) { return e.Error() ? e.Error() : E_FAIL; }
 	catch (const std::exception&) { return E_FAIL; }
 	catch (...) { return E_FAIL; }
+}
+
+int Gantt_GetLastOpPhasesForTest(char* buf, int len) {
+	if (!buf || len < 2) return 0;
+	const OpPhaseTimings& p = g_lastOpPhases;
+	char tmp[512];
+	::sprintf_s(tmp, sizeof(tmp),
+		"{\"sceneBuild\":%llu,\"keyCompare\":%llu,\"primWrites\":%llu,\"primWriteCount\":%d,"
+		"\"docTagWrite\":%llu,\"framePreserve\":%llu,\"reselect\":%llu,\"fastPath\":%s,"
+		"\"docRead\":%llu,\"docReadCached\":%s,\"dispatchTotal\":%llu}",
+		(unsigned long long)p.sceneBuildMs,
+		(unsigned long long)p.keyCompareMs,
+		(unsigned long long)p.primWritesMs,
+		p.primWriteCount,
+		(unsigned long long)p.docTagWriteMs,
+		(unsigned long long)p.framePreserveMs,
+		(unsigned long long)p.reselectMs,
+		p.fastPathHit ? "true" : "false",
+		(unsigned long long)p.docReadMs,
+		p.docReadCached ? "true" : "false",
+		(unsigned long long)p.dispatchTotalMs);
+	const int n = (int)::strlen(tmp);
+	if (n >= len) return 0;
+	::memcpy(buf, tmp, (size_t)n + 1);
+	return n;
 }

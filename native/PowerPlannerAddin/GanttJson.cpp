@@ -3,6 +3,26 @@
 
 using json = nlohmann::json;
 
+static json g_parsedDocCache;
+static bool g_parsedDocCacheValid = false;
+
+void GanttJson_InvalidateParsedCache() {
+	g_parsedDocCacheValid = false;
+}
+
+void GanttJson_CommitParsedCache(const std::string& docJson) {
+	if (docJson.empty()) {
+		g_parsedDocCacheValid = false;
+		return;
+	}
+	try {
+		g_parsedDocCache = json::parse(docJson);
+		g_parsedDocCacheValid = true;
+	} catch (...) {
+		g_parsedDocCacheValid = false;
+	}
+}
+
 static std::string getStr(const json& j, const char* key) {
 	auto it = j.find(key);
 	if (it == j.end() || !it->is_string()) return "";
@@ -66,6 +86,145 @@ std::string DocumentToJson(const PpDocument& d) {
 	}
 	j["style"] = { {"theme", "light"}, {"preset", "default"} };
 	return j.dump();
+}
+
+static bool IsStructuralDocDelta(const PpDocument& before, const PpDocument& after) {
+	if (before.rows.size() != after.rows.size()) return true;
+	if (before.tasks.size() != after.tasks.size()) return true;
+	if (before.milestones.size() != after.milestones.size()) return true;
+	if (before.markers.size() != after.markers.size()) return true;
+	if (before.texts.size() != after.texts.size()) return true;
+	if (before.deps.size() != after.deps.size()) return true;
+	if (before.brackets.size() != after.brackets.size()) return true;
+	if (before.scale != after.scale) return true;
+	if (before.gridDensity != after.gridDensity) return true;
+	if (before.title != after.title) return true;
+	if (before.railLabels != after.railLabels) return true;
+	if (before.gridStyle != after.gridStyle) return true;
+	for (size_t i = 0; i < before.rows.size(); ++i) {
+		if (before.rows[i].id != after.rows[i].id) return true;
+	}
+	for (size_t i = 0; i < before.tasks.size(); ++i) {
+		if (before.tasks[i].id != after.tasks[i].id || before.tasks[i].rowId != after.tasks[i].rowId)
+			return true;
+	}
+	for (size_t i = 0; i < before.milestones.size(); ++i) {
+		if (before.milestones[i].id != after.milestones[i].id
+			|| before.milestones[i].rowId != after.milestones[i].rowId)
+			return true;
+	}
+	for (size_t i = 0; i < before.markers.size(); ++i) {
+		if (before.markers[i].id != after.markers[i].id) return true;
+	}
+	for (size_t i = 0; i < before.deps.size(); ++i) {
+		if (before.deps[i].id != after.deps[i].id
+			|| before.deps[i].from != after.deps[i].from
+			|| before.deps[i].to != after.deps[i].to
+			|| before.deps[i].type != after.deps[i].type)
+			return true;
+	}
+	return false;
+}
+
+static bool ApplyDocDeltaToJson(const PpDocument& before, const PpDocument& after, json& j) {
+	if (IsStructuralDocDelta(before, after)) return false;
+	bool any = false;
+
+	for (size_t i = 0; i < after.tasks.size(); ++i) {
+		const PpTask& bt = before.tasks[i];
+		const PpTask& at = after.tasks[i];
+		if (bt.label != at.label || bt.labelPlacement != at.labelPlacement) return false;
+		if (bt.start == at.start && bt.end == at.end && bt.percent == at.percent && bt.color == at.color)
+			continue;
+		any = true;
+		for (auto& tt : j["tasks"]) {
+			if (tt.value("id", "") != at.id) continue;
+			tt["start"] = at.start;
+			tt["end"] = at.end;
+			tt["percentComplete"] = at.percent;
+			if (!at.color.empty()) tt["color"] = at.color;
+			else tt.erase("color");
+			if (!at.labelPlacement.empty()) tt["labelPlacement"] = at.labelPlacement;
+			else tt.erase("labelPlacement");
+			break;
+		}
+	}
+
+	for (size_t i = 0; i < after.milestones.size(); ++i) {
+		const PpMilestone& bm = before.milestones[i];
+		const PpMilestone& am = after.milestones[i];
+		if (bm.label != am.label) return false;
+		if (bm.date == am.date && bm.color == am.color) continue;
+		any = true;
+		for (auto& mm : j["milestones"]) {
+			if (mm.value("id", "") != am.id) continue;
+			mm["date"] = am.date;
+			if (!am.color.empty()) mm["color"] = am.color;
+			else mm.erase("color");
+			break;
+		}
+	}
+
+	for (size_t i = 0; i < after.markers.size(); ++i) {
+		const PpMarker& bm = before.markers[i];
+		const PpMarker& am = after.markers[i];
+		if (bm.label != am.label || bm.type != am.type) return false;
+		if (bm.date == am.date && bm.color == am.color) continue;
+		any = true;
+		for (auto& mk : j["markers"]) {
+			if (mk.value("id", "") != am.id) continue;
+			mk["date"] = am.date;
+			if (!am.color.empty()) mk["color"] = am.color;
+			else mk.erase("color");
+			break;
+		}
+	}
+
+	for (size_t i = 0; i < after.texts.size(); ++i) {
+		const PpText& bt = before.texts[i];
+		const PpText& at = after.texts[i];
+		if (bt.label != at.label || bt.anchorId != at.anchorId || bt.rowId != at.rowId
+			|| bt.date != at.date)
+			return false;
+		if (bt.dx == at.dx && bt.dy == at.dy && bt.color == at.color) continue;
+		any = true;
+		if (!j.contains("texts")) return false;
+		for (auto& tx : j["texts"]) {
+			if (tx.value("id", "") != at.id) continue;
+			tx["dx"] = at.dx;
+			tx["dy"] = at.dy;
+			if (!at.color.empty()) tx["color"] = at.color;
+			else tx.erase("color");
+			break;
+		}
+	}
+
+	return any;
+}
+
+std::string GanttJson_TryPatchFast(const PpDocument& before, const PpDocument& after) {
+	if (!g_parsedDocCacheValid) return "";
+	try {
+		json j = g_parsedDocCache;
+		if (!ApplyDocDeltaToJson(before, after, j)) return "";
+		const std::string out = j.dump();
+		g_parsedDocCache = std::move(j);
+		return out;
+	} catch (...) {
+		return "";
+	}
+}
+
+std::string TryPatchDocJson(const PpDocument& before, const PpDocument& after,
+	const std::string& cachedJson) {
+	if (cachedJson.empty()) return "";
+	try {
+		json j = json::parse(cachedJson);
+		if (!ApplyDocDeltaToJson(before, after, j)) return "";
+		return j.dump();
+	} catch (...) {
+		return "";
+	}
 }
 
 PpDocument DocumentFromJson(const std::string& jsonStr) {

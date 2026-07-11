@@ -716,6 +716,48 @@ static bool RunThemeTokenChecks() {
 	Scene sc; std::string mn, mx; long pad = 0; float ppd = 0.0f;
 	if (!Check(BuildProjectedScene(d, 960.0f, &sc, &mn, &mx, &pad, &ppd), "BuildProjectedScene succeeds")) return false;
 
+	// v2.5.3-latency-green: in-range nudge keeps the frozen projection window so
+	// prim keys stay stable for the scene-diff fast path.
+	{
+		PpDocument dn = d;
+		dn.tasks[0].start = DaysToDate(DateToDays(dn.tasks[0].start) + 1);
+		dn.tasks[0].end = DaysToDate(DateToDays(dn.tasks[0].end) + 1);
+		ok = Check(DocDatesFitPaddedWindow(dn, mn, mx, pad), "nudge +1d fits padded projection window") && ok;
+		Scene scFrozen;
+		ok = Check(BuildSceneWithProjection(dn, 960.0f, &scFrozen, mn, mx, pad, ppd), "frozen-window scene builds") && ok;
+		ok = Check(scFrozen.prims.size() == sc.prims.size(), "frozen nudge keeps prim count") && ok;
+		Scene scFresh; std::string fn, fx; long fp = 0; float fppd = 0.0f;
+		ok = Check(BuildProjectedScene(dn, 960.0f, &scFresh, &fn, &fx, &fp, &fppd), "fresh projection after nudge builds") && ok;
+		ok = Check(scFresh.prims.size() != sc.prims.size() || fn != mn, "fresh projection shifts window or prims") && ok;
+	}
+
+	// v2.5.3-latency-trim-round4: non-structural deltas patch cached JSON.
+	{
+		const std::string baseJson = DocumentToJson(d);
+		PpDocument dn = d;
+		dn.tasks[0].start = DaysToDate(DateToDays(dn.tasks[0].start) + 1);
+		dn.tasks[0].end = DaysToDate(DateToDays(dn.tasks[0].end) + 1);
+		const std::string patched = TryPatchDocJson(d, dn, baseJson);
+		ok = Check(!patched.empty(), "TryPatchDocJson patches in-range nudge") && ok;
+		ok = Check(DocumentFromJson(patched).tasks[0].start == dn.tasks[0].start,
+			"patched JSON carries nudged start date") && ok;
+		PpDocument dc = d;
+		dc.tasks[0].color = "#112233";
+		const std::string colorPatch = TryPatchDocJson(d, dc, baseJson);
+		ok = Check(!colorPatch.empty() && DocumentFromJson(colorPatch).tasks[0].color == "#112233",
+			"TryPatchDocJson patches task color") && ok;
+		PpDocument ds = d;
+		ds.rows.push_back(PpRow{"r9", "Extra", "", false});
+		ok = Check(TryPatchDocJson(d, ds, baseJson).empty(), "TryPatchDocJson rejects structural row add") && ok;
+		GanttJson_CommitParsedCache(baseJson);
+		PpDocument dn2 = d;
+		dn2.tasks[0].start = DaysToDate(DateToDays(dn2.tasks[0].start) + 2);
+		dn2.tasks[0].end = DaysToDate(DateToDays(dn2.tasks[0].end) + 2);
+		const std::string fastPatch = GanttJson_TryPatchFast(d, dn2);
+		ok = Check(!fastPatch.empty(), "GanttJson_TryPatchFast patches without re-parse") && ok;
+		GanttJson_InvalidateParsedCache();
+	}
+
 	// Colored task: track = blend(plum,.40); progress = solid plum; radius = bar.radius.
 	const Prim* tc = FindPrim(sc, "TASK", "tc");
 	ok = Check(tc && tc->style.fill && tc->style.fillBgr == Bgr(gt::BlendOnWhite(0x7A4FA3, 0.40f)),

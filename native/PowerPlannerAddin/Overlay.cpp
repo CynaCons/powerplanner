@@ -262,6 +262,10 @@ RECT g_chartScreenRect = {};
 static float g_chartLeftPt = 0.0f;
 static float g_chartWidthPt = 0.0f;
 RECT g_selScreenRect = {};
+// Last item-sized selection chrome rect (TASK/MILESTONE/MARKER/TEXT). Used
+// when the hit snapshot is empty post-RebuildChart so we never fall back to a
+// stale CHART_ROOT-sized g_selScreenRect until the next Tick() repopulates.
+RECT g_lastKnownItemSelRect = {};
 int g_windowOriginX = 0;
 int g_windowOriginY = 0;
 bool g_buttonsValid = false;
@@ -631,6 +635,35 @@ void ClearLinkMode() {
 	g_linkFromKind.clear();
 }
 
+static bool IsItemOwnSelKind(const std::string& kind) {
+	return kind == "TASK" || kind == "MILESTONE" || kind == "MARKER" || kind == "TEXT";
+}
+
+static HtItemKind OwnSelKindToHtItemKind(const std::string& kind) {
+	if (kind == "MILESTONE") return HtItemKind::Milestone;
+	if (kind == "MARKER") return HtItemKind::Marker;
+	if (kind == "TEXT") return HtItemKind::Text;
+	return HtItemKind::Task;
+}
+
+// Publish chrome for an item ownSel from the current hit snapshot when
+// possible. Returns true when g_selScreenRect was set to an item-sized rect.
+static bool TryPublishItemChromeFromSnapshot(const std::string& kind, const std::string& id) {
+	if (!IsItemOwnSelKind(kind) || id.empty()) return false;
+	const HtItemKind wantKind = OwnSelKindToHtItemKind(kind);
+	for (const auto& item : g_hitSnapshot.items) {
+		if (item.kind == wantKind && item.id == id) {
+			g_selKind = kind;
+			g_selId = id;
+			g_selScreenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+			g_hasSelectionChrome = true;
+			g_lastKnownItemSelRect = g_selScreenRect;
+			return true;
+		}
+	}
+	return false;
+}
+
 void SetOwnSelection(const std::string& kind, const std::string& id) {
 	if (id.empty()) {
 		ClearOwnSelection();
@@ -642,6 +675,28 @@ void SetOwnSelection(const std::string& kind, const std::string& id) {
 	}
 	g_ownSelKind = kind;
 	g_ownSelId = id;
+
+	// Post-RebuildChart the hit snapshot is empty until the next Tick(). While
+	// ownSel names a chart child, never leave stale CHART_ROOT-sized chrome from
+	// the prior native root selection (visible one-tick full-chart flash).
+	if (IsItemOwnSelKind(kind)) {
+		if (!::IsRectEmpty(&g_chartScreenRect) && SameRect(g_selScreenRect, g_chartScreenRect)) {
+			::SetRectEmpty(&g_selScreenRect);
+			::SetRectEmpty(&g_frameRect);
+			g_hasSelectionChrome = false;
+			g_selKind.clear();
+			g_selId.clear();
+			g_buttonsValid = false;
+		}
+		if (!TryPublishItemChromeFromSnapshot(kind, id) &&
+			!::IsRectEmpty(&g_lastKnownItemSelRect) &&
+			!SameRect(g_lastKnownItemSelRect, g_chartScreenRect)) {
+			g_selKind = kind;
+			g_selId = id;
+			g_selScreenRect = g_lastKnownItemSelRect;
+			g_hasSelectionChrome = true;
+		}
+	}
 }
 
 bool SameSelectionState(bool hasSelection, const RECT& selRect, const std::string& selId, const std::string& selKind) {
@@ -1080,9 +1135,9 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 // Recompute the chrome-facing selection state (g_selId/g_selKind/
 // g_hasSelectionChrome/g_selScreenRect) FROM the internal selection model
 // (g_ownSelKind/g_ownSelId) plus the current hit-test snapshot / row bands.
-// If the internally-selected element is no longer present in the snapshot
-// (deleted, or off a since-rebuilt chart), the internal selection itself is
-// cleared — there is nothing to draw chrome around.
+// When the snapshot is empty (post-RebuildChart, pre-next-Tick) ownSel is kept
+// and chrome stays empty/last-known — never chart-sized. When the snapshot is
+// populated but the item is gone, ownSel is cleared.
 void SyncSelectionChromeFromOwnSelection() {
 	ClearSelectionState();
 	if (g_ownSelKind.empty() || g_ownSelId.empty()) return;
@@ -1101,18 +1156,10 @@ void SyncSelectionChromeFromOwnSelection() {
 		return;
 	}
 
-	HtItemKind wantKind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone
-		: (g_ownSelKind == "MARKER") ? HtItemKind::Marker
-		: (g_ownSelKind == "TEXT") ? HtItemKind::Text : HtItemKind::Task;
-	for (const auto& item : g_hitSnapshot.items) {
-		if (item.kind == wantKind && item.id == g_ownSelId) {
-			g_selKind = g_ownSelKind;
-			g_selId = g_ownSelId;
-			g_selScreenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
-			g_hasSelectionChrome = true;
-			return;
-		}
-	}
+	if (TryPublishItemChromeFromSnapshot(g_ownSelKind, g_ownSelId)) return;
+	// Snapshot invalidated (empty) but ownSel still names a live item — keep
+	// ownSel, publish empty/last-known chrome, never chart-sized fallback.
+	if (g_hitSnapshot.items.empty()) return;
 	ClearOwnSelection();
 }
 
@@ -1280,9 +1327,8 @@ void CommitInlineEdit() {
 
 		g_mutating = true;
 		try {
-			std::string json = ReadGanttFromSlide(g_app);
-			if (!json.empty()) {
-				PpDocument doc = DocumentFromJson(json);
+			PpDocument doc;
+			if (ReadGanttDocFromSlide(g_app, &doc)) {
 				bool changed = (kind == "TITLE") ? SetTitle(doc, text) : SetEntityLabel(doc, id, text);
 				if (changed) RebuildChart(doc, kind == "ROW_LABEL" ? id : "");
 			}
@@ -1616,9 +1662,8 @@ void CommitCardEdit() {
 		CloseCardEditor();
 		g_mutating = true;
 		try {
-			std::string json = ReadGanttFromSlide(g_app);
-			if (!json.empty()) {
-				PpDocument doc = DocumentFromJson(json);
+			PpDocument doc;
+			if (ReadGanttDocFromSlide(g_app, &doc)) {
 				if (SetTextLabel(doc, id, label)) RebuildChart(doc, id);
 			}
 		}
@@ -1677,9 +1722,8 @@ void CommitCardEdit() {
 
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (!json.empty()) {
-			PpDocument doc = DocumentFromJson(json);
+		PpDocument doc;
+		if (ReadGanttDocFromSlide(g_app, &doc)) {
 			bool changed = false;
 			if (isMarker) {
 				changed = SetMarkerLabel(doc, id, label) || changed;
@@ -1745,9 +1789,8 @@ void CommitCardDelete() {
 
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (!json.empty()) {
-			PpDocument doc = DocumentFromJson(json);
+		PpDocument doc;
+		if (ReadGanttDocFromSlide(g_app, &doc)) {
 			if (DeleteById(doc, id)) {
 				RebuildChart(doc, "");
 				ClearOwnSelection();
@@ -1785,14 +1828,24 @@ void StartNewUndoEntryIfPossible() {
 	if (!g_app) return;
 	try {
 		IDispatch* appDisp = g_app;
-		DISPID dispid = 0;
-		LPOLESTR name = const_cast<LPOLESTR>(L"StartNewUndoEntry");
-		HRESULT hrIds = appDisp->GetIDsOfNames(IID_NULL, &name, 1, LOCALE_USER_DEFAULT, &dispid);
-		if (FAILED(hrIds)) {
-			wchar_t buf[80];
-			::swprintf_s(buf, 80, L"StartNewUndoEntry: GetIDsOfNames failed hr=0x%08lX", (unsigned long)hrIds);
-			OvLog(buf);
-			return;
+		// The DISPID for "StartNewUndoEntry" is stable for a given Application
+		// object, so resolve it once per app instance and reuse it — saving a
+		// GetIDsOfNames COM round-trip on every op dispatch (SR-SMO-02). Re-resolve
+		// if the cached app pointer changes (host restart / new automation object).
+		static IDispatch* s_undoDispApp = nullptr;
+		static DISPID s_undoDispId = 0;
+		DISPID dispid = s_undoDispId;
+		if (appDisp != s_undoDispApp || s_undoDispId == 0) {
+			LPOLESTR name = const_cast<LPOLESTR>(L"StartNewUndoEntry");
+			HRESULT hrIds = appDisp->GetIDsOfNames(IID_NULL, &name, 1, LOCALE_USER_DEFAULT, &dispid);
+			if (FAILED(hrIds)) {
+				wchar_t buf[80];
+				::swprintf_s(buf, 80, L"StartNewUndoEntry: GetIDsOfNames failed hr=0x%08lX", (unsigned long)hrIds);
+				OvLog(buf);
+				return;
+			}
+			s_undoDispApp = appDisp;
+			s_undoDispId = dispid;
 		}
 		DISPPARAMS dp = {};
 		EXCEPINFO ei = {};
@@ -1819,17 +1872,23 @@ void StartNewUndoEntryIfPossible() {
 
 // Append a debug line (shared with Connect's log).
 void OvLog(const wchar_t* msg) {
-	wchar_t path[MAX_PATH];
-	DWORD n = ::GetTempPathW(MAX_PATH, path);
-	if (!n || n > MAX_PATH) return;
-	::wcscat_s(path, MAX_PATH, L"powerplanner-addin.log");
-	HANDLE h = ::CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (h == INVALID_HANDLE_VALUE) return;
+	// Keep the log handle open for the process lifetime: per-call
+	// CreateFile/CloseHandle on a %TEMP% file costs ms and triggers AV scan
+	// spikes inside the measured op-dispatch window (SR-SMO-02). FILE_APPEND_DATA
+	// keeps multi-process appends atomic; the OS closes the handle at exit.
+	static HANDLE s_log = INVALID_HANDLE_VALUE;
+	if (s_log == INVALID_HANDLE_VALUE) {
+		wchar_t path[MAX_PATH];
+		DWORD n = ::GetTempPathW(MAX_PATH, path);
+		if (!n || n > MAX_PATH) return;
+		::wcscat_s(path, MAX_PATH, L"powerplanner-addin.log");
+		s_log = ::CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (s_log == INVALID_HANDLE_VALUE) return;
+	}
 	wchar_t pidBuf[48];
 	::swprintf_s(pidBuf, 48, L"[overlay %lu @%lu] ", ::GetCurrentProcessId(), ::GetTickCount());
 	std::wstring line = std::wstring(pidBuf) + msg + L"\r\n";
-	DWORD w = 0; ::WriteFile(h, line.c_str(), (DWORD)(line.size() * sizeof(wchar_t)), &w, NULL);
-	::CloseHandle(h);
+	DWORD w = 0; ::WriteFile(s_log, line.c_str(), (DWORD)(line.size() * sizeof(wchar_t)), &w, NULL);
 }
 
 // Select the CHART_ROOT group natively (used by the 'move chart' grip) so the
@@ -2493,9 +2552,8 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (!json.empty()) {
-			PpDocument doc = DocumentFromJson(json);
+		PpDocument doc;
+		if (ReadGanttDocFromSlide(g_app, &doc)) {
 			bool changed = false;
 			std::string selKind;
 			if (kind == DragKind::Milestone) {
@@ -2617,9 +2675,8 @@ void CommitCreateGesture(const std::string& rowId, long startDay, long endDay) {
 	if (rowId.empty() || !g_app || g_mutating) return;
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (!json.empty()) {
-			PpDocument doc = DocumentFromJson(json);
+		PpDocument doc;
+		if (ReadGanttDocFromSlide(g_app, &doc)) {
 			std::string startISO = DaysToDate(startDay);
 			std::string endISO = DaysToDate(endDay);
 			std::string newId = AddTask(doc, rowId, "New task", startISO, endISO);
@@ -4383,7 +4440,18 @@ void ShowAppBarInsertMenu(POINT clientPt) {
 		HandleAppBarCommand(cmd, POINT{ 0, 0 });
 }
 
+// SR-SMO-02 op-dispatch total timer: brackets an app-bar command so the
+// OPPHASES trace can report the full outside-UpdateGantt wall time
+// (dispatchTotal) alongside the inside-UpdateGantt phase breakdown. Covers all
+// early-return paths via RAII. Only app-bar dispatch is timed; other op entries
+// (hotkey/drag) report dispatchTotal=0 (reset by ReadGanttDocFromSlide).
+struct OpDispatchTimer {
+	ULONGLONG t0 = ::GetTickCount64();
+	~OpDispatchTimer() { Gantt_SetOpDispatchTotalMs((unsigned long long)(::GetTickCount64() - t0)); }
+};
+
 void HandleAppBarCommand(int cmd, POINT clientPt) {
+	OpDispatchTimer _opDispatchTimer;
 	if (cmd == kAppBarInsertMenuCmd) {
 		ShowAppBarInsertMenu(clientPt);
 		return;
@@ -4391,9 +4459,8 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 	if (cmd == HtCmd_InsertMarker && g_ownSelKind.empty() && g_app && !g_mutating) {
 		g_mutating = true;
 		try {
-			std::string json = ReadGanttFromSlide(g_app);
-			if (!json.empty()) {
-				PpDocument doc = DocumentFromJson(json);
+			PpDocument doc;
+			if (ReadGanttDocFromSlide(g_app, &doc)) {
 				const std::string dateISO = DefaultMarkerDateAtVisibleCenter();
 				const std::string newId = AddMarker(doc, "custom", "Marker", dateISO);
 				if (!newId.empty()) {
@@ -4542,9 +4609,8 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 	if (cmd == HtCmd_ToggleRailLabels && g_app && !g_mutating) {
 		g_mutating = true;
 		try {
-			std::string json = ReadGanttFromSlide(g_app);
-			if (!json.empty()) {
-				PpDocument doc = DocumentFromJson(json);
+			PpDocument doc;
+			if (ReadGanttDocFromSlide(g_app, &doc)) {
 				const std::string keepKind = g_ownSelKind;
 				const std::string keepId = g_ownSelId;
 				if (SetRailLabelsGlobal(doc, !doc.railLabels)) {
@@ -4573,9 +4639,8 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 	if (cmd == HtCmd_CycleGrid && g_app && !g_mutating) {
 		g_mutating = true;
 		try {
-			std::string json = ReadGanttFromSlide(g_app);
-			if (!json.empty()) {
-				PpDocument doc = DocumentFromJson(json);
+			PpDocument doc;
+			if (ReadGanttDocFromSlide(g_app, &doc)) {
 				const std::string keepKind = g_ownSelKind;
 				const std::string keepId = g_ownSelId;
 				const std::string cur = doc.gridDensity.empty() ? "auto" : doc.gridDensity;
@@ -4635,9 +4700,8 @@ void CommitLinkTarget(const std::string& targetId) {
 	ClearLinkMode();
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (json.empty()) { g_mutating = false; return; }
-		PpDocument doc = DocumentFromJson(json);
+		PpDocument doc;
+		if (!ReadGanttDocFromSlide(g_app, &doc)) { g_mutating = false; return; }
 		const std::string depId = AddDependency(doc, fromId, targetId);
 		if (!depId.empty()) {
 			RebuildChart(doc, fromId);
@@ -4699,9 +4763,15 @@ static bool IsStructuralDocChange(const PpDocument& before, const PpDocument& af
 void RebuildChart(PpDocument& doc, const std::string& selectId) {
 	bool structural = false;
 	try {
-		std::string beforeJson = ReadGanttFromSlide(g_app);
-		if (!beforeJson.empty()) {
-			PpDocument beforeDoc = DocumentFromJson(beforeJson);
+		// The structural check only drives the PptPaintLock flicker heuristic
+		// (never correctness), and the pre-op doc is exactly what the scene
+		// cache holds — nothing has rewritten PP_DOC yet this op. So peek it
+		// with NO COM (no shape walk, no id re-verify); only when the cache is
+		// invalid do we pay for a full id-checked read + parse.
+		PpDocument beforeDoc;
+		bool haveBefore = Gantt_TryPeekCachedDoc(&beforeDoc);
+		if (!haveBefore) haveBefore = ReadGanttDocFromSlide(g_app, &beforeDoc, /*accumulate=*/true);
+		if (haveBefore) {
 			structural = IsStructuralDocChange(beforeDoc, doc);
 		}
 	} catch (...) {
@@ -4735,11 +4805,10 @@ void HandleHotkeyDelete() {
 
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (json.empty()) {
-			OvLog(L"hotkey Delete: ReadGanttFromSlide returned empty");
+		PpDocument doc;
+		if (!ReadGanttDocFromSlide(g_app, &doc)) {
+			OvLog(L"hotkey Delete: no PowerPlanner chart doc available");
 		} else {
-			PpDocument doc = DocumentFromJson(json);
 			bool changed = false;
 			if (selKind == "ROW") {
 				changed = DeleteRow(doc, selId);
@@ -4784,9 +4853,8 @@ void HandleHotkeyNudge(long deltaDays) {
 
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (!json.empty()) {
-			PpDocument doc = DocumentFromJson(json);
+		PpDocument doc;
+		if (ReadGanttDocFromSlide(g_app, &doc)) {
 			bool changed = NudgeTask(doc, selId, deltaDays); // no-op if selId is not a task
 			if (!changed && selKind == "MILESTONE") {
 				for (auto& ms : doc.milestones) {
@@ -4920,10 +4988,9 @@ void HandleToolbarButton(int button) {
 
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (json.empty()) { g_mutating = false; return; }
+		PpDocument doc;
+		if (!ReadGanttDocFromSlide(g_app, &doc)) { g_mutating = false; return; }
 
-		PpDocument doc = DocumentFromJson(json);
 		std::string selectId;
 		bool changed = false;
 		if (button == BTN_ADD) {
@@ -4975,10 +5042,9 @@ void HandleHoverQuickAddTask() {
 
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (json.empty()) { g_mutating = false; return; }
+		PpDocument doc;
+		if (!ReadGanttDocFromSlide(g_app, &doc)) { g_mutating = false; return; }
 
-		PpDocument doc = DocumentFromJson(json);
 		if (ComputeEmptyCellPxPerDay() <= 0.0f && !ProjectionPx().ok) {
 			g_creationFailHint = L"Cannot add task — chart scale unavailable";
 			g_mutating = false;
@@ -5029,9 +5095,8 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 
 	g_mutating = true;
 	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (json.empty()) { g_mutating = false; return; }
-		PpDocument doc = DocumentFromJson(json);
+		PpDocument doc;
+		if (!ReadGanttDocFromSlide(g_app, &doc)) { g_mutating = false; return; }
 
 		std::string selectId;
 		std::string selectKind;
@@ -5940,9 +6005,18 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"rowCount\":" + std::to_string(g_rowBands.size()) + ",";
 	int taskCount = 0;
 	int milestoneCount = 0;
-	for (const auto& item : g_hitSnapshot.items) {
-		if (item.kind == HtItemKind::Task) ++taskCount;
-		else if (item.kind == HtItemKind::Milestone) ++milestoneCount;
+	if (g_hitSnapshot.items.empty()) {
+		// Post-op the cached doc IS authoritative; the snapshot refills next tick.
+		PpDocument cached;
+		if (Gantt_TryPeekCachedDoc(&cached)) {
+			taskCount = (int)cached.tasks.size();
+			milestoneCount = (int)cached.milestones.size();
+		}
+	} else {
+		for (const auto& item : g_hitSnapshot.items) {
+			if (item.kind == HtItemKind::Task) ++taskCount;
+			else if (item.kind == HtItemKind::Milestone) ++milestoneCount;
+		}
 	}
 	s += "\"taskCount\":" + std::to_string(taskCount) + ",";
 	s += "\"milestoneCount\":" + std::to_string(milestoneCount) + ",";

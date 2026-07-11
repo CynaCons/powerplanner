@@ -571,17 +571,8 @@ inline std::string BuildRowYJson(const PpDocument& doc, float slideW, const std:
 	return out;
 }
 
-// Shared by InsertGantt/UpdateGantt (and the ops harness): date range ->
-// projection (pt/day), padded 5% each side, then the resulting Scene. A
-// document with no dated tasks/milestones (e.g. a rows-only chart after
-// deleting every task) does NOT fail: it gets a default today..today+30d
-// window so the chart still emits a valid axis + rows + PP_PROJ and every
-// creation route keeps working on empty charts (SR-CRE-01,
-// docs/SRS_CreationFlows.md). PP_PROJ field meanings
-// {minDay,pad,ptPerDay,originX} are frozen and unchanged by the fallback —
-// minDay is simply the default window's first day.
-inline bool BuildProjectedScene(const PpDocument& doc, float slideW, Scene* outScene,
-	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
+// Natural dated bounds (tasks + milestones only — matches BuildProjectedScene).
+inline void ComputeDocDateExtents(const PpDocument& doc, std::string* outMinD, std::string* outMaxD) {
 	std::string minD, maxD;
 	auto consider = [&](const std::string& d) {
 		if (d.empty()) return;
@@ -597,14 +588,65 @@ inline bool BuildProjectedScene(const PpDocument& doc, float slideW, Scene* outS
 		minD = todayBuf;
 		maxD = DaysToDate(DateToDays(minD) + 30);
 	}
+	*outMinD = minD;
+	*outMaxD = maxD;
+}
 
+// True when every dated element still fits inside [winMinD-pad .. winMaxD+pad].
+// Used by UpdateGantt to keep PP_PROJ/ptPerDay stable across in-range nudges
+// (SR-SMO-01 v2.5.3-latency-green) so the scene-diff fast path stays eligible.
+inline bool DocDatesFitPaddedWindow(const PpDocument& doc, const std::string& winMinD,
+	const std::string& winMaxD, long pad) {
+	if (winMinD.empty() || winMaxD.empty()) return false;
+	const long lo = DateToDays(winMinD) - pad;
+	const long hi = DateToDays(winMaxD) + pad;
+	auto inWin = [&](const std::string& d) {
+		if (d.empty()) return true;
+		const long day = DateToDays(d);
+		return day >= lo && day <= hi;
+	};
+	for (const auto& t : doc.tasks) {
+		if (!inWin(t.start) || !inWin(t.end)) return false;
+	}
+	for (const auto& m : doc.milestones) if (!inWin(m.date)) return false;
+	for (const auto& b : doc.brackets) {
+		if (!inWin(b.start) || !inWin(b.end)) return false;
+	}
+	for (const auto& mk : doc.markers) if (!inWin(mk.date)) return false;
+	return true;
+}
+
+inline void ComputeProjectionParams(const std::string& minD, const std::string& maxD, float slideW,
+	long* outPad, float* outPtPerDay) {
 	const long totalDays = std::max(1L, (DateToDays(maxD) - DateToDays(minD)) + 1);
-	const long pad = std::max(1L, (long)(totalDays * 0.05));
+	*outPad = std::max(1L, (long)(totalDays * 0.05));
 	const float chartContentW = (slideW - MARGIN * 2.0f) - ROW_GUTTER;
-	const float ptPerDay = chartContentW / (float)(totalDays + pad * 2);
+	*outPtPerDay = chartContentW / (float)(totalDays + (*outPad) * 2);
+}
 
+inline bool BuildSceneWithProjection(const PpDocument& doc, float slideW, Scene* outScene,
+	const std::string& minD, const std::string& maxD, long pad, float ptPerDay) {
 	GanttLayoutResult L = LayoutGantt(doc, minD);
 	*outScene = BuildGanttScene(doc, L, minD, maxD, pad, ptPerDay, slideW, MaterialLight());
+	return true;
+}
+
+// Shared by InsertGantt/UpdateGantt (and the ops harness): date range ->
+// projection (pt/day), padded 5% each side, then the resulting Scene. A
+// document with no dated tasks/milestones (e.g. a rows-only chart after
+// deleting every task) does NOT fail: it gets a default today..today+30d
+// window so the chart still emits a valid axis + rows + PP_PROJ and every
+// creation route keeps working on empty charts (SR-CRE-01,
+// docs/SRS_CreationFlows.md). PP_PROJ field meanings
+// {minDay,pad,ptPerDay,originX} are frozen and unchanged by the fallback —
+// minDay is simply the default window's first day.
+inline bool BuildProjectedScene(const PpDocument& doc, float slideW, Scene* outScene,
+	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
+	std::string minD, maxD;
+	ComputeDocDateExtents(doc, &minD, &maxD);
+	long pad = 0; float ptPerDay = 0.0f;
+	ComputeProjectionParams(minD, maxD, slideW, &pad, &ptPerDay);
+	BuildSceneWithProjection(doc, slideW, outScene, minD, maxD, pad, ptPerDay);
 	*outMinD = minD; *outMaxD = maxD; *outPad = pad; *outPtPerDay = ptPerDay;
 	return true;
 }

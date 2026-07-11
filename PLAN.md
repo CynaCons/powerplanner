@@ -211,6 +211,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] v2.5.3-latency-green: freeze projection window for in-range date moves + fast-path tag trim (PP_DOC-only write, skip PP_DOC tag re-read) — code landed; verify traces ≤200 ms
 - [x] Nudge onto the fast path: freeze the projection window for in-range date moves (recompute only when a date exits the padded window); expect nudge ≈ color ≈ 300 ms
 - [x] Trim fast path below the 200 ms budget (drop the per-op PP_DOC tag re-read: trust in-memory doc identity, keep drift check on a cheaper signal or per-N ops)
+- [ ] v2.5.3-latency-trim-round4: last ~50 ms — skip shape walk on cached doc read (slide-id gate), hand off verified slide id to UpdateGantt, TryPatchDocJson for non-structural deltas, O(n) prim-key compare; verify nudge/color traces ≤200 ms
 - [ ] Then remove the two rebuild-dip invariant skips in harness_driver.py (marked "KNOWN v2.5.3") so transients fail hard again
 - [ ] Immediate hover paint on WM_MOUSEMOVE path (SR-SMO-04)
 - [ ] WindowSelectionChange COM sink; tick as watchdog (SR-SMO-05 / ARC-07)
