@@ -8,8 +8,11 @@ contexts. This file migrates the legacy prose row/task selection requirements
 for v2.6.8.
 
 Traces up to: `../srs/SRS-editing.md`, `../interaction.md`,
-`docs/onslide-experience-spec.md`, `docs/SRS_SelectionChromeVisuals.md`,
-`docs/SRS_OverlayLifecycle.md`, and `native/tools/harness_driver.py`.
+`docs/onslide-experience-spec.md`,
+`spec/srs-native/SRS-SelectionChromeVisuals.md`,
+`spec/srs-native/SRS-OverlayLifecycle.md`,
+`spec/srs-native/SRS-InteractionConventions.md`, and
+`native/tools/harness_driver.py`.
 
 Reference impl: `native/PowerPlannerAddin/` (Overlay.cpp, GanttHitTest.*,
 GanttAppBar.h, GanttBuilder.cpp, GanttScene*).
@@ -22,15 +25,27 @@ GanttAppBar.h, GanttBuilder.cpp, GanttScene*).
 | SR-ROW-02 | Clicking a ROW_LABEL shape or RowBand zone shall establish a stable row own-selection (`ownSelKind="ROW"`, `ownSelId=rowId`) across the immediate and post-tick trace points. | Rows must be first-class selectable objects, not only passive labels. | Test with `row-label-hover-click`; assert `SetOwnSelection("ROW", rowId)` effect, `ownSelKind`, and app bar row context at pre/immed/+1/+3 trace points. | Legacy SR-ROW-02; Overlay ApplyClickSelection/SetOwnSelection; DumpChromeStateForTest |
 | SR-ROW-03 | Selecting a row shall preserve visible task titles, row labels, and graph elements. | Selection must not produce content disappearance or label loss. | Test/Review with row selection traces; assert rowLabelCount remains stable or predictable, shape presence remains valid, and screenshots show content stability. | Legacy SR-ROW-03 plus label-drop clause from SR-ROW-02; GanttBuilder/Rebuild; rowLabelCount seam |
 
-## Task Selection and Progress
+## Task Selection
 
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
 | SR-TASK-01 | Clicking a TaskBody or TASK_PROGRESS zone shall establish a stable task own-selection (`ownSelKind="TASK"`, `ownSelId=taskId`). | Task bars and progress fills are the primary editable Gantt objects. | Test with `task-body-click`; assert ownSel transition and stability at pre/immed/+1/+3 trace points. | Legacy SR-TASK-01; GanttHitTest TaskBody/TASK_PROGRESS; Overlay ApplyClickSelection |
-| SR-RTS-01 | A selected task shall render visible task selection feedback on the task bar without obscuring task content. | Users need clear selected-state feedback that does not fight chart readability. | Test/Review with `task-body-click` screenshots and selection chrome visual matrix. | Legacy SR-TASK-01; docs/SRS_SelectionChromeVisuals.md; Overlay task highlight paint |
+| SR-RTS-01 | A selected task shall render visible task selection feedback on the task bar without obscuring task content. | Users need clear selected-state feedback that does not fight chart readability. | Test/Review with `task-body-click` screenshots and selection chrome visual matrix. | Legacy SR-TASK-01; SRS-SelectionChromeVisuals; Overlay task highlight paint |
 | SR-RTS-02 | The task-selected app bar shall expose task-relevant actions, including a progress editing route. | Selection must unlock the commands users expect for the chosen task. | Test with `task-body-click` and `progress-edit`; assert `appBarGroups` contains the task context and progress action/edit route. | Legacy SR-TASK-01; legacy open note "Task selection must also enable progress"; GanttAppBar model |
-| SR-PROG-01 | When a task is selected, the progress indicator shall remain visible, readable, and interactable without overlap that prevents reading the task label or using the control. | Progress is a central task attribute and must not be hidden by selection chrome or label placement. | Test/Review with `progress-edit`; inspect screenshots for label/control overlap and pixel readability. | Legacy SR-PROG-01; docs/SRS_SelectionChromeVisuals.md SR-VIZ-01; GanttScene/GanttBuilder |
-| SR-RTS-03 | Task progress shall be changeable through an app bar action or direct gesture and round-trip correctly. | Users must be able to edit progress from task context and keep the data persistent after rebuilds. | Test with `progress-edit`; assert document progress value changes, survives rebuild/round-trip, and remains visible after post-tick captures. | Legacy SR-PROG-01; GanttAppBar progress action; Overlay direct gesture paths |
+
+## Progress Editing
+
+The legacy progress-editing requirements are folded into this section.
+Percent stepper controls are superseded by `SR-IXC-01` and `SR-IXC-06`:
+progress is a continuous scalar edited primarily by dragging the progress
+handle with a live percentage readout (UF-12).
+
+| ID | Requirement | Rationale | Verification | Trace |
+|----|-------------|-----------|--------------|-------|
+| SR-PROG-01 | Hit-testing a task body or task progress area shall select the parent task and provide task-context progress editing affordances. | Users must be able to enter progress editing from the visual progress area as well as the bar body. | Test with `task-select-progress` or `progress-edit`; assert ownSelKind=TASK and progress action/affordance availability. | Legacy SR-PROG-01; SR-TASK-01; GanttHitTest TASK/TASK_PROGRESS |
+| SR-PROG-02 | The progress indicator shall remain visible, distinguishable, and not completely overlapped by task label text or selection chrome. | Progress is a central task attribute and must not be hidden by labels or overlays. | Test/Review with `progress-edit`; inspect screenshots for label/control overlap and pixel readability. | Legacy SR-PROG-02; SRS-SelectionChromeVisuals SR-VIZ-01; GanttScene/GanttBuilder |
+| SR-PROG-03 | Changing task progress through a supported path shall update the model, re-emit or reconcile shapes as needed, and preserve task selection and progress visuals. | Progress edits must persist through rebuilds without losing context or visual feedback. | Test with `progress-edit` or `progress-drag`; assert document percent changes, survives rebuild/round-trip, and ownSel remains stable. | Legacy SR-PROG-03; SRS-InteractionConventions SR-IXC-01/SR-IXC-06; Overlay progress commit |
+| SR-PROG-04 | Native e2e coverage shall verify that after task selection progress is actionable and related chart elements do not disappear. | State-only selection checks do not prove progress editability or visual stability. | E2E trace `task-select-progress` or `progress-edit`; assert stable rowLabelCount, selected task context, progress affordance/action, and screenshot visibility. | Legacy SR-PROG-04; harness trace invariants |
 
 ## Selection Transitions
 
