@@ -2,8 +2,8 @@
 
 ## Quick Summary
 
-**Current Version:** v2.5.1 (COMPLETE 2026-07-11)
-**Next Milestone:** v2.5.2 — Reliable, Discoverable Creation Flows (first of remaining iterations in the v2.5.x program)
+**Current Version:** v2.5.2 (COMPLETE 2026-07-11)
+**Next Milestone:** v2.5.3 — Direct-manipulation reactivity (latency ≤200ms), then the v2.6.x UX Overhaul Program (2026-07-11 audit + user feedback round 2)
 
 ### Key Metrics
 - **Total Iterations:** Web foundation complete; Native on-slide work in progress
@@ -21,11 +21,9 @@
 - Ongoing: extended trace for overall CHART_ROOT move/resize; LockWindowUpdate + flash detection; additional visual reflow hunt (graph/labels) 
 
 ### Next Up
-- **v2.5.2** - Reliable, discoverable creation flows (docs/SRS_CreationFlows.md) — closing (CREATEEMPTY gate)
-- **v2.5.3** - DRASTIC: Direct-manipulation reactivity & smoothness (spec/srs-native/SRS_InteractionSmoothness.md) — user verdict 2026-07-11: "looks good but not usable; not reactive, not smooth, not intuitive"
-- v2.5.4 - Dependency creation & editing (docs/SRS_DependencyEditing.md)
-- v2.5.5 - Architecture hardening + cohesion + full visual matrix
-- (v2.5.0 and v2.5.1 complete — see detailed sections below)
+- **v2.5.3** - DRASTIC: Direct-manipulation reactivity & smoothness (spec/srs-native/SRS_InteractionSmoothness.md) — user verdict 2026-07-11: "looks good but not usable; not reactive, not smooth, not intuitive" — STAYS FIRST
+- **v2.6.x** - UX Overhaul Program (Phase 11 below): 2026-07-11 UX audit (B1/B2, M1–M6, N1–N5) + user feedback round 2 (UF-01..UF-12). Absorbs v2.5.4 (dependency editing → v2.6.5) and the v2.5.5 feedback-round items (#1–#4 → v2.6.1/v2.6.3/v2.6.6); v2.5.5 architecture/spec-migration items → v2.6.8
+- (v2.5.2 complete; v2.5.0 and v2.5.1 complete — see detailed sections below)
 - Audit references: docs/overlay-architecture-map.md, docs/onslide-ux-inventory.md, spec/srs-native/ (new canonical location for native-only ASPICE SRS tables)
 - Continue to use `trace` + `check-invariants` on any chrome mutation work. Update docs/ *.md and PLAN.md recursively.
 
@@ -204,9 +202,13 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 ### v2.5.3 - Iteration S: Direct-Manipulation Reactivity & Smoothness (DRASTIC, NEW)
 **Goal:** The editor must FEEL instant: in-place shape reconcile (no delete/recreate), <=200ms single-op latency budget (measured), immediate hover, event-driven selection, optimistic drag-commit echo, inline rename. SRS: spec/srs-native/SRS_InteractionSmoothness.md
 
-- [x] In-place UpdateGantt reconcile for single-element ops (SR-SMO-01); stable task sub-prim slots + full geometry/text/style sync; no Ungroup on move/resize/retext/color/percent/labelPlacement
-- [x] Latency instrumentation in traces (opLatencyMs) + op_latency_budget invariant <=200ms (SR-SMO-02) — i4b-latency-traces unit: "tMs" on every TRACE state line + one-shot `TRACE OPDISPATCH: {"tMs":...}` marker in appbar-shot.cpp --trace; harness_driver.py computes opLatencyMs (immed-vs-final key-field simplification, falling through to +1/+3) and reports it in the op_latency_budget invariant either way. Budget itself MAY still legitimately FAIL until SR-SMO-01's rebuild-path gaps (e.g. the taskCount dip at immed on wholesale rebuilds) are fully closed — measurement landing first is by design, threshold intentionally not softened.
-- [x] Drop LockWindowUpdate for single-element ops (SR-SMO-03); RebuildChart infers structural from pre/post doc element counts
+- [x] Latency instrumentation (SR-SMO-02 measurement): OPLATENCY direct dispatch measure (wraps the synchronous perform call — capture overhead excluded) + op_latency_budget invariant + task-nudge/task-color latency profiles + scenarios (68a854b)
+- **MEASURED BASELINE 2026-07-11: nudge = 9.8 s, color = 17.5 s per single edit** (budget 200 ms) — the user's "not reactive/not usable" verdict, quantified. The two latency traces are committed RED on purpose until SR-SMO-01 v2 lands; do not soften.
+- First i4a attempt (stable sub-prim slots + full property sync + conditional paint lock) measured the SAME magnitude (10.7/14.6 s) → REVERTED from the tree (never committed). Lesson: per-shape COM property read/write volume is the cost, not delete-vs-update strategy; adding more per-shape syncs makes it worse.
+- [x] In-place reconcile v2 (SR-SMO-01/03): scene cache + pure C++ diff fast path + conditional paint lock (8a77df6). **Measured: color 17531→328 ms (53×); nudge 9829→4047 ms** (nudge misses fast path — projection window recomputes on any date change → structural)
+- [ ] Nudge onto the fast path: freeze the projection window for in-range date moves (recompute only when a date exits the padded window); expect nudge ≈ color ≈ 300 ms
+- [ ] Trim fast path below the 200 ms budget (drop the per-op PP_DOC tag re-read: trust in-memory doc identity, keep drift check on a cheaper signal or per-N ops)
+- [ ] Then remove the two rebuild-dip invariant skips in harness_driver.py (marked "KNOWN v2.5.3") so transients fail hard again
 - [ ] Immediate hover paint on WM_MOUSEMOVE path (SR-SMO-04)
 - [ ] WindowSelectionChange COM sink; tick as watchdog (SR-SMO-05 / ARC-07)
 - [ ] Optimistic drag-commit echo, no old-position flash (SR-SMO-06)
@@ -216,6 +218,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [ ] Exit: gates + latency traces green; LIVE user feel check (final judge)
 
 ### v2.5.4 - Iteration 4: Dependency Creation & Editing
+**ABSORBED 2026-07-11 → v2.6.5** (port-based linking per UF-11 replaces/extends the items below; keep SRS_DependencyEditing content, convert to tables).
 **Goal:** Linking is visible, guided, and reversible per-edge. SRS: docs/SRS_DependencyEditing.md
 
 - [ ] Link-mode crosshair over valid targets + target hover ring (SR-DEP-01/02)
@@ -227,6 +230,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [ ] Exit: gates + scenarios green; PNG review
 
 ### v2.5.5 - Iteration 5: Architecture Hardening, Cohesion & Full Visual Matrix
+**ABSORBED 2026-07-11 → v2.6.8** (structure/matrix/parity items move there; do after the UX slices so the matrix captures the new UX).
 **Goal:** Sustainable file structure + end-to-end product cohesion review. Refs: docs/overlay-architecture-map.md split plan, improvements-backlog CI-06/07/08.
 
 - [ ] Overlay.cpp Tier-B split: OverlayState.h struct bundling + OverlayAppBar/CardEditor/Drag/ContextMenu/TestSeams .inc.h extractions (header-only)
@@ -238,6 +242,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [ ] Update README gallery + docs; close the program with a summary report
 
 ### v2.5.5 - User Feedback Round (2026-07-11): Native Polish & Foundations
+**ABSORBED 2026-07-11 → v2.6.x**: #1 → v2.6.1, #2/#3 → v2.6.3, #4 → v2.6.6, #5 remaining migration → v2.6.8. The SRS tables authored here (spec/srs-native/SRS-NativeUXFoundations.md) stay canonical.
 **Goal:** Address live user feedback on native on-slide: PP shape selectability, appbar docking + context, theme-coherent UI surfaces, and project spec/SRS file architecture cleanup. Add requirements (correct ASPICE table format under spec/), e2e harness coverage, and fixes. Ties into v2.5.4 structure work.
 
 - [ ] #1 Shape selectability: internal emitted shapes (task bars, labels, connectors, etc. inside CHART_ROOT) must never be directly selectable as individual PowerPoint shapes; only the CHART_ROOT "app-component" container shall be a selectable PP shape. All intra-component selection must route exclusively through our overlay hit-test + ownSel model. Strengthen suppression (beyond current 150ms Unselect poll), add invariants, document contract.
@@ -265,6 +270,114 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [ ] #5 Remaining file moves, reference fixes, cleanup verification.
 - [ ] All 5 points: after code changes run full relevant harness traces + matrix + `python native/tools/harness_driver.py ... --check-invariants`; update goldens only when intentional; record in PLAN.
 - [x] Smoke / launch verification (this pass): `npm run build` succeeded cleanly (tsc + vite production build). `npm run dev` background launch + HTTP fetch on http://localhost:5180 returned 200 + valid Vite-served PowerPlanner root HTML. Process cleanup successful (no lingering listener). Full output logged. Re-verify required before any future claims involving app launch or native changes.
+
+# Phase 11: UX Overhaul Program (v2.6.x — registered 2026-07-11)
+
+**Inputs:** (a) full UX audit of the interaction model (findings B1/B2, M1–M6, N1–N5 below), (b) user feedback round 2 (UF-01..UF-12). **Prerequisite:** v2.5.3 reactivity (≤200ms) — nothing here lands well at 10s/op.
+**Governing directive (user):** simple, user-friendly, modern smart design conventions; direct manipulation over button rows; no "click 9 times" steppers for continuous values; no weird concepts.
+**Process:** every slice starts with ASPICE table entries in spec/srs-native/ + harness scenario(s) BEFORE implementation, and exits through the UX walkthrough gate (v2.6.0).
+
+## Audit findings register (2026-07-11)
+- **B1 (BLOCKER, data loss):** global hotkey theft — with a chart item selected, Del/←/→ are RegisterHotKey'd process-foreground-wide (Overlay.cpp ~4853); typing in Notes/any textbox nudges/deletes the chart item. Internal selection never clears on focus-elsewhere.
+- **B2 (BLOCKER, data loss):** card editor silently DISCARDS on click-away (WA_INACTIVE → CancelCardEdit) while inline editor COMMITS on kill-focus — opposite conventions in one product.
+- **M1:** "Rename" = 3 behaviors (row: inline; task: duplicate of Edit → card; marker: card); milestone has only "Edit".
+- **M2:** ContextMenuShape ribbon items (Add Task/Nudge/Scale…) appear on right-click of ANY shape deck-wide but never fire on the chart (overlay eats it) — dead/misleading entries.
+- **M3:** overlay chrome selection is invisible to PowerPoint (Format tab/Selection Pane say "nothing selected") — two conflicting selection systems.
+- **M4:** Insert Gantt only inserts the fake "Q3 Launch Plan" sample; no blank chart path.
+- **M5:** app bar (docked to slide bottom) and FitChartRootToSlide (reserves bottom margin) are uncoordinated → overlap.
+- **M6:** Alt+click/grip escape-hatch is undiscoverable AND opens a 150ms suppression race where native Delete can desync shapes from PP_DOC.
+- **N1:** dates are free-text with no format hint or picker (red wash only). **N2:** creation entry points offer inconsistent element sets/placement. **N3:** "Pull from slide"/"Reflow" jargon at equal prominence with Insert. **N4:** no keyboard access path (no focus, no Tab). **N5:** only interactivity cue is a hover chip naming the add-in, not an action.
+
+## User feedback register — round 2 (UF, 2026-07-11)
+- **UF-01:** dragging a task in its row is THE way to change dates; while dragging, show a live indicator (pill) of the start/end dates being dropped to.
+- **UF-02:** defect — task drag leaves a stale leftover shape behind (likely the progress fill).
+- **UF-03:** Ctrl+click / Shift+click multi-select of rows; app bar shows Delete for the multi-selection; Del key and right-click Delete do the same.
+- **UF-04:** right-click menu is not Material/theme-coherent (= SR-THEME-03).
+- **UF-05:** drag-to-create preview fills the entire row height; it must preview the REAL shape of the task that will be created.
+- **UF-06:** row quick-add chip appears at BOTH row boundaries (add-above + add-below), centered ON the boundary line, x-centered on the left rail column only.
+- **UF-07:** app bar context is sticky with no reset — Esc or clicking elsewhere must return it to the default/component context (e.g. scale controls); e.g. after adding a note + Esc it still shows note context.
+- **UF-08:** task-bar drag must be constrained to the app-component bounds (currently draggable anywhere on screen).
+- **UF-09:** vertical markers: live date preview while dragging + movement snapped to the smallest visible scale unit.
+- **UF-10:** component-level scale settings: separator granularity independent of scale (e.g. daily scale + weekly separators), option for CW numbers instead of day numbers; current "Labels"/"Grid" app-bar buttons are not understandable — redesign/rename.
+- **UF-11:** milestone creation and task linking are undiscoverable. Linking: selected task-bar shows small ports left/right; click-drag from a port makes ports appear on other bars; drop to link (industry-standard technique).
+- **UF-12:** ±10% progress buttons are anti-UX ("no one does this - ever") — replace with direct manipulation (drag the progress edge on the bar / slider in the editor). General rule: never steppers for continuous values.
+
+### v2.6.0 - Iteration U0: Interaction Conventions + UX Detection Gate (process, do first)
+**Goal:** Make this class of finding impossible to miss again; codify the conventions the slices below implement.
+- [ ] Author spec/srs-native/SRS-InteractionConventions.md (tables): direct-manipulation-first; every drag shows a live preview of its result (dates/shape/position); Esc + click-away semantics (commit vs cancel, context reset); drag constraint to component; snap rules; no steppers for continuous values; affordances must be visible on hover/selection (ports, handles, adders)
+- [ ] UX walkthrough gate: scripted task-based cold walkthroughs ("change a date", "add a milestone", "link two tasks", "set weekly separators", "delete 3 rows") executed via harness with per-step captures + GIF, reviewed against a heuristic checklist at EVERY slice exit; findings → new UF entries
+- [ ] AGENTS.md: add the mandatory UX gate + conventions rule (paired with this registration)
+- [ ] Restore README media: docs/media/ was deleted in 6515121 while README.md still references all 8 images (GitHub front page broken) — restore from c168695 or repoint to site/assets
+- [ ] Fix PLAN.md dead link (docs/PLAN_HISTORY.md does not exist)
+
+### v2.6.1 - Iteration U1: Selection Integrity (one selection story)
+**Goal:** Our chrome is the ONLY selection chrome; no keyboard theft; no native leaks. Absorbs v2.5.5 #1 (SR-SHP-01..04).
+- [ ] WindowSelectionChange COM sink for instant child-suppression (kills the 150ms window; shares infra with SR-SMO-05)
+- [ ] B1 fix: clear internal selection (and unregister hotkeys) whenever native selection/focus moves off the chart — hotkeys live ONLY while an overlay selection exists and slide-view input is ours
+- [ ] UF-07: on deselect/Esc/click-away, app bar returns to component context (never sticky)
+- [ ] M3: document + enforce the single-selection contract (CHART_ROOT = the only real PP selection; children = overlay-only)
+- [ ] M6: close the Alt+click/grip race (block native child delete window); make the move affordance visible (labeled grip/tooltip)
+- [ ] E2E: trace_component_shape_protection implemented + no_child_shape_selected invariant green; hotkey-scope scenario (type in Notes pane with task selected → no theft)
+
+### v2.6.2 - Iteration U2: Direct-Manipulation Editing (drag is the primary verb)
+**Goal:** Dates, progress, markers — all changed by dragging with live feedback. Requires v2.5.3 reconcile.
+- [ ] UF-01: drag task in-row with live start/end date pill; drop commits (drag IS the date editor)
+- [ ] UF-02: fix leftover/stale shape during task drag (progress fill ghost)
+- [ ] UF-08: constrain task drag to the component rect (clamp; no dragging off-slide/off-chart)
+- [ ] UF-09: marker drag = live date pill + snap to smallest visible scale unit
+- [ ] UF-05: drag-to-create preview renders the actual future task bar (real height/style), not a full-row block
+- [ ] UF-12: progress = draggable progress edge on the bar (+ % field in card); REMOVE ±10% buttons
+- [ ] B2: card editor commits on click-away (Esc = cancel) — same convention as inline editor everywhere
+- [ ] M1: one verb per action across contexts — "Rename" = inline text everywhere; "Edit…" = card everywhere; kill the duplicate task button
+- [ ] N1: date fields get format hint + validation message (picker optional/later)
+- [ ] E2E: drag-date-pill, marker-snap, create-preview-shape, progress-drag scenarios + captures
+
+### v2.6.3 - Iteration U3: App Bar Docking + Context Purity
+**Goal:** The bar is part of the component and shows only what's relevant. Absorbs v2.5.5 #2/#3 (SR-DOCK, SR-BAR).
+- [ ] SR-DOCK-01/02: dock the bar to CHART_ROOT's screen rect bottom + token gap; moves/resizes with the group; clamp at slide edges (fixes M5 overlap by construction)
+- [ ] SR-BAR-02: item contexts show ONLY item-relevant groups (remove global INSERT/SCALE from task/row/milestone/marker contexts; revisit interim SR-EDT-02) — document context (empty click/Esc per UF-07) is where scale/insert live
+- [ ] Fix duplicated SCALE group / stale composite render defect (seen in trace captures)
+- [ ] E2E: trace_appbar_docked + trace_appbar_context_evolution implemented + matrix re-run
+- [ ] MILESTONE GATE: user visual pass on docking + contexts
+
+### v2.6.4 - Iteration U4: Multi-Select
+**Goal:** Standard Ctrl/Shift selection semantics. 
+- [ ] UF-03: Ctrl+click toggles, Shift+click ranges (rows first; tasks/milestones next); ownSel model → set of (kind,id)
+- [ ] Multi-selection chrome + app bar context (Delete + shared ops only); Del key + right-click Delete operate on the whole set, one undo entry
+- [ ] E2E: multi-row-select-delete scenario
+### v2.6.5 - Iteration U5: Linking + Creation Discoverability (absorbs v2.5.4)
+**Goal:** Linking and creation are visible, guided, standard. SRS: SRS_DependencyEditing → tables.
+- [ ] UF-11: port-based linking — selected bar shows L/R ports; drag from port → ports appear on candidate bars + rubber-band preview; drop links (replaces click-click link mode as primary; keep menu entry)
+- [ ] Duplicate/self-link rejection hint; per-edge delete (select dependency line → Delete); "Unlink" → "Unlink all"
+- [ ] UF-06: row quick-add chips on BOTH boundaries (above/below), centered on the boundary line, x-centered on the left rail
+- [ ] Milestone creation made discoverable: double-click empty cell offers task/milestone (or modifier), right-click cell parity (N2: same element set + click-point placement from every entry point)
+- [ ] M4: Insert Gantt offers Blank vs Sample (or inserts blank + "Load sample" action)
+- [ ] E2E: link-drag-port, dep-select-delete, row-adder-boundaries, blank-insert scenarios
+- [ ] MILESTONE GATE: user walkthrough — "add milestone" and "link tasks" with zero instructions
+
+### v2.6.6 - Iteration U6: Theme-Coherent Surfaces (Material everywhere)
+**Goal:** No default Win32 chrome anywhere. Absorbs v2.5.5 #4 (SR-THEME-01..03).
+- [ ] Custom-drawn context menu (layered window, GanttTheme tokens, hover/keyboard nav/submenu/light-dismiss) replacing TrackPopupMenu — reuse app-bar paint machinery; same registry model
+- [ ] UF-04 verified: right-click menu matches mockup aesthetic (capture + review)
+- [ ] Card editor + inline editor re-skinned to tokens (typography, borders, focus states) — no DEFAULT_GUI_FONT/WS_BORDER chrome
+- [ ] E2E: trace_theme_coherent_surfaces implemented; menu + card captures in matrix
+- [ ] MILESTONE GATE: user visual pass
+
+### v2.6.7 - Iteration U7: Scale & Component Settings
+**Goal:** Timescale display is a component-level setting with real options. 
+- [ ] UF-10: separator granularity independent of scale (day/week/month separators at any scale); CW (calendar-week) numbering option; persisted in PP_DOC as component settings
+- [ ] Replace/rename opaque "Labels"/"Grid" buttons with a comprehensible scale-settings surface (themed popover from the document-context bar)
+- [ ] Foundation: extend spec (data-model/layout) + fixtures for separator/CW settings (shared with web later)
+- [ ] E2E: scale-settings scenarios + captures across D/W/M
+
+### v2.6.8 - Iteration U8: Cohesion, Architecture & Spec Migration (absorbs v2.5.5 arch items + #5 remainder)
+- [ ] M2: remove dead ContextMenuShape ribbon-XML items (or scope them to actual chart selection)
+- [ ] N3: demote/relabel "Pull from slide"/"Reflow" (plain-language tooltips; secondary placement)
+- [ ] N5: interactivity affordance — hover cue suggests the action (e.g. "double-click to edit") instead of naming the add-in
+- [ ] Spec migration remainder: convert 6 docs/SRS_*.md prose files → spec/srs-native tables (fold SRS_ProgressEditing into selection/task SRS); reformat SRS_InteractionSmoothness.md to tables + rename to hyphen convention; move/alias spec/srs/SRS-powerpoint.md under srs-native; archive docs/on-slide-ux-plan.md (repoint onslide-coordinator skill) + docs/powerpoint-addin.md; bulk ref sweep
+- [ ] Overlay.cpp Tier-B split (OverlayState.h + .inc.h extractions) — from v2.5.5
+- [ ] Full screenshot matrix (contexts × 100/150% DPI) + README/site gallery refresh + web↔native parity pass — from v2.5.5
+- [ ] Close the program: full user-journey walkthrough (insert → build plan → present) + summary report
 
 ### v2.4.4 - Installer + Packaging (deferred)
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons

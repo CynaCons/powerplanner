@@ -143,6 +143,32 @@ When commands change, update this file and `.claude/launch.json` together.
   sourcing from GanttTheme.h + design-tokens.md and pass visual coherence
   review (PNG + mockup comparison). Default Win32 menus/dialogs are forbidden
   for PowerPlanner surfaces.
+- **UX walkthrough gate + interaction conventions (from feedback 2026-07-11,
+  v2.6.0)**: gates that only assert markers/state prove *correctness*, not
+  *usability* — every UX-touching slice must ALSO exit through a task-based
+  cold walkthrough: pick the user goals the slice affects ("change a date",
+  "link two tasks", "add a milestone", "delete 3 rows", ...), execute them via
+  the harness AS A FIRST-TIME USER WOULD (no test seams as shortcuts for the
+  gesture itself), capture per-step PNGs/GIF, and review them against
+  spec/srs-native/SRS-InteractionConventions.md and this checklist:
+  1. Discoverable — is each affordance visible on hover/selection, or does the
+     flow require documentation to find?
+  2. Direct manipulation first — continuous values (dates, %, positions) are
+     changed by dragging with a LIVE preview of the result; stepper buttons
+     for continuous values are forbidden.
+  3. Consistent verbs — the same label always does the same thing in every
+     context; commit/cancel semantics (click-away, Esc, Enter) are identical
+     across all editors.
+  4. No traps — every mode/state has a visible exit; Esc/deselect always
+     returns surfaces (app bar, cursors) to the default context.
+  5. Constrained + snapped — drags cannot leave the component; movement snaps
+     to the scale grid where dates are involved.
+  6. Platform conventions — Ctrl/Shift multi-select, Del, F2/double-click,
+     right-click behave as an Office user expects; never steal input the user
+     directed elsewhere.
+  Findings from a walkthrough are registered as UF-xx entries in PLAN.md
+  Phase 11 (or the active program) before the slice is declared done. A slice
+  that passes its trace invariants but fails the walkthrough is NOT done.
 
 ## Self-Verification & Process Awareness (MANDATORY)
 
