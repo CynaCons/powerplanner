@@ -21,7 +21,7 @@
 - Ongoing: extended trace for overall CHART_ROOT move/resize; LockWindowUpdate + flash detection; additional visual reflow hunt (graph/labels) 
 
 ### Next Up (EXECUTION ORDER — confirmed by user 2026-07-11)
-1. **v2.5.3** — Direct-manipulation reactivity ≤200ms (spec/srs-native/SRS_InteractionSmoothness.md). FIRST: nothing UX lands well at 4s/op.
+1. **v2.5.3** — Direct-manipulation reactivity ≤200ms (spec/srs-native/SRS-InteractionSmoothness.md). FIRST: nothing UX lands well at 4s/op.
 2. **v2.6.0 → v2.6.8** — UX Overhaul Program (Phase 11 below), in slice order U0..U8: conventions+gate, selection integrity, direct-manipulation editing, app-bar docking/context, multi-select, linking+creation discoverability, theme-coherent surfaces, scale settings, cohesion/arch/spec migration. UX is the priority of the program.
 - Inputs: 2026-07-11 UX audit (B1/B2, M1–M6, N1–N5) + user feedback round 2 (UF-01..UF-12). Absorbs v2.5.4 (dependency editing → v2.6.5) and the v2.5.5 feedback-round items (#1–#4 → v2.6.1/v2.6.3/v2.6.6); v2.5.5 architecture/spec-migration items → v2.6.8
 - Delegation: coordinator (Claude) dispatches PowerSpawn subagents (cursor/copilot/grok/codex) per unit, validates gates itself, commits, ticks PLAN.md. Provider/model performance is logged in docs/on-slide-coordinator-log.md for the end-of-program comparison report.
@@ -153,7 +153,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 > until its acceptance criteria pass; only then does the next start.
 
 ### v2.5.0 - Iteration 1: Overlay Lifecycle Correctness & Render Stability (COMPLETE)
-**Goal:** No PowerPlanner pixels ever appear where they shouldn't (other monitors, slideshow, background windows); idle chrome is paint-free; edits stop flashing. SRS: docs/SRS_OverlayLifecycle.md
+**Goal:** No PowerPlanner pixels ever appear where they shouldn't (other monitors, slideshow, background windows); idle chrome is paint-free; edits stop flashing. SRS: spec/srs-native/SRS-OverlayLifecycle.md
 
 - [x] Entry gate: GATE-PURE green (fixed uncommitted SCALE contract break first); baseline commit 14f7d99
 - [x] Strict host gating: pid-match branch removed; tracked-window foreground or our windows/owned popups (SR-LIFE-02a) (9963486)
@@ -171,7 +171,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - Observed during exit review → v2.5.1 input: app bar composite/stale render after context+scale change (left-clipped "Ren…", mixed None-context groups, duplicated Labels/Grid at right edge) = SR-BAR-01/02 named defect
 
 ### v2.5.1 - Iteration 2: Calm Selection Chrome & Chart Visual Quality
-**Goal:** One calm selection language; labels always readable; app bar never clips. SRS: docs/SRS_SelectionChromeVisuals.md
+**Goal:** One calm selection language; labels always readable; app bar never clips. SRS: spec/srs-native/SRS-SelectionChromeVisuals.md
 
 - [x] Overall chrome: hairline only on native CHART_ROOT selection; halo/handles/badge removed (SR-CHR-01) (4ea06a1)
 - [x] "PowerPlanner" chip → hover-only affordance; nothing drawn idle+unhovered (SR-CHR-02/03)
@@ -188,7 +188,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - **v2.5.1 COMPLETE 2026-07-11** (commits 4ea06a1, 2b3eed6). User visual sign-off pending (gallery at v2.5.4).
 
 ### v2.5.2 - Iteration 3: Reliable, Discoverable Creation Flows
-**Goal:** Creating tasks/milestones/rows/notes is obvious, works on empty charts, and never silently fails. SRS: docs/SRS_CreationFlows.md
+**Goal:** Creating tasks/milestones/rows/notes is obvious, works on empty charts, and never silently fails. SRS: spec/srs-native/SRS-CreationFlows.md
 
 - [x] PP_PROJ-based day↔px for all creation routes + rows-only builder fallback (works with zero tasks) (SR-CRE-01) (6515121)
 - [x] No silent no-ops: creation fail-hint pill (SR-CRE-02)
@@ -202,7 +202,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - **v2.5.2 COMPLETE 2026-07-11** (commit 6515121)
 
 ### v2.5.3 - Iteration S: Direct-Manipulation Reactivity & Smoothness (DRASTIC, NEW)
-**Goal:** The editor must FEEL instant: in-place shape reconcile (no delete/recreate), <=200ms single-op latency budget (measured), immediate hover, event-driven selection, optimistic drag-commit echo, inline rename. SRS: spec/srs-native/SRS_InteractionSmoothness.md
+**Goal:** The editor must FEEL instant: in-place shape reconcile (no delete/recreate), <=200ms single-op latency budget (measured), immediate hover, event-driven selection, optimistic drag-commit echo, inline rename. SRS: spec/srs-native/SRS-InteractionSmoothness.md
 
 - [x] Latency instrumentation (SR-SMO-02 measurement): OPLATENCY direct dispatch measure (wraps the synchronous perform call — capture overhead excluded) + op_latency_budget invariant + task-nudge/task-color latency profiles + scenarios (68a854b)
 - **MEASURED BASELINE 2026-07-11: nudge = 9.8 s, color = 17.5 s per single edit** (budget 200 ms) — the user's "not reactive/not usable" verdict, quantified. The two latency traces are committed RED on purpose until SR-SMO-01 v2 lands; do not soften.
@@ -226,7 +226,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 
 ### v2.5.4 - Iteration 4: Dependency Creation & Editing
 **ABSORBED 2026-07-11 → v2.6.5** (port-based linking per UF-11 replaces/extends the items below; keep SRS_DependencyEditing content, convert to tables).
-**Goal:** Linking is visible, guided, and reversible per-edge. SRS: docs/SRS_DependencyEditing.md
+**Goal:** Linking is visible, guided, and reversible per-edge. SRS: spec/srs-native/SRS-DependencyEditing.md
 
 - [ ] Link-mode crosshair over valid targets + target hover ring (SR-DEP-01/02)
 - [ ] Duplicate/self-link rejection with hint pill (SR-DEP-03)
@@ -271,7 +271,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
   - Created `spec/srs-native/README.md`.
   - Updated `spec/README.md`, `spec/srs/README.md`, `AGENTS.md` (mandatory rules), `PLAN.md`.
   - Added 4 harness scenario JSON stubs (`trace_component_shape_protection.json`, `trace_appbar_docked.json`, `trace_appbar_context_evolution.json`, `trace_theme_coherent_surfaces.json`).
-  - [ ] Full conversion of legacy `docs/SRS_*.md` → tables in srs-native + bulk ref sweep + prune.
+  - [x] Full conversion of legacy `docs/SRS_*.md` → tables in srs-native + ref sweep (b66825e, 7ed6e11); pointers left in docs/
 - [x] #5 Update AGENTS.md (mandatory registration + correct SRS format/location + harness pairing).
 - [x] #5 Update spec/README.md + created `spec/STRUCTURE.md`.
 - [ ] #5 Remaining file moves, reference fixes, cleanup verification.
