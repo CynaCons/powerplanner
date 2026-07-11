@@ -11,9 +11,9 @@ if not exist "%OUT%" mkdir "%OUT%"
 
 pushd "%OUT%"
 echo [showcase] compiling
+call "%SRC%sources.bat"
 cl /nologo /EHsc /MT /std:c++17 /bigobj /DUNICODE /D_UNICODE /DWIN32 /D_WINDLL /I"%SRC%PowerPlannerAddin" ^
-	"%SRC%render\showcase.cpp" "%SRC%PowerPlannerAddin\GanttBuilder.cpp" "%SRC%PowerPlannerAddin\GanttLayout.cpp" ^
-	"%SRC%PowerPlannerAddin\GanttJson.cpp" "%SRC%PowerPlannerAddin\GanttOps.cpp" "%SRC%PowerPlannerAddin\GanttHitTest.cpp" "%SRC%PowerPlannerAddin\PptRenderer.cpp" "%SRC%PowerPlannerAddin\Overlay.cpp" ^
+	"%SRC%render\showcase.cpp" %SHARED_GANTT_SRC% ^
 	/Fe"ppshowcase.exe" gdi32.lib user32.lib || ( popd & exit /b 1 )
 popd
 echo [showcase] built "%OUT%\ppshowcase.exe"

@@ -31,6 +31,10 @@
 #include <string>
 #include <vector>
 
+#include "OverlayFormat.h"
+#include "OverlayGeometry.h"
+#include "OverlayMetrics.h"
+
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -53,33 +57,10 @@ const COLORREF TEXT = RGB(60, 64, 67);
 // aware process, so COM coordinates (PointsToScreenPixels, GetCursorPos)
 // already come back in PowerPoint's DPI context and need no scaling — only
 // OUR chrome's hardcoded pixel metrics do, or they stay 96-DPI-sized (a few mm
-// on screen) and become unusably small at 150-200%.
-const int kBaseInfl = 5;                    // frame inset from shape edge (px)
-const int kBaseBadgeH = 20;                 // badge strip height (px)
-const int kBaseToolbarH = 28;               // floating action toolbar height (px)
+// on screen) and become unusably small at 150-200%. kBase* constants live in
+// OverlayMetrics.h; scaled runtime values are below.
 const int BUTTON_COUNT = 4;                 // not a pixel metric: unscaled
-const int kBaseRowInsertButton = 16;
-const int kBaseButtonW = 32;
-const int kBaseButtonH = 20;
-const int kBaseButtonGap = 4;
-const int kBaseGripSize = 16;
-const int kBaseDragThresholdPx = 4;
-const int kBaseTooltipPad = 5;
-const Gdiplus::REAL kBaseTooltipFontPx = 10.0f;
-const Gdiplus::REAL kBaseBadgeFontPx = 11.0f;
-const Gdiplus::REAL kBaseButtonFontPx = 12.0f;
 const BYTE HOVER_WASH_ALPHA = 28;           // translucent accent wash over hovered row
-
-// ---- floating card editor metrics (96-DPI baseline, scaled via Scale()) ----
-const int kBaseCardW = 260;
-const int kBaseCardPad = 10;
-const int kBaseCardRowH = 22;
-const int kBaseCardRowGap = 6;
-const int kBaseCardLabelW = 60;   // field-label column width
-const int kBaseCardSwatchSize = 22;
-const int kBaseCardSwatchGap = 6;
-const int kBaseCardOkW = 60;
-const int kBaseCardOkH = 24;
 
 // Current DPI-scaled values, recomputed by UpdateDpiScaledMetrics() whenever
 // the overlay's window DPI changes (or on first use). Default to the 96-DPI
@@ -490,23 +471,6 @@ void HandleHotkeyNudge(long deltaDays);
 void ClearLinkMode();
 void CommitLinkTarget(const std::string& targetId);
 
-std::string Narrow(const wchar_t* w) {
-	if (!w || !*w) return "";
-	int len = (int)::wcslen(w);
-	int n = (int)::WideCharToMultiByte(CP_UTF8, 0, w, len, NULL, 0, NULL, NULL);
-	std::string s(n, '\0');
-	if (n > 0) ::WideCharToMultiByte(CP_UTF8, 0, w, len, &s[0], n, NULL, NULL);
-	return s;
-}
-
-std::wstring Widen(const std::string& s) {
-	if (s.empty()) return L"";
-	int n = ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
-	std::wstring w(n, L'\0');
-	if (n > 0) ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
-	return w;
-}
-
 const PpTask* FindTask(const PpDocument& doc, const std::string& id) {
 	for (const auto& task : doc.tasks) {
 		if (task.id == id) return &task;
@@ -612,10 +576,6 @@ void DefaultTaskDates(const PpDocument& doc, const std::string& rowId, const std
 	end = "2026-01-08";
 }
 
-bool IsTaskKind(const std::string& kind) {
-	return kind == "TASK" || kind == "TASK_PROGRESS";
-}
-
 void ClearSelectionState() {
 	g_selId.clear();
 	g_selKind.clear();
@@ -649,16 +609,8 @@ void SetOwnSelection(const std::string& kind, const std::string& id) {
 	g_ownSelId = id;
 }
 
-bool SameRect(const RECT& a, const RECT& b) {
-	return a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
-}
-
 bool SameSelectionState(bool hasSelection, const RECT& selRect, const std::string& selId, const std::string& selKind) {
 	return g_hasSelectionChrome == hasSelection && SameRect(g_selScreenRect, selRect) && g_selId == selId && g_selKind == selKind;
-}
-
-HtRect ToHtRect(const RECT& r) {
-	return { r.left, r.top, r.right, r.bottom };
 }
 
 void InvalidateHitSnapshot() {
@@ -834,11 +786,6 @@ void LayoutHoverInsertHotspot() {
 bool HoverInsertFromClientPoint(POINT pt) {
 	if (!g_hoverInsertValid) LayoutHoverInsertHotspot();
 	return g_hoverInsertValid && ::PtInRect(&g_hoverInsertRect, pt);
-}
-
-void NormalizeRect(RECT& rc) {
-	if (rc.left > rc.right) std::swap(rc.left, rc.right);
-	if (rc.top > rc.bottom) std::swap(rc.top, rc.bottom);
 }
 
 void UpdateSelectionFrameFromScreen() {
@@ -1355,42 +1302,6 @@ const PpText* FindTextById(const PpDocument& doc, const std::string& id) {
 // third editor kind only has to extend this function.
 bool IsEditSessionActive() {
 	return (g_editHwnd && !g_editKind.empty()) || (g_cardHwnd != NULL);
-}
-
-std::wstring FormatSwatchLabel(int idx) {
-	wchar_t buf[8];
-	::swprintf_s(buf, 8, L"%d", idx + 1);
-	return buf;
-}
-
-// Read a single wide EDIT control's text as a narrow UTF-8 string.
-std::string GetEditText(HWND hwnd) {
-	if (!hwnd) return "";
-	int len = ::GetWindowTextLengthW(hwnd);
-	std::vector<wchar_t> buf((size_t)len + 1);
-	::GetWindowTextW(hwnd, buf.data(), len + 1);
-	return Narrow(buf.data());
-}
-
-void SetEditText(HWND hwnd, const std::string& value) {
-	if (!hwnd) return;
-	::SetWindowTextW(hwnd, Widen(value).c_str());
-}
-
-// Strict ISO (YYYY-MM-DD) parse: DateToDays() silently returns 0 for garbage
-// input (sscanf_s just leaves unmatched fields as 0), so round-trip through
-// DaysToDate() and require an EXACT string match — this also rejects
-// civil-calendar nonsense like day 40 or month 13, which DaysFromCivil would
-// otherwise silently normalize into some other (wrong) date instead of failing.
-bool ParseIsoDateStrict(const std::string& text, long& outDays) {
-	int y = 0, m = 0, d = 0;
-	if (::sscanf_s(text.c_str(), "%d-%d-%d", &y, &m, &d) != 3) return false;
-	if (text.size() != 10 || text[4] != '-' || text[7] != '-') return false;
-	if (m < 1 || m > 12 || d < 1 || d > 31 || y < 1) return false;
-	long days = DateToDays(text);
-	if (DaysToDate(days) != text) return false;
-	outDays = days;
-	return true;
 }
 
 // Toggle the "invalid" visual (red border) by forcing the affected field(s)
@@ -3111,46 +3022,6 @@ void EnsureWindow() {
 
 // ---- premultiplied-alpha painting (GDI+) -----------------------------------
 
-Gdiplus::Color GpColor(BYTE a, COLORREF c) {
-	return Gdiplus::Color(a, GetRValue(c), GetGValue(c), GetBValue(c));
-}
-
-// Defined further down with the app-bar painters; declared here because the
-// chart-overlay paint path (rail row highlight) uses it first.
-Gdiplus::Color GpToken(BYTE a, unsigned long rgb);
-
-void AddRoundRect(Gdiplus::GraphicsPath& path, Gdiplus::REAL x, Gdiplus::REAL y,
-	Gdiplus::REAL w, Gdiplus::REAL h, Gdiplus::REAL r) {
-	if (w <= 0.0f || h <= 0.0f) return;
-	Gdiplus::REAL maxR = (w < h ? w : h) / 2.0f;
-	if (r > maxR) r = maxR;
-	if (r <= 0.0f) {
-		path.AddRectangle(Gdiplus::RectF(x, y, w, h));
-		return;
-	}
-	Gdiplus::REAL d = r * 2.0f;
-	path.StartFigure();
-	path.AddArc(x, y, d, d, 180.0f, 90.0f);
-	path.AddArc(x + w - d, y, d, d, 270.0f, 90.0f);
-	path.AddArc(x + w - d, y + h - d, d, d, 0.0f, 90.0f);
-	path.AddArc(x, y + h - d, d, d, 90.0f, 90.0f);
-	path.CloseFigure();
-}
-
-void DrawHandle(Gdiplus::Graphics& g, int cx, int cy, int r) {
-	using namespace Gdiplus;
-	GraphicsPath path;
-	AddRoundRect(path, (REAL)(cx - r), (REAL)(cy - r), (REAL)(2 * r + 1), (REAL)(2 * r + 1), 1.5f);
-	SolidBrush fill(Color(255, 255, 255, 255));
-	g.FillPath(&fill, &path);
-	GraphicsPath innerPath;
-	AddRoundRect(innerPath, (REAL)(cx - r + 1), (REAL)(cy - r + 1), (REAL)(2 * r - 1), (REAL)(2 * r - 1), 1.0f);
-	Pen inner(GpColor(255, HANDLE_INNER), 1.0f);
-	g.DrawPath(&inner, &innerPath);
-	Pen border(GpColor(255, ACCENT), 1.0f);
-	g.DrawPath(&border, &path);
-}
-
 void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	using namespace Gdiplus;
 	// Background stays fully transparent (alpha 0) — the caller cleared it.
@@ -3706,24 +3577,6 @@ void ShowOverlayForChartRect(const RECT& chart) {
 }
 
 // ---- BOTTOM APP BAR --------------------------------------------------------
-
-COLORREF AbRgb(unsigned long v) {
-	return RGB((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
-}
-
-Gdiplus::Color GpToken(BYTE a, unsigned long rgb) {
-	return Gdiplus::Color(a, (BYTE)((rgb >> 16) & 0xFF), (BYTE)((rgb >> 8) & 0xFF), (BYTE)(rgb & 0xFF));
-}
-
-Gdiplus::Font* MakeAppBarFont(Gdiplus::REAL px, int style) {
-	return new Gdiplus::Font(L"Segoe UI", px, style, Gdiplus::UnitPixel);
-}
-
-Gdiplus::REAL MeasureTextW(Gdiplus::Graphics& g, Gdiplus::Font& font, const wchar_t* text) {
-	Gdiplus::RectF bounds;
-	g.MeasureString(text, -1, &font, Gdiplus::PointF(0, 0), &bounds);
-	return bounds.Width;
-}
 
 AppBarSel AppBarSelFromKind(const std::string& kind) {
 	if (kind == "TASK") return AppBarSel::Task;

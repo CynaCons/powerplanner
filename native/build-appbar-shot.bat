@@ -10,9 +10,9 @@ if not exist "%OUT%" mkdir "%OUT%"
 
 pushd "%OUT%"
 echo [appbar-shot] compiling
+call "%SRC%sources.bat"
 cl /nologo /EHsc /MT /std:c++17 /bigobj /DUNICODE /D_UNICODE /DWIN32 /D_WINDLL /I"%SRC%PowerPlannerAddin" ^
-	"%SRC%render\appbar-shot.cpp" "%SRC%PowerPlannerAddin\Overlay.cpp" ^
-	"%SRC%PowerPlannerAddin\GanttBuilder.cpp" "%SRC%PowerPlannerAddin\GanttLayout.cpp" "%SRC%PowerPlannerAddin\GanttJson.cpp" "%SRC%PowerPlannerAddin\GanttOps.cpp" "%SRC%PowerPlannerAddin\GanttHitTest.cpp" "%SRC%PowerPlannerAddin\PptRenderer.cpp" ^
+	"%SRC%render\appbar-shot.cpp" %SHARED_GANTT_SRC% ^
 	/Fe"ppappbarshot.exe" || ( popd & exit /b 1 )
 popd
 echo [appbar-shot] built "%OUT%\ppappbarshot.exe"
