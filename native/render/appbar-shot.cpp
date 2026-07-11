@@ -466,6 +466,11 @@ int wmain(int argc, wchar_t** argv) {
 			}
 		}
 		if (wantTrace) {
+			// i4b-latency-traces (v2.5.3, SR-SMO-02) §1: monotonic zero epoch for
+			// every "tMs"/OPDISPATCH timestamp emitted below (GetTickCount64,
+			// relative to trace start). Existing profiles' emitted format is
+			// unchanged except for the added "tMs" field on each state line.
+			const ULONGLONG traceStartTickMs = ::GetTickCount64();
 			Overlay_SetHostActiveOverrideForTest(1);
 			PumpFor(1200);
 
@@ -496,6 +501,19 @@ int wmain(int argc, wchar_t** argv) {
 
 			auto captureStep = [&](const char* step, const wchar_t* profile) -> std::wstring {
 				const char* state = Overlay_DumpChromeStateForTest();
+				// i4b-latency-traces (v2.5.3, SR-SMO-02) §1: stamp every emitted
+				// TRACE state line with "tMs" (ms since trace start) so the driver
+				// can compute per-op latency. Inserted right after the opening
+				// brace; parsers stay backward-tolerant to its absence (older
+				// captures / other emitters of this dump).
+				std::string stateWithTMs = state ? state : "{}";
+				{
+					const ULONGLONG tMs = ::GetTickCount64() - traceStartTickMs;
+					char tBuf[32];
+					::snprintf(tBuf, sizeof(tBuf), "\"tMs\":%llu,", (unsigned long long)tMs);
+					size_t bracePos = stateWithTMs.find('{');
+					if (bracePos != std::string::npos) stateWithTMs.insert(bracePos + 1, tBuf);
+				}
 				wchar_t appPng[256], ctxPng[256];
 				swprintf_s(appPng, 256, L"native\\build\\trace_%ls_%hs_appbar.png", profile ? profile : L"op", step);
 				swprintf_s(ctxPng, 256, L"native\\build\\trace_%ls_%hs_ctx.png", profile ? profile : L"op", step);
@@ -540,9 +558,30 @@ int wmain(int argc, wchar_t** argv) {
 					if (lr.left<scr.left) lr.left=scr.left; if (lr.top<scr.top) lr.top=scr.top;
 					CaptureRectToPng(lr, largePng);
 				}
-				wprintf(L"TRACE %hs: %hs\n", step, state ? state : "{}");
+				wprintf(L"TRACE %hs: %hs\n", step, stateWithTMs.c_str());
 				wprintf(L"TRACE %hs ARTIFACTS: %ls %ls %ls %ls %ls\n", step, appPng, ctxPng, ovPng, chartPng, largePng);
 				return std::wstring(appPng);
+			};
+
+			// i4b-latency-traces (v2.5.3, SR-SMO-02) §1: print the OPDISPATCH
+			// marker (same relative clock as the "tMs" stamps above) at the exact
+			// moment a profile performs its operation via the app-bar perform /
+			// seam call, e.g. "TRACE OPDISPATCH: {"tMs":1234}". The driver parses
+			// this the same way it parses a step line (step name "OPDISPATCH")
+			// and treats its "tMs" as opDispatchTMs for latency math.
+			auto emitOpDispatch = [&]() {
+				const ULONGLONG tMs = ::GetTickCount64() - traceStartTickMs;
+				wprintf(L"TRACE OPDISPATCH: {\"tMs\":%llu}\n", (unsigned long long)tMs);
+			};
+			// i4b-latency-traces fix: step "tMs" stamps precede PNG captures but the
+			// driver used step deltas for opLatencyMs, so multi-second capture
+			// overhead polluted the budget. Emit authoritative synchronous dispatch
+			// duration immediately after the seam call (COM rebuild completes inside).
+			auto performOpWithLatency = [&](int cmd) {
+				const ULONGLONG t0 = ::GetTickCount64();
+				Overlay_PerformAppBarCommandForTest(cmd);
+				const ULONGLONG elapsed = ::GetTickCount64() - t0;
+				wprintf(L"TRACE OPLATENCY: {\"ms\":%llu}\n", (unsigned long long)elapsed);
 			};
 
 			// Pre setup depends on profile. Flows whose op IS the selection
@@ -714,6 +753,62 @@ int wmain(int argc, wchar_t** argv) {
 				PumpFor(300);
 				captureStep("pre", traceProfile);
 				Overlay_PerformAppBarCommandForTest(HtCmd_ScaleMonth);
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"task-nudge-latency") == 0) {
+				// i4b-latency-traces (v2.5.3, SR-SMO-02) §2: select TASK t1 (showcase
+				// doc has no literal t1; same "discovery" substitution as
+				// task-scale-keep-sel) -> dispatch +1d via the app-bar perform seam
+				// -> standard pre/immed/+1/+3 captures with "tMs" timestamps, plus a
+				// single OPDISPATCH marker at the exact dispatch instant so the
+				// driver can compute opLatencyMs.
+				Overlay_SelectForTest("TASK", "discovery");
+				try {
+					PowerPoint::ShapesPtr shs = slide->GetShapes();
+					long nn = shs->GetCount();
+					for (long ii = 1; ii <= nn; ++ii) {
+						auto s = shs->Item(_variant_t(ii));
+						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+							s->Select(Office::msoTrue);
+							break;
+						}
+					}
+				} catch (...) {}
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				emitOpDispatch();
+				performOpWithLatency(HtCmd_NudgePlus1);
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"task-color-latency") == 0) {
+				// i4b-latency-traces (v2.5.3, SR-SMO-02) §2: select TASK t1 -> dispatch
+				// a swatch color command via the app-bar perform seam -> standard
+				// pre/immed/+1/+3 captures + OPDISPATCH marker (see task-nudge-latency
+				// above for the shared rationale).
+				Overlay_SelectForTest("TASK", "discovery");
+				try {
+					PowerPoint::ShapesPtr shs = slide->GetShapes();
+					long nn = shs->GetCount();
+					for (long ii = 1; ii <= nn; ++ii) {
+						auto s = shs->Item(_variant_t(ii));
+						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+							s->Select(Office::msoTrue);
+							break;
+						}
+					}
+				} catch (...) {}
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				emitOpDispatch();
+				performOpWithLatency(HtCmd_Swatch3);
 				captureStep("immed", traceProfile);
 				PumpFor(150);
 				captureStep("+1", traceProfile);

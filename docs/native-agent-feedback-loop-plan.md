@@ -202,6 +202,70 @@ Post-delivery hunt (additional independent iteration): even after LockWindowUpda
 
 All prior phases remain green; trace augments them for transient/continuity bugs.
 
+i4b-latency-traces (v2.5.3, SR-SMO-02) — measured latency budgets, 2026-07-11:
+- appbar-shot.cpp --trace: every emitted `TRACE <step>: {json}` state line now
+  carries `"tMs":<uint>` (GetTickCount64 relative to trace start, inserted
+  right after the JSON's opening brace so key order stays irrelevant).
+  Existing profiles' emitted format is otherwise unchanged; parsers stay
+  backward-tolerant to a missing "tMs" (older captures / other emitters).
+- New one-shot marker `TRACE OPDISPATCH: {"tMs":<uint>}` printed at the exact
+  instant a profile dispatches its op via the app-bar perform seam (new
+  `emitOpDispatch()` lambda alongside `captureStep`). `_parse_trace_steps`
+  needed NO regex changes — it already matches `TRACE <name>: {json}`
+  generically, so OPDISPATCH is just parsed as an ordinary step named
+  "OPDISPATCH".
+- Two new profiles, both TASK-selected ("discovery" — the showcase doc has
+  no literal "t1", same substitution `task-scale-keep-sel` already uses) +
+  the standard pre/immed/+1/+3 capture pattern, mirroring task-scale-keep-sel
+  structurally:
+  - `task-nudge-latency`: dispatches `HtCmd_NudgePlus1` (+1d).
+  - `task-color-latency`: dispatches `HtCmd_Swatch3`.
+- harness_driver.py: `compute_op_latency_ms(tr)` finds the "OPDISPATCH" step
+  and the final "+3" step, then walks forward from just after OPDISPATCH for
+  the first step whose key fields (`_state_key_fields`: taskCount, ownSel,
+  scale, rowCount) already equal the final step's — the spec's allowed
+  "practical simplification" (usually matches at "immed"; falls through to
+  +1/+3 while the wholesale rebuild hasn't settled, e.g. the known taskCount
+  dip to 0 at immed). Returns `None` (not a failure) when tMs/OPDISPATCH data
+  is absent, so callers stay backward-tolerant.
+- New invariant `op_latency_budget` (profiles task-nudge-latency,
+  task-color-latency): `opLatencyMs <= 200`, with the measured value always
+  in `detail` whether it passes or fails — per spec this is expected to FAIL
+  until SR-SMO-01's rebuild-path gaps are fully closed; the threshold is
+  deliberately NOT softened. Also added per-profile `sel_survives_nudge` /
+  `sel_survives_color` (own-selection must stay TASK throughout, mirroring
+  the existing `sel_survives_scale` convention for task-scale-keep-sel).
+- Gotcha found + fixed during self-test: `check_trace_invariants`'s
+  generic step-sequence rules (appbar_visible_stable, no_large_sel_drop,
+  rowband_count monotonic, scale_group_always_reachable, etc.) all iterate
+  `tr.steps` directly — since the OPDISPATCH pseudo-step carries only
+  `{"tMs":...}`, letting it flow through those loops read every other field
+  as its default (empty ownSelKind, false appBarVisible, 0 rowCount) and
+  produced spurious failures. Fixed by filtering `OPDISPATCH` out of the
+  *local* `steps` list at the top of `check_trace_invariants` (kept in
+  `tr.steps` itself so `compute_op_latency_ms(tr)` can still find it).
+  Verified with synthetic TRACE stdout (no build needed): immed-matches-final
+  fast path, immed-dips-then-+1-matches slow path (deliberately >200ms to
+  confirm FAIL is reported with the correct measured value, not swallowed),
+  no-tMs backward-tolerance path, and a regression check that
+  task-scale-keep-sel's own invariant is untouched.
+- New scenario JSONs: `trace_task_nudge_latency.json` / `trace_task_color_latency.json`
+  (schema mirrors trace_task_scale_keep_sel.json — exe/trace_profile/timeout/
+  retries/check_invariants/invariants).
+- Not in scope for this unit (left for later i4b/SR-SMO-01 follow-up per the
+  spec's own file list): `drag-commit-echo` profile, reconcile shape-identity
+  (id/z-order stability) assertions, and hooking these 2 profiles into
+  `compare_trace_to_golden`/goldens (snapshot_trace_keys also reads raw
+  `tr.steps` and would need the same OPDISPATCH-aware filtering if ever used
+  for these profiles — noted here so it isn't a surprise later).
+- Usage: `python native/tools/harness_driver.py trace task-nudge-latency --check-invariants`
+  / `... trace task-color-latency --check-invariants`, or
+  `run_scenario("trace_task_nudge_latency")` / `run_scenario("trace_task_color_latency")`.
+  No build was run for this unit (spec explicitly scoped to source changes +
+  static verification only); C++ side verified by careful re-reading only —
+  build/e2e run still required before treating op_latency_budget's PASS/FAIL
+  as ground truth.
+
 ## Files and Touch Points (updated for full completion)
 
 - `native/PowerPlannerAddin/Overlay.h` and `Overlay.cpp` (added Overlay_DumpChromeStateForTest for rich row bands, selection, drag, appbar state)

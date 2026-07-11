@@ -1,0 +1,10 @@
+{
+  "name": "trace_task_nudge_latency",
+  "description": "v2.5.3 trace: task selected + +1d nudge via app-bar perform seam — measures command-dispatch to stable-visual latency (SR-SMO-02, op_latency_budget <=200ms; may legitimately fail until the SR-SMO-01 in-place reconcile unit lands)",
+  "exe": "ppappbarshot",
+  "trace_profile": "task-nudge-latency",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["op_latency_budget", "sel_survives_nudge"]
+}

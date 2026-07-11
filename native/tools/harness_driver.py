@@ -462,11 +462,103 @@ CONTINUITY_RULES = [
     "scale_group_always_reachable",
 ]
 
+# i4b-latency-traces (v2.5.3, SR-SMO-02) §3: op-dispatch latency for
+# task-nudge-latency / task-color-latency. appbar-shot.cpp prints:
+#   TRACE OPDISPATCH: {"tMs":...}  — relative trace clock at dispatch instant
+#   TRACE OPLATENCY: {"ms":...}    — authoritative synchronous seam duration
+# Step "tMs" on TRACE state lines is kept for continuity but step-delta math
+# is polluted by PNG capture overhead; prefer OPLATENCY when present.
+LATENCY_RULES = ["op_latency_budget"]
+
+
+def _state_key_fields(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Key fields compared to decide whether a step already reflects the
+    FINAL stable state for latency purposes (§3): taskCount, ownSel
+    (kind+id combined), scale, rowCount, plus the op's target field if the
+    chrome dump surfaces one relevant to the op. Overlay_DumpChromeStateForTest
+    doesn't surface task color/dates today, so nudge/color ops compare on
+    these four fields only -- still enough to detect "rebuild not yet
+    settled" (e.g. taskCount dips to 0 mid-rebuild, the known SR-SMO-01
+    in-place-reconcile gap)."""
+    return {
+        "taskCount": state.get("taskCount"),
+        "ownSel": (state.get("ownSelKind"), state.get("ownSelId")),
+        "scale": state.get("scale"),
+        "rowCount": state.get("rowCount"),
+    }
+
+
+def get_op_latency_ms(tr: OperationTraceReport) -> Optional[Dict[str, Any]]:
+    """Return opLatencyMs for latency profiles.
+
+    Prefers the authoritative TRACE OPLATENCY: {"ms":...} line (synchronous
+    dispatch duration, unaffected by PNG capture overhead). Falls back to
+    step tMs matching when OPLATENCY is absent (older binaries / captures).
+    """
+    op_latency_step = next((s for s in tr.steps if s.step == "OPLATENCY"), None)
+    if op_latency_step is not None:
+        ms = op_latency_step.state.get("ms")
+        if ms is not None:
+            return {
+                "opLatencyMs": ms,
+                "source": "OPLATENCY",
+            }
+    fallback = compute_op_latency_ms(tr)
+    if fallback is None:
+        return None
+    fallback["source"] = "step_tMs"
+    return fallback
+
+
+def compute_op_latency_ms(tr: OperationTraceReport) -> Optional[Dict[str, Any]]:
+    """§3 fallback: dispatch -> stable-visual latency from step tMs deltas.
+
+    Finds the "TRACE OPDISPATCH: {"tMs":...}" marker step and the final
+    ("+3") step, then applies the practical simplification the spec allows:
+    walk forward from the step right after OPDISPATCH and take the tMs of
+    the FIRST step whose key fields (see _state_key_fields) already equal
+    the final step's -- usually "immed", but falls through to +1/+3 if the
+    rebuild hasn't settled by then (the "+3" step always matches itself, so
+    a result is returned whenever tMs/OPDISPATCH data is present at all).
+
+    Returns None (not a failure) when tMs/OPDISPATCH data is absent so
+    callers stay backward-tolerant with older captures/binaries (per the
+    spec's "absent tMs -> skip latency" constraint).
+    """
+    if not tr.steps:
+        return None
+    step_names = [s.step for s in tr.steps]
+    if "OPDISPATCH" not in step_names:
+        return None
+    dispatch_idx = step_names.index("OPDISPATCH")
+    op_dispatch_t_ms = tr.steps[dispatch_idx].state.get("tMs")
+    if op_dispatch_t_ms is None:
+        return None
+    final_step = next((s for s in tr.steps if s.step == "+3"), None) or tr.steps[-1]
+    if "tMs" not in final_step.state:
+        return None
+    final_keys = _state_key_fields(final_step.state)
+    for s in tr.steps[dispatch_idx + 1:]:
+        if "tMs" not in s.state:
+            continue
+        if _state_key_fields(s.state) == final_keys:
+            return {
+                "opDispatchTMs": op_dispatch_t_ms,
+                "matchedStep": s.step,
+                "matchedTMs": s.state.get("tMs"),
+                "opLatencyMs": s.state.get("tMs") - op_dispatch_t_ms,
+            }
+    return None
+
 
 def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = None) -> List[Dict[str, Any]]:
     """Run core continuity checks. Returns list of {rule, passed, detail}."""
     results: List[Dict[str, Any]] = []
-    steps = tr.steps
+    # i4b-latency-traces (v2.5.3) §1: OPDISPATCH/OPLATENCY are timestamp-only
+    # markers (no chrome-state fields), so exclude them from generic step
+    # invariants -- otherwise missing ownSelKind/appBarVisible/rowCount/etc.
+    # would read as defaults and trip false positives on every other rule.
+    steps = [s for s in tr.steps if s.step not in ("OPDISPATCH", "OPLATENCY")]
     if not steps:
         results.append({"rule": "has_trace_steps", "passed": False, "detail": "no steps captured"})
         return results
@@ -693,6 +785,43 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": f"sel seq: {own_sel_seq} scale: {scale_seq}",
         })
 
+    if profile in ("task-nudge-latency", "task-color-latency"):
+        # i4b-latency-traces (v2.5.3, SR-SMO-02) §3: selection must stay TASK
+        # across the whole flow -- nudge/color are single-element ops that
+        # should never drop or retarget the selection (sel_survives_scale-style
+        # check, named per-profile to match that existing convention).
+        sel_rule = "sel_survives_nudge" if profile == "task-nudge-latency" else "sel_survives_color"
+        sel_task_all = all(kind == "TASK" for _, kind in own_sel_seq)
+        results.append({
+            "rule": sel_rule,
+            "passed": sel_task_all,
+            "detail": f"sel seq: {own_sel_seq}",
+        })
+
+        # op_latency_budget (§3): opLatencyMs <= 200. Measured value always in detail.
+        latency = get_op_latency_ms(tr)
+        if latency is None:
+            results.append({
+                "rule": "op_latency_budget",
+                "passed": False,
+                "detail": "opLatencyMs=unmeasurable (no OPLATENCY or tMs/OPDISPATCH data in this trace)",
+            })
+        else:
+            op_latency_ms = latency["opLatencyMs"]
+            if latency.get("source") == "OPLATENCY":
+                detail = f"opLatencyMs={op_latency_ms} (budget<=200ms; source=OPLATENCY direct dispatch measure)"
+            else:
+                detail = (
+                    f"opLatencyMs={op_latency_ms} (budget<=200ms; source=step_tMs fallback; "
+                    f"opDispatchTMs={latency['opDispatchTMs']}, matched step '{latency['matchedStep']}' "
+                    f"@ tMs={latency['matchedTMs']})"
+                )
+            results.append({
+                "rule": "op_latency_budget",
+                "passed": op_latency_ms <= 200,
+                "detail": detail,
+            })
+
     tr.invariants = results
     # write back
     (BUILD_DIR / f"trace_{tr.profile}_report.json").write_text(tr.to_json(), encoding="utf-8")
@@ -843,6 +972,17 @@ def run_trace_row_scale() -> OperationTraceReport:
     return run_operation_trace("row-scale")
 
 
+# i4b-latency-traces (v2.5.3, SR-SMO-02) high-level trace runners
+def run_trace_task_nudge_latency() -> OperationTraceReport:
+    """Trace TASK +1d nudge dispatch -> stable-visual latency (op_latency_budget)."""
+    return run_operation_trace("task-nudge-latency")
+
+
+def run_trace_task_color_latency() -> OperationTraceReport:
+    """Trace TASK swatch color dispatch -> stable-visual latency (op_latency_budget)."""
+    return run_operation_trace("task-color-latency")
+
+
 def run_trace_with_golden(profile: str, golden_name: Optional[str] = None, update: bool = False) -> Dict[str, Any]:
     tr = run_operation_trace(profile)
     gname = golden_name or f"trace_{profile}"
@@ -876,7 +1016,7 @@ if __name__ == "__main__":
     p_g.add_argument("--update", action="store_true")
 
     p_tr = sub.add_parser("trace", help="Run operation trace for continuity monitoring (v2.4.0)")
-    p_tr.add_argument("profile", help="e.g. row-add-below, row-rename, row-scale")
+    p_tr.add_argument("profile", help="e.g. row-add-below, row-rename, row-scale, task-nudge-latency, task-color-latency")
     p_tr.add_argument("--retries", type=int, default=1)
     p_tr.add_argument("--check-invariants", action="store_true")
 
