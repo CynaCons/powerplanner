@@ -318,6 +318,7 @@ bool RegistryRowAppBarCmd(int cmdId) {
 bool RegistryTaskAppBarCmd(int cmdId) {
 	switch (cmdId) {
 	case HtCmd_Edit:
+	case HtCmd_Rename:
 	case HtCmd_Swatch1: case HtCmd_Swatch2: case HtCmd_Swatch3: case HtCmd_Swatch4:
 	case HtCmd_Swatch5: case HtCmd_Swatch6: case HtCmd_Swatch7: case HtCmd_Swatch8:
 	case HtCmd_NudgeMinus1:

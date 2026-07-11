@@ -1,0 +1,9 @@
+{
+  "name": "trace_appbar_docked",
+  "description": "E2E feedback #2: Overall move/resize + item ops. Assert app bar remains docked immediately below chart rect (gap per tokens), moves with component, no drift at +1/+3 ticks. Combined with overall-move/resize profiles.",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "appbar-docked"],
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true
+}

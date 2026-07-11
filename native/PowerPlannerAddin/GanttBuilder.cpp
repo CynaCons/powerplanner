@@ -103,24 +103,13 @@ HRESULT InsertGantt(IDispatch* pApp, const PpDocument& doc, int* outShapeCount, 
 		PowerPoint::_SlidePtr slide = win->GetView()->GetSlide();
 		PowerPoint::ShapesPtr shapes = slide->GetShapes();
 
-		// Date range -> projection (pt/day), padded 5% each side.
-		std::string minD, maxD;
-		auto consider = [&](const std::string& d) {
-			if (d.empty()) return;
-			if (minD.empty() || d < minD) minD = d;
-			if (maxD.empty() || d > maxD) maxD = d;
-		};
-		for (const auto& t : doc.tasks) { consider(t.start); consider(t.end); }
-		for (const auto& m : doc.milestones) consider(m.date);
-		if (minD.empty()) return E_FAIL;
-
-		const long totalDays = std::max(1L, (DateToDays(maxD) - DateToDays(minD)) + 1);
-		const long pad = std::max(1L, (long)(totalDays * 0.05));
-		const float chartContentW = (slideW - MARGIN * 2.0f) - ROW_GUTTER;
-		const float ptPerDay = chartContentW / (float)(totalDays + pad * 2);
-
-		GanttLayoutResult L = LayoutGantt(doc, minD);
-		Scene sc = BuildGanttScene(doc, L, minD, maxD, pad, ptPerDay, slideW, MaterialLight());
+		// Date range -> projection (pt/day) -> Scene, via the SAME shared path
+		// ReconcileChartRoot uses (GanttScene.h's BuildProjectedScene), so the
+		// two emit routes can never skew — including the rows-only fallback
+		// window (no dated tasks/milestones => today..today+30d, SR-CRE-01),
+		// which used to make this function fail outright on empty documents.
+		Scene sc; std::string minD, maxD; long pad = 0; float ptPerDay = 0.0f;
+		if (!BuildProjectedScene(doc, slideW, &sc, &minD, &maxD, &pad, &ptPerDay)) return E_FAIL;
 		std::vector<PowerPoint::ShapePtr> emitted = RenderScene(shapes, sc);
 		count = (int)emitted.size();
 

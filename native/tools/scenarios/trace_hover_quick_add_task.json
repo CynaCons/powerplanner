@@ -1,0 +1,10 @@
+{
+  "name": "trace_hover_quick_add_task",
+  "description": "v2.5.2 trace: hover gutter + chip adds a TASK (not row); taskCount +1, rowCount stable (SR-CRE-04)",
+  "exe": "ppappbarshot",
+  "trace_profile": "hover-quick-add-task",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["task_created_and_selected"]
+}

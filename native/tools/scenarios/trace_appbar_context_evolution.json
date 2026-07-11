@@ -1,0 +1,9 @@
+{
+  "name": "trace_appbar_context_evolution",
+  "description": "E2E feedback #3: Select overall/CHART_ROOT (or background) → app bar has SCALE/INSERT global. Select task → only task groups (no SCALE). Select row → row groups. Transitions must update bar content cleanly. Use appBarGroups in dumps.",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "appbar-context-evolution"],
+  "timeout": 90,
+  "retries": 1,
+  "check_invariants": true
+}

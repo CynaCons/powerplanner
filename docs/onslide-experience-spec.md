@@ -124,8 +124,9 @@ to days with ghost + date tooltip, double-click opens card editor.
 Today = `primary`, deadline = `deadline`, custom = `customMarker` (or explicit
 color). Stem `marker.width`; pill per tokens (Today pill top, deadline pill
 bottom). **New in V4:** markers are full selection citizens — select (chrome =
-stem highlight), Delete key + app-bar Delete (**the delete path currently does
-not exist — known gap**), Rename (card editor), ±1d nudge, "Add marker"
+stem highlight), Delete key + app-bar Delete (**delete path shipped** —
+app-bar Delete in the marker context, the Delete key, and `DeleteById` all
+remove markers), Rename (card editor), ±1d nudge, "Add marker"
 (background context) inserts a custom marker at visible-range center.
 
 ## R6 — Notes (text elements)  *(engine shipped: e4ddbaa/c1e74ff; entry points new)*
@@ -165,7 +166,7 @@ swaps with the selection:
 | selection | left-side contents (in order) |
 |---|---|
 | none | INSERT · Row · Task · Milestone · Marker · Note |
-| task | *label* · Edit · [8 swatches] · −1d · +1d · Label: bar/rail · Link · Unlink(iff deps) · Note · Delete — **plus the full Row group for the task's row** when that row renders rail labels (task row) |
+| task | *label* · Edit · [8 swatches] · −1d · +1d · Label: bar/rail · −10% · +10% · Link · Unlink(iff deps) · Note · Delete — **plus the full Row group for the task's row** when that row renders rail labels (task row) |
 | row | *name* · Rename — plus Row group: Above · Below · ↑ · ↓ · Indent · Outdent · Delete |
 | milestone | *label* · Edit · −1d · +1d · Note · Delete |
 | marker | *label* · Rename · −1d · +1d · Delete |

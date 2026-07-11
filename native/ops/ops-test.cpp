@@ -1178,6 +1178,25 @@ static bool RunAppBarModelChecks() {
 		AppBarModel m = BuildAppBar(AppBarSel::Task, doc, "t1");
 		ok = Check(m.name == "My Task", "appbar task: name is task label") && ok;
 		ok = Check(AppBarFindItemInModel(m, HtCmd_Edit) != nullptr, "appbar task: has Edit") && ok;
+		{
+			bool sawEdit = false, renameAfterEdit = false;
+			for (const auto& g : m.groups) {
+				for (const auto& item : g.items) {
+					if (item.cmd == HtCmd_Edit) sawEdit = true;
+					if (item.cmd == HtCmd_Rename) {
+						ok = Check(sawEdit, "appbar task: Rename follows Edit") && ok;
+						renameAfterEdit = sawEdit;
+					}
+				}
+			}
+			ok = Check(renameAfterEdit, "appbar task: has Rename after Edit") && ok;
+		}
+		{
+			const AppBarItem* nudgeM = AppBarFindItemInModel(m, HtCmd_NudgeMinus1);
+			const AppBarItem* nudgeP = AppBarFindItemInModel(m, HtCmd_NudgePlus1);
+			ok = Check(nudgeM && nudgeM->label == "-1d", "appbar task: NudgeMinus1 label is -1d") && ok;
+			ok = Check(nudgeP && nudgeP->label == "+1d", "appbar task: NudgePlus1 label is +1d") && ok;
+		}
 		ok = Check(AppBarCountSwatches(m) == 8, "appbar task: exactly 8 swatches") && ok;
 		for (int i = 0; i < 8; ++i) {
 			const int swatchCmds[] = {
@@ -1264,6 +1283,12 @@ static bool RunAppBarModelChecks() {
 		doc.milestones.push_back(PpMilestone{"m1", "MS", "2026-01-01", "r1", ""});
 		AppBarModel m = BuildAppBar(AppBarSel::Milestone, doc, "m1");
 		ok = Check(AppBarFindItemInModel(m, HtCmd_Edit) != nullptr, "appbar milestone: Edit") && ok;
+		{
+			const AppBarItem* nudgeM = AppBarFindItemInModel(m, HtCmd_NudgeMinus1);
+			const AppBarItem* nudgeP = AppBarFindItemInModel(m, HtCmd_NudgePlus1);
+			ok = Check(nudgeM && nudgeM->label == "-1d", "appbar milestone: NudgeMinus1 label is -1d") && ok;
+			ok = Check(nudgeP && nudgeP->label == "+1d", "appbar milestone: NudgePlus1 label is +1d") && ok;
+		}
 		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgeMinus1) != nullptr, "appbar milestone: NudgeMinus1") && ok;
 		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgePlus1) != nullptr, "appbar milestone: NudgePlus1") && ok;
 		ok = Check(AppBarFindItemInModel(m, HtCmd_AddNote) != nullptr, "appbar milestone: AddNote") && ok;
@@ -1279,6 +1304,12 @@ static bool RunAppBarModelChecks() {
 		doc.markers.push_back(PpMarker{"mk1", "today", "Today", "2026-01-01", ""});
 		AppBarModel m = BuildAppBar(AppBarSel::Marker, doc, "mk1");
 		ok = Check(AppBarFindItemInModel(m, HtCmd_Rename) != nullptr, "appbar marker: Rename") && ok;
+		{
+			const AppBarItem* nudgeM = AppBarFindItemInModel(m, HtCmd_NudgeMinus1);
+			const AppBarItem* nudgeP = AppBarFindItemInModel(m, HtCmd_NudgePlus1);
+			ok = Check(nudgeM && nudgeM->label == "-1d", "appbar marker: NudgeMinus1 label is -1d") && ok;
+			ok = Check(nudgeP && nudgeP->label == "+1d", "appbar marker: NudgePlus1 label is +1d") && ok;
+		}
 		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgeMinus1) != nullptr, "appbar marker: NudgeMinus1") && ok;
 		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgePlus1) != nullptr, "appbar marker: NudgePlus1") && ok;
 		const AppBarItem* del = AppBarFindItemInModel(m, HtCmd_Delete);
@@ -1850,6 +1881,7 @@ int main() {
 	}
 	if (appBarOk) {
 		std::printf("APPBAR MODEL OK\n");
+		std::printf("CREATION MODEL OK\n");
 	}
 	if (rowOpsOk) {
 		std::printf("ROW OPS OK\n");

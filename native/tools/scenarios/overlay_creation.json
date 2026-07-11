@@ -1,0 +1,9 @@
+{
+  "name": "overlay_creation",
+  "description": "v2.5.2 ppoverlay creation stages: CREATE + CREATEEMPTY on rows-only chart (docs/SRS_CreationFlows.md §4)",
+  "exe": "ppoverlay",
+  "args": [],
+  "timeout": 420,
+  "retries": 2,
+  "expected_markers": ["CREATE PASS", "CREATEEMPTY PASS", "INPUT NEUTRAL OK"]
+}

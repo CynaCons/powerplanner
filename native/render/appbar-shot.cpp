@@ -154,6 +154,53 @@ static AppBarSel AppBarSelFromKind(const char* kind) {
 	return AppBarSel::None;
 }
 
+static bool ParseRowBandFromDump(const char* json, const char* rowId, RECT* out) {
+	if (!json || !rowId || !out) return false;
+	char needle[64];
+	::snprintf(needle, sizeof(needle), "\"rowId\":\"%s\"", rowId);
+	const char* p = ::strstr(json, needle);
+	while (p) {
+		const char* leftKey = ::strstr(p, "\"left\":");
+		const char* topKey = ::strstr(p, "\"top\":");
+		const char* rightKey = ::strstr(p, "\"right\":");
+		const char* bottomKey = ::strstr(p, "\"bottom\":");
+		if (leftKey && topKey && rightKey && bottomKey
+			&& leftKey < topKey && topKey < rightKey && rightKey < bottomKey) {
+			long l = 0, t = 0, r = 0, b = 0;
+			if (::sscanf_s(leftKey, "\"left\":%ld", &l) == 1
+				&& ::sscanf_s(topKey, "\"top\":%ld", &t) == 1
+				&& ::sscanf_s(rightKey, "\"right\":%ld", &r) == 1
+				&& ::sscanf_s(bottomKey, "\"bottom\":%ld", &b) == 1) {
+				out->left = l; out->top = t; out->right = r; out->bottom = b;
+				return true;
+			}
+		}
+		p = ::strstr(p + 1, needle);
+	}
+	return false;
+}
+
+static void PumpHoverQuickAddTask(HWND ov, const char* rowId) {
+	RECT band{};
+	const char* dump = Overlay_DumpChromeStateForTest();
+	if (!ParseRowBandFromDump(dump, rowId, &band) || !ov) return;
+	const int cy = (band.top + band.bottom) / 2;
+	POINT bandPt = { (band.left + band.right) / 2, cy };
+	Overlay_SetCursorPosOverrideForTest(true, bandPt);
+	POINT clientPt = bandPt;
+	::ScreenToClient(ov, &clientPt);
+	::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)clientPt.x, (short)clientPt.y));
+	PumpFor(900);
+	POINT chipPt = { band.left - 14, cy };
+	Overlay_SetCursorPosOverrideForTest(true, chipPt);
+	::ScreenToClient(ov, &chipPt);
+	LPARAM clickLp = MAKELPARAM((short)chipPt.x, (short)chipPt.y);
+	::PostMessageW(ov, WM_MOUSEMOVE, 0, clickLp);
+	PumpFor(120);
+	::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+	::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+}
+
 // Count pixels within per-channel tolerance 24 of legacy accent RGB(26,115,232).
 static double MeasureAccentPctInRect(const RECT& rc) {
 	int w = rc.right - rc.left, h = rc.bottom - rc.top;
@@ -508,7 +555,7 @@ int wmain(int argc, wchar_t** argv) {
 			bool traceCleanStart = traceProfile && (
 				wcscmp(traceProfile, L"row-label-select") == 0 ||
 				wcscmp(traceProfile, L"row-then-overall") == 0 ||
-				wcsstr(traceProfile, L"task-") ||
+				wcscmp(traceProfile, L"task-select-progress") == 0 ||
 				wcsstr(traceProfile, L"overall-"));
 			if (traceCleanStart) {
 				Overlay_SelectForTest("", ""); // clean start: the branch drives selection itself
@@ -649,6 +696,46 @@ int wmain(int argc, wchar_t** argv) {
 				captureStep("overall-after", traceProfile);
 				PumpFor(150);
 				captureStep("+1", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"task-scale-keep-sel") == 0) {
+				// Showcase doc task id (MakeShowcaseDocument has no literal t1).
+				Overlay_SelectForTest("TASK", "discovery");
+				try {
+					PowerPoint::ShapesPtr shs = slide->GetShapes();
+					long nn = shs->GetCount();
+					for (long ii = 1; ii <= nn; ++ii) {
+						auto s = shs->Item(_variant_t(ii));
+						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+							s->Select(Office::msoTrue);
+							break;
+						}
+					}
+				} catch (...) {}
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				Overlay_PerformAppBarCommandForTest(HtCmd_ScaleMonth);
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"hover-quick-add-task") == 0) {
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				// Drive the SAME code path the row-gutter "+" chip click uses
+				// (input-neutral seam) instead of only hovering via the cursor
+				// override, which never actually triggered the action. Uses the
+				// same showcase row id the row-scale profile selects ("research",
+				// via Overlay_SelectForTest("ROW", "research") in the shared
+				// non-clean-start setup above -- this profile isn't in the
+				// traceCleanStart list either, so it goes through that same path).
+				Overlay_PerformHoverQuickAddForTest("research");
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"task-select-progress") == 0) {
 				// Select a task body, verify TASK sel, progress should be actionable and visible.
 				Overlay_SelectForTest("TASK", "discovery");

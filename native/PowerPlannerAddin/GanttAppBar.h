@@ -159,6 +159,7 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		{
 			AppBarGroup g;
 			g.items.push_back({ HtCmd_Edit, "Edit", AppBarIcon::Edit });
+			g.items.push_back({ HtCmd_Rename, "Rename", AppBarIcon::Rename });
 			model.groups.push_back(g);
 		}
 		{
@@ -180,8 +181,8 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		}
 		{
 			AppBarGroup g;
-			g.items.push_back({ HtCmd_NudgeMinus1, "1d", AppBarIcon::MinusDay });
-			g.items.push_back({ HtCmd_NudgePlus1, "1d", AppBarIcon::PlusDay });
+			g.items.push_back({ HtCmd_NudgeMinus1, "-1d", AppBarIcon::MinusDay });
+			g.items.push_back({ HtCmd_NudgePlus1, "+1d", AppBarIcon::PlusDay });
 			AppBarItem labelItem;
 			labelItem.cmd = HtCmd_CycleLabelPlacement;
 			labelItem.label = "Label: " + AppBarLabelPlacementWord(task->labelPlacement);
@@ -248,8 +249,8 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		}
 		{
 			AppBarGroup g;
-			g.items.push_back({ HtCmd_NudgeMinus1, "1d", AppBarIcon::MinusDay });
-			g.items.push_back({ HtCmd_NudgePlus1, "1d", AppBarIcon::PlusDay });
+			g.items.push_back({ HtCmd_NudgeMinus1, "-1d", AppBarIcon::MinusDay });
+			g.items.push_back({ HtCmd_NudgePlus1, "+1d", AppBarIcon::PlusDay });
 			g.items.push_back({ HtCmd_AddNote, "Note", AppBarIcon::Note });
 			AppBarItem del;
 			del.cmd = HtCmd_Delete;
@@ -274,8 +275,8 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		}
 		{
 			AppBarGroup g;
-			g.items.push_back({ HtCmd_NudgeMinus1, "1d", AppBarIcon::MinusDay });
-			g.items.push_back({ HtCmd_NudgePlus1, "1d", AppBarIcon::PlusDay });
+			g.items.push_back({ HtCmd_NudgeMinus1, "-1d", AppBarIcon::MinusDay });
+			g.items.push_back({ HtCmd_NudgePlus1, "+1d", AppBarIcon::PlusDay });
 			AppBarItem del;
 			del.cmd = HtCmd_Delete;
 			del.label = "Delete";

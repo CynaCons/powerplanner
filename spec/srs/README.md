@@ -55,6 +55,8 @@ Priority is implied by phase ordering in `PLAN.md`, not a column.
 
 The visual specification is generated (see below), not a separate SRS file.
 
+Native-only requirements are maintained in the sibling directory `../srs-native/` using the identical table format. See `../srs-native/README.md`.
+
 ## Visual specification
 
 The foundation includes a **visual** specification (`../visual/`) — reference

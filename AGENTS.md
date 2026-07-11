@@ -59,10 +59,29 @@ When commands change, update this file and `.claude/launch.json` together.
     items without losing track. Do this *before* starting implementation.
 - Keep `README.md` user-facing and concise.
 - Use `docs/` for focused implementation notes such as the PowerPoint add-in
-  guide.
-- For requirements and user interaction specifications, prefer ASPICE-style
-  SRS documents (e.g. `docs/SRS_FeatureName.md` or under `spec/srs/`) organized
-  by feature with clear "what the user does" and "software requirements".
+  guide, architecture maps, UX inventories, and plans. **Do not place primary
+  normative requirements (SRS) here.**
+- **SRS / Requirements (MANDATORY FORMAT AND LOCATION)**:
+  - The single correct format is the ASPICE-style requirements *tables* as
+    defined and used in `spec/srs/` (see spec/srs/README.md and examples like
+    SRS-chart-elements.md, SRS-powerpoint.md).
+  - **Layered architecture (enforced)**:
+    - `spec/` = Foundation layer (common to web + native): `data-model.md`,
+      `layout.md`, `visual-vocabulary.md`, `interaction.md`, `schema/`, `fixtures/`,
+      + `spec/srs/` for shared cross-implementation requirements.
+    - Platform-specific: `spec/srs-native/` (or `spec/srs/ppt/`) for native-only
+      concerns (overlay lifecycle, app bar, shape protection, theme coherence of
+      chrome/menus/panels, on-slide selection, docking, etc.). Use identical
+      table format.
+    - Web-specific (when created): future `spec/srs-web/`.
+  - When adding or updating requirements from feedback or analysis: create/update
+    in the correct layer using the table columns (ID | Requirement | Rationale |
+    Verification | Trace). Never use prose-only or docs/SRS_*.md as the source
+    of truth for "shall" statements.
+  - Always trace new SRS entries to PLAN items, harness scenarios, and code.
+- All agents and future work must follow the structure above. Update
+  `spec/README.md` when the model evolves. References in AGENTS/PLAN must point
+  to the canonical locations.
 
 ## Memory Files and Continuous Self-Improvement
 
@@ -109,6 +128,21 @@ When commands change, update this file and `.claude/launch.json` together.
   (and rename/scale profiles). It captures before/immed/+1/+3 chrome state JSON + PNGs
   and runs continuity invariants. Re-run after edits to verify fixes for flashes,
   selection drops, wrong chrome context. Always update PLAN.md + docs/ memory files.
+- **Native SRS + E2E discipline (from feedback 2026-07-11)**: Any native UX
+  behavior change, new panel/menu, selection/docking/context rule MUST be
+  accompanied by:
+  1. An entry (or update) in the correct SRS (table format in spec/srs or
+     spec/srs-native/).
+  2. A corresponding harness e2e scenario or trace profile exercising the
+     requirement (new or extension of existing).
+  3. An explicit checklist item in the active PLAN.md iteration *before*
+     implementation begins.
+  4. Re-run of relevant traces + `--check-invariants` + artifact review.
+- Theme coherence (SR-THEME family): any new or modified popup, context menu,
+  card, panel, or chrome element must be implemented with custom drawing
+  sourcing from GanttTheme.h + design-tokens.md and pass visual coherence
+  review (PNG + mockup comparison). Default Win32 menus/dialogs are forbidden
+  for PowerPlanner surfaces.
 
 ## Self-Verification & Process Awareness (MANDATORY)
 

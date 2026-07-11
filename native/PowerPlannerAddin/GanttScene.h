@@ -572,8 +572,14 @@ inline std::string BuildRowYJson(const PpDocument& doc, float slideW, const std:
 }
 
 // Shared by InsertGantt/UpdateGantt (and the ops harness): date range ->
-// projection (pt/day), padded 5% each side, then the resulting Scene. Returns
-// false if the document has no dated tasks/milestones to anchor a range on.
+// projection (pt/day), padded 5% each side, then the resulting Scene. A
+// document with no dated tasks/milestones (e.g. a rows-only chart after
+// deleting every task) does NOT fail: it gets a default today..today+30d
+// window so the chart still emits a valid axis + rows + PP_PROJ and every
+// creation route keeps working on empty charts (SR-CRE-01,
+// docs/SRS_CreationFlows.md). PP_PROJ field meanings
+// {minDay,pad,ptPerDay,originX} are frozen and unchanged by the fallback —
+// minDay is simply the default window's first day.
 inline bool BuildProjectedScene(const PpDocument& doc, float slideW, Scene* outScene,
 	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
 	std::string minD, maxD;
@@ -584,7 +590,13 @@ inline bool BuildProjectedScene(const PpDocument& doc, float slideW, Scene* outS
 	};
 	for (const auto& t : doc.tasks) { consider(t.start); consider(t.end); }
 	for (const auto& m : doc.milestones) consider(m.date);
-	if (minD.empty()) return false;
+	if (minD.empty()) {
+		SYSTEMTIME st; ::GetLocalTime(&st);
+		char todayBuf[16];
+		::sprintf_s(todayBuf, "%04d-%02d-%02d", (int)st.wYear, (int)st.wMonth, (int)st.wDay);
+		minD = todayBuf;
+		maxD = DaysToDate(DateToDays(minD) + 30);
+	}
 
 	const long totalDays = std::max(1L, (DateToDays(maxD) - DateToDays(minD)) + 1);
 	const long pad = std::max(1L, (long)(totalDays * 0.05));

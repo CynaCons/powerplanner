@@ -72,3 +72,23 @@ agree.
 The data contract carries `schemaVersion` (currently `1`). A breaking change to
 `data-model.md` or `schema/document.schema.json` bumps that version, and both
 implementations migrate together.
+
+## Requirements Layering (SRS)
+
+`spec/srs/` holds **shared** ASPICE-style requirement tables that apply to both
+implementations (web + native). These are the foundation "shall" statements.
+
+Native-specific requirements (overlay, on-slide app bar, shape emission details,
+selection suppression for child shapes, sticky docking, theme-coherent chrome
+and menus, lifecycle, etc.) live in `spec/srs-native/` (table format identical
+to `spec/srs/`). 
+
+- Never author primary SRS "shall" statements in `docs/`.
+- `docs/` holds supporting material: guides, architecture notes, UX inventories,
+  mockups, and iteration plans.
+- When user feedback or analysis yields a new requirement, register the work
+  item in `PLAN.md` first, then add the table entry in the right SRS location,
+  plus e2e harness coverage for native changes.
+
+See `spec/srs/README.md` for the exact table format and ID rules. The same
+format applies under `spec/srs-native/`. All agents must follow this structure.

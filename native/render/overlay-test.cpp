@@ -41,6 +41,10 @@
 //                       with no task under the pointer) creates a new task
 //                       spanning the drag, verified by re-reading PP_DOC
 //                       (task count +1, correct row, ~N-day span).
+//   Stage 7b: CREATEEMPTY — reset to rows-only, drag-create + double-click-
+//                       create on empty cells (posted input only); verify
+//                       taskCount deltas and TASK own-selection; restore the
+//                       pre-stage document for downstream stages.
 //   Stage 12: MARKERDRAG — a synthetic drag gesture on the "today" marker's
 //                       vertical line (located via PP_PROJ + PP_DOC, NOT the
 //                       rendered shape rect — see GanttHitTest's Marker zone)
@@ -1307,6 +1311,262 @@ int wmain(int argc, wchar_t** argv) {
 				}
 				wprintf(pass ? L"CREATE PASS\n" : L"CREATE FAIL\n");
 				if (!pass) rc = 1;
+			}
+
+			// ---- stage 7b: CREATEEMPTY -----------------------------------------
+			// Rows-only chart: strip tasks+milestones via GanttOps, rebuild,
+			// then exercise empty-cell drag-create and double-click-create
+			// (posted messages + cursor override only). Restore the document
+			// snapshot taken before this stage so INPLACE/KEYS/etc. still find
+			// the sample fixture tasks they expect.
+			if (rc == 0) RequireForeground(ppHwnd, &rc);
+			if (rc == 0) {
+				bool pass = false;
+				const char* failReason = "unknown";
+				std::string savedDocJson;
+				try {
+					PowerPoint::_SlidePtr slide = app->GetActiveWindow()->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shapes = slide->GetShapes();
+					PowerPoint::ShapePtr chartRoot;
+					long n = shapes->GetCount();
+					for (long i = 1; i <= n && !chartRoot; ++i) {
+						PowerPoint::ShapePtr sh = shapes->Item(_variant_t(i));
+						_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+						if (kind == L"CHART_ROOT") chartRoot = sh;
+					}
+					HWND ov = OverlayHwnd();
+					if (!chartRoot || !ov) {
+						failReason = "missing chart root or overlay hwnd";
+					} else {
+						savedDocJson = ReadGanttFromSlide(app);
+						PpDocument stripped = DocumentFromJson(savedDocJson);
+						std::vector<std::string> stripIds;
+						for (const auto& t : stripped.tasks) stripIds.push_back(t.id);
+						for (const auto& m : stripped.milestones) stripIds.push_back(m.id);
+						for (const auto& id : stripIds) DeleteById(stripped, id);
+						HRESULT hrStrip = UpdateGantt(app, stripped, "");
+						if (FAILED(hrStrip)) {
+							failReason = "UpdateGantt rows-only reset failed";
+						} else {
+							PumpFor(800);
+
+							// The rows-only reconcile is STRUCTURAL (every task/
+							// milestone shape removed), so ReconcileChartRoot took
+							// the ungroup/regroup path and the CHART_ROOT now has
+							// a NEW Shape identity — the pre-reset `chartRoot`
+							// pointer is dead. Each in-stage creation rebuild is
+							// structural again (a shape added). Re-find the group
+							// by tag on EVERY use (same defensive pattern as
+							// INPLACE/TEXTELEM) instead of capturing it once.
+							auto findChartRoot = [&]() -> PowerPoint::ShapePtr {
+								PowerPoint::_SlidePtr slideNow = app->GetActiveWindow()->GetView()->GetSlide();
+								PowerPoint::ShapesPtr shapesNow = slideNow->GetShapes();
+								long nNow = shapesNow->GetCount();
+								for (long i = 1; i <= nNow; ++i) {
+									PowerPoint::ShapePtr sh = shapesNow->Item(_variant_t(i));
+									_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+									std::wstring kind = k.length() ? (const wchar_t*)k : L"";
+									if (kind == L"CHART_ROOT") return sh;
+								}
+								return nullptr;
+							};
+
+							auto findRowLabel = [&](const std::string& rowId) -> PowerPoint::ShapePtr {
+								PowerPoint::ShapePtr root = findChartRoot();
+								if (!root) return nullptr;
+								PowerPoint::GroupShapesPtr grp = root->GetGroupItems();
+								long gn = grp->GetCount();
+								for (long j = 1; j <= gn; ++j) {
+									PowerPoint::ShapePtr child = grp->Item(_variant_t(j));
+									_bstr_t ck = child->GetTags()->Item(_bstr_t(L"PP_KIND"));
+									std::wstring ckind = ck.length() ? (const wchar_t*)ck : L"";
+									if (ckind != L"ROW_LABEL") continue;
+									_bstr_t rid = child->GetTags()->Item(_bstr_t(L"PP_ID"));
+									std::string ridUtf8 = WNarrowFn(rid.length() ? (const wchar_t*)rid : L"");
+									if (ridUtf8 == rowId) return child;
+								}
+								return nullptr;
+							};
+
+							auto chartScreenRect = [&]() -> RECT {
+								RECT rc{};
+								PowerPoint::ShapePtr root = findChartRoot();
+								if (!root) return rc;
+								PowerPoint::DocumentWindowPtr winForRect = app->GetActiveWindow();
+								float crLeft = root->GetLeft(), crTop = root->GetTop();
+								float crW = root->GetWidth(), crH = root->GetHeight();
+								rc.left = winForRect->PointsToScreenPixelsX(crLeft);
+								rc.top = winForRect->PointsToScreenPixelsY(crTop);
+								rc.right = winForRect->PointsToScreenPixelsX(crLeft + crW);
+								rc.bottom = winForRect->PointsToScreenPixelsY(crTop + crH);
+								return rc;
+							};
+
+							// SCREEN px per DAY = pixels spanned by ptPerDay
+							// slide-points (PP_PROJ's ptPerDay is points/day, so
+							// no further ptPerDay factor belongs here). Measure
+							// across 30 days so PointsToScreenPixelsX's integer
+							// quantization contributes ~1/30 day, not ~1 px/day.
+							const int kMeasureDays = 30;
+							auto pxPerDayFromProj = [&](double* outPxPerDay, PpProj* outProj) -> bool {
+								PowerPoint::ShapePtr root = findChartRoot();
+								if (!root) return false;
+								std::string projJson = WNarrowFn((const wchar_t*)root->GetTags()->Item(_bstr_t(L"PP_PROJ")));
+								PpProj proj{};
+								if (!ParseProj(projJson, &proj) || proj.ptPerDay <= 0.0f) return false;
+								PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+								int x1 = win->PointsToScreenPixelsX(proj.originX);
+								int x2 = win->PointsToScreenPixelsX(proj.originX + proj.ptPerDay * (float)kMeasureDays);
+								if (x2 <= x1) return false;
+								*outPxPerDay = (double)(x2 - x1) / (double)kMeasureDays;
+								if (outProj) *outProj = proj;
+								return *outPxPerDay > 0.0;
+							};
+
+							auto dayFromScreenX = [&](int screenX, const PpProj& proj) -> long {
+								PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+								int screenOrigin = win->PointsToScreenPixelsX(proj.originX);
+								int screenSpan = win->PointsToScreenPixelsX(proj.originX + proj.ptPerDay * (float)kMeasureDays);
+								double pxPerDayScreen = (double)(screenSpan - screenOrigin) / (double)kMeasureDays;
+								if (pxPerDayScreen <= 0.0) return proj.minDay - proj.pad;
+								long dayIdx = (long)::llround((double)(screenX - screenOrigin) / pxPerDayScreen);
+								// Day at originX = minDay - pad (frozen PP_PROJ
+								// semantics — same mapping ReflowFromSlide uses).
+								return dayIdx + proj.minDay - proj.pad;
+							};
+
+							auto emptyCellPoint = [&](const std::string& rowId, float xFrac, POINT* outScreen) -> bool {
+								PowerPoint::ShapePtr rowLabel = findRowLabel(rowId);
+								if (!rowLabel || !outScreen) return false;
+								PowerPoint::DocumentWindowPtr win = app->GetActiveWindow();
+								float labelTop = rowLabel->GetTop();
+								float labelH = rowLabel->GetHeight();
+								int bandCy = (win->PointsToScreenPixelsY(labelTop)
+									+ win->PointsToScreenPixelsY(labelTop + labelH)) / 2;
+								RECT chartRc = chartScreenRect();
+								int anchorX = chartRc.left + (int)((chartRc.right - chartRc.left) * xFrac);
+								*outScreen = { anchorX, bandCy };
+								return true;
+							};
+
+							auto postEmptyCellDrag = [&](const std::string& rowId, float xFrac, int dragDays) -> bool {
+								POINT screenPt{};
+								if (!emptyCellPoint(rowId, xFrac, &screenPt)) return false;
+								double pxPerDay = 0.0;
+								PpProj proj{};
+								if (!pxPerDayFromProj(&pxPerDay, &proj)) return false;
+								POINT clientPt = screenPt;
+								::ScreenToClient(ov, &clientPt);
+								long shiftPx = (long)::lround((double)dragDays * pxPerDay);
+								SetOverlayCursorOverride(screenPt);
+								::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON,
+									MAKELPARAM((short)clientPt.x, (short)clientPt.y));
+								PumpFor(60);
+								const int kSteps = 5;
+								for (int s = 1; s <= kSteps; ++s) {
+									int mx = clientPt.x + (int)(shiftPx * s / kSteps);
+									SetOverlayCursorOverride({ screenPt.x + (mx - clientPt.x), screenPt.y });
+									::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)mx, (short)clientPt.y));
+									PumpFor(60);
+								}
+								int finalX = clientPt.x + (int)shiftPx;
+								SetOverlayCursorOverride({ screenPt.x + (int)shiftPx, screenPt.y });
+								::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)clientPt.y));
+								PumpFor(800);
+								return true;
+							};
+
+							auto postEmptyCellDoubleClick = [&](const std::string& rowId, float xFrac) -> bool {
+								POINT screenPt{};
+								if (!emptyCellPoint(rowId, xFrac, &screenPt)) return false;
+								POINT clientPt = screenPt;
+								::ScreenToClient(ov, &clientPt);
+								SetOverlayCursorOverride(screenPt);
+								LPARAM clickLp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+								::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
+								::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+								::PostMessageW(ov, WM_LBUTTONDBLCLK, MK_LBUTTON, clickLp);
+								::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+								PumpFor(800);
+								return true;
+							};
+
+							const std::string dragRowId = "r_launch";
+							const std::string dblRowId = "r_build";
+							const int kCreateDays = 10;
+							PpProj proj{};
+							double pxPerDay = 0.0;
+							POINT dragAnchor{};
+							if (!pxPerDayFromProj(&pxPerDay, &proj)) {
+								failReason = "could not derive px-per-day from PP_PROJ";
+							} else if (!emptyCellPoint(dragRowId, 0.35f, &dragAnchor)) {
+								failReason = "could not locate empty drag cell";
+							} else if (!postEmptyCellDrag(dragRowId, 0.35f, kCreateDays)) {
+								failReason = "drag-create gesture failed";
+							} else {
+								long expectStartDay = dayFromScreenX(dragAnchor.x, proj);
+								std::string docAfterDrag = ReadGanttFromSlide(app);
+								PpDocument docDrag = DocumentFromJson(docAfterDrag);
+								if (docDrag.tasks.size() != 1) {
+									failReason = "drag-create taskCount != 1";
+								} else if (Overlay_GetSelectedKindForTest() != OVERLAY_SELKIND_TASK_FOR_TEST) {
+									failReason = "drag-create own selection is not TASK";
+								} else {
+									const PpTask& nt = docDrag.tasks[0];
+									long gotStart = DateToDays(nt.start);
+									long spanDays = DateToDays(nt.end) - DateToDays(nt.start) + 1;
+									if (nt.rowId != dragRowId) {
+										failReason = "drag-create row mismatch";
+									} else if (gotStart < expectStartDay - 1 || gotStart > expectStartDay + 1) {
+										failReason = "drag-create date mismatch";
+									} else if (spanDays < kCreateDays - 1 || spanDays > kCreateDays + 1) {
+										failReason = "drag-create span mismatch";
+									} else if (!postEmptyCellDoubleClick(dblRowId, 0.55f)) {
+										failReason = "double-click-create gesture failed";
+									} else {
+										std::string docAfterDbl = ReadGanttFromSlide(app);
+										PpDocument docDbl = DocumentFromJson(docAfterDbl);
+										if (docDbl.tasks.size() != 2) {
+											failReason = "double-click-create taskCount != 2";
+										} else if (Overlay_GetSelectedKindForTest() != OVERLAY_SELKIND_TASK_FOR_TEST) {
+											failReason = "double-click-create own selection is not TASK";
+										} else {
+											bool foundDbl = false;
+											for (const auto& t : docDbl.tasks) {
+												if (t.rowId == dblRowId) { foundDbl = true; break; }
+											}
+											if (!foundDbl) {
+												failReason = "double-click-create row mismatch";
+											} else {
+												pass = true;
+												failReason = "";
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				} catch (const _com_error& e) {
+					failReason = "COM error during CREATEEMPTY";
+					wprintf(L"CREATEEMPTY: COM error 0x%08lX\n", (unsigned long)e.Error());
+				}
+
+				if (!savedDocJson.empty()) {
+					try {
+						PpDocument restoreDoc = DocumentFromJson(savedDocJson);
+						UpdateGantt(app, restoreDoc, "");
+						PumpFor(800);
+					} catch (...) {}
+				}
+
+				if (pass) {
+					wprintf(L"CREATEEMPTY PASS\n");
+				} else {
+					wprintf(L"CREATEEMPTY FAIL: %hs\n", failReason ? failReason : "unknown");
+					rc = 1;
+				}
 			}
 
 			// ---- stage 8: INPLACE ---------------------------------------------
@@ -3312,10 +3572,18 @@ int wmain(int argc, wchar_t** argv) {
 				long c0Ov = 0, c0Ab = 0, c0OvSwp = 0, c0AbSwp = 0;
 				long c1Ov = 0, c1Ab = 0, c1OvSwp = 0, c1AbSwp = 0;
 				try {
-					Overlay_SelectForTest("", "");
-					// Fixed screen point outside the chart so hover polling sees no change.
+					// Park the cursor override at the fixed outside point FIRST:
+					// a stale in-chart hover position left armed by an earlier
+					// stage could still be mid-flight (empty-cell hover hint's
+					// 600ms timer) when we start sampling, and that hint
+					// showing then clearing across the settle boundary is
+					// exactly what produced the intermittent +2 overlay-paint
+					// flake this stage exists to catch. Settle well past the
+					// 600ms hint threshold (+ a tick) before reading baseline
+					// counters so any such transition finishes beforehand.
 					SetOverlayCursorOverride({ 10, 10 });
-					PumpFor(400);
+					Overlay_SelectForTest("", "");
+					PumpFor(1200);
 
 					Overlay_GetRenderCountersForTest(&c0Ov, &c0Ab, &c0OvSwp, &c0AbSwp);
 					PumpFor(900);

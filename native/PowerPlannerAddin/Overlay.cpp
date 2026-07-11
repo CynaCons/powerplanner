@@ -259,6 +259,8 @@ std::wstring g_badge = L"PowerPlanner";
 RECT g_buttonRects[BUTTON_COUNT] = {};
 RECT g_frameRect = {};
 RECT g_chartScreenRect = {};
+static float g_chartLeftPt = 0.0f;
+static float g_chartWidthPt = 0.0f;
 RECT g_selScreenRect = {};
 int g_windowOriginX = 0;
 int g_windowOriginY = 0;
@@ -300,6 +302,12 @@ RECT g_hoverBandRect = {};
 RECT g_hoverInsertRect = {};
 bool g_hoverInsertValid = false;
 bool g_lastLeftButtonDown = false;
+
+// Empty-cell hover discovery hint (SR-CRE-05) + creation-failure reason (SR-CRE-02).
+bool g_emptyCellHoverActive = false;
+DWORD g_emptyCellHoverSinceTick = 0;
+bool g_emptyCellHintShownThisSession = false;
+std::wstring g_creationFailHint;
 
 struct EditRegion {
 	std::string kind;
@@ -443,7 +451,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H);
 void RenderOverlay();
 void RequestOverlayRepaint();
 void HandleToolbarButton(int button);
-void HandleHoverInsertRow();
+void HandleHoverQuickAddTask();
 void RebuildChart(PpDocument& doc, const std::string& selectId);
 void OvLog(const wchar_t* msg);
 void StartNewUndoEntryIfPossible();
@@ -504,34 +512,50 @@ const PpMarker* FindMarker(const PpDocument& doc, const std::string& id) {
 	return nullptr;
 }
 
+// originDay is the ISO day number rendered AT originXpx. Per the frozen
+// PP_PROJ semantics {minDay,pad,ptPerDay,originX} (see GanttBuilder.cpp's
+// emission/ReflowFromSlide pair: bar left = originX + (day - (minDay - pad))
+// * ptPerDay), the day at originX is minDay - pad, NOT minDay — the window
+// starts pad days before the earliest dated item.
+struct ProjPx { bool ok; double pxPerDay; double originXpx; long originDay; };
+static ProjPx ProjectionPx();
+static long AnchorDayFromScreenX(long screenX);
+static long DayAtVisibleCenter();
+
 std::string DefaultMarkerDateAtVisibleCenter() {
+	const long centerScreenX = (g_chartScreenRect.left + g_chartScreenRect.right) / 2;
 	float pxPerDay = ComputeEmptyCellPxPerDay();
-	if (pxPerDay <= 0.0f || g_chartScreenRect.right <= g_chartScreenRect.left) return "2026-01-01";
-	if (!g_app) return "2026-01-01";
-	try {
-		std::string json = ReadGanttFromSlide(g_app);
-		if (json.empty()) return "2026-01-01";
-		PpDocument doc = DocumentFromJson(json);
-		const long centerScreenX = (g_chartScreenRect.left + g_chartScreenRect.right) / 2;
-		bool haveRef = false;
-		long refDay = 0;
-		long refScreenX = 0;
-		for (const auto& item : g_hitSnapshot.items) {
-			if (item.kind != HtItemKind::Task) continue;
-			const PpTask* task = FindTask(doc, item.id);
-			if (!task) continue;
-			refDay = DateToDays(task->start);
-			refScreenX = item.rect.left;
-			haveRef = true;
-			break;
+	if (pxPerDay > 0.0f && g_app) {
+		try {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) {
+				PpDocument doc = DocumentFromJson(json);
+				bool haveRef = false;
+				long refDay = 0;
+				long refScreenX = 0;
+				for (const auto& item : g_hitSnapshot.items) {
+					if (item.kind != HtItemKind::Task) continue;
+					const PpTask* task = FindTask(doc, item.id);
+					if (!task) continue;
+					refDay = DateToDays(task->start);
+					refScreenX = item.rect.left;
+					haveRef = true;
+					break;
+				}
+				if (haveRef) {
+					const long centerDay = refDay + (long)::lround((double)(centerScreenX - refScreenX) / (double)pxPerDay);
+					return DaysToDate(centerDay);
+				}
+			}
 		}
-		if (!haveRef) return "2026-01-01";
-		const long centerDay = refDay + (long)::lround((double)(centerScreenX - refScreenX) / (double)pxPerDay);
+		catch (...) {}
+	}
+	ProjPx proj = ProjectionPx();
+	if (proj.ok) {
+		const long centerDay = proj.originDay + (long)::lround((centerScreenX - proj.originXpx) / proj.pxPerDay);
 		return DaysToDate(centerDay);
 	}
-	catch (...) {
-		return "2026-01-01";
-	}
+	return DaysToDate(0);
 }
 
 // Row + date for a free note at the visible chart center (background Note).
@@ -575,8 +599,16 @@ void DefaultTaskDates(const PpDocument& doc, const std::string& rowId, const std
 		end = doc.tasks.front().end;
 		return;
 	}
-	start = "2026-01-01";
-	end = "2026-01-08";
+	const long centerScreenX = (g_chartScreenRect.left + g_chartScreenRect.right) / 2;
+	ProjPx proj = ProjectionPx();
+	if (proj.ok) {
+		const long centerDay = proj.originDay + (long)::lround((centerScreenX - proj.originXpx) / proj.pxPerDay);
+		start = DaysToDate(centerDay);
+		end = DaysToDate(centerDay + 6);
+		return;
+	}
+	start = DaysToDate(0);
+	end = DaysToDate(6);
 }
 
 void ClearSelectionState() {
@@ -1832,6 +1864,82 @@ HtHit HitTestClientPoint(POINT pt) {
 	return GanttHitTestPoint(g_hitSnapshot, pt.x + g_windowOriginX, pt.y + g_windowOriginY);
 }
 
+// Returns true only when the discovery hint pill's own shown/hidden state
+// actually transitioned this tick (hidden->shown once hover has dwelled
+// 600ms, or shown->hidden when the hover ends) -- mirrors UpdateHoverFromCursor's
+// return-bool pattern so Tick() can request exactly one repaint per transition.
+// Previously the "is it due to show" check was re-derived separately in Tick
+// (from the raw fields) while the ACTUAL g_emptyCellHintShownThisSession
+// mutation happened later, inside Paint; if a tick's repaint didn't go
+// through (or the pill only visually flips on a later tick), the two could
+// disagree and effectively re-arm, letting a stale hover position left by an
+// earlier stage/gesture show then clear the pill across an otherwise-idle
+// window. Owning both the transition and the flag here removes that split.
+bool UpdateEmptyCellHoverHint() {
+	const bool wasShown = g_emptyCellHintShownThisSession;
+	if (g_gestureActive || g_dragActive || g_linkMode || IsEditSessionActive()) {
+		g_emptyCellHoverActive = false;
+		g_emptyCellHintShownThisSession = false;
+		return wasShown != g_emptyCellHintShownThisSession;
+	}
+	POINT pt = {};
+	if (!OverlayGetCursorPos(&pt) || !::PtInRect(&g_chartScreenRect, pt)) {
+		g_emptyCellHoverActive = false;
+		g_emptyCellHintShownThisSession = false;
+		g_creationFailHint.clear();
+		return wasShown != g_emptyCellHintShownThisSession;
+	}
+	POINT clientPt = { pt.x - g_windowOriginX, pt.y - g_windowOriginY };
+	const HtHit hit = HitTestClientPoint(clientPt);
+	if (hit.zone != HtZone::EmptyCell) {
+		g_emptyCellHoverActive = false;
+		g_emptyCellHintShownThisSession = false;
+		g_creationFailHint.clear();
+		return wasShown != g_emptyCellHintShownThisSession;
+	}
+	if (!g_emptyCellHoverActive) {
+		g_emptyCellHoverActive = true;
+		g_emptyCellHoverSinceTick = ::GetTickCount();
+		g_emptyCellHintShownThisSession = false;
+	} else if (!g_emptyCellHintShownThisSession &&
+		(::GetTickCount() - g_emptyCellHoverSinceTick) >= 600) {
+		g_emptyCellHintShownThisSession = true;
+	}
+	return wasShown != g_emptyCellHintShownThisSession;
+}
+
+void PaintPositionedHintPill(Gdiplus::Graphics& g, const wchar_t* hint) {
+	if (!hint || !*hint) return;
+	Gdiplus::Font hintFont(L"Segoe UI", (Gdiplus::REAL)g_tooltipFontPx, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+	Gdiplus::RectF hintBounds;
+	g.MeasureString(hint, -1, &hintFont, Gdiplus::PointF(0, 0), &hintBounds);
+	const int tipPad = g_tooltipPad;
+	const int tipW = (int)hintBounds.Width + tipPad * 2;
+	const int tipH = (int)hintBounds.Height + tipPad * 2;
+	int tipX = 0;
+	int tipY = 0;
+	if (g_appBarGeomValid) {
+		const int cx = (g_appBarLastRect.left + g_appBarLastRect.right) / 2 - g_windowOriginX;
+		tipY = g_appBarLastRect.top - g_windowOriginY - tipH - Scale(8);
+		tipX = cx - tipW / 2;
+	} else if (g_chartScreenRect.right > g_chartScreenRect.left) {
+		const int cx = (g_chartScreenRect.left + g_chartScreenRect.right) / 2 - g_windowOriginX;
+		tipY = g_chartScreenRect.bottom - g_windowOriginY - tipH - Scale(12);
+		tipX = cx - tipW / 2;
+	} else {
+		return;
+	}
+	Gdiplus::GraphicsPath hintPath;
+	AddRoundRect(hintPath, (Gdiplus::REAL)tipX, (Gdiplus::REAL)tipY, (Gdiplus::REAL)tipW, (Gdiplus::REAL)tipH, 3.0f);
+	Gdiplus::SolidBrush hintBg(GpToken(255, gt::ink));
+	g.FillPath(&hintBg, &hintPath);
+	Gdiplus::StringFormat hintFmt;
+	hintFmt.SetAlignment(Gdiplus::StringAlignmentCenter);
+	hintFmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+	Gdiplus::SolidBrush hintText(GpToken(255, gt::surface));
+	g.DrawString(hint, -1, &hintFont, Gdiplus::RectF((Gdiplus::REAL)tipX, (Gdiplus::REAL)tipY, (Gdiplus::REAL)tipW, (Gdiplus::REAL)tipH), &hintFmt, &hintText);
+}
+
 // Translate a pure HtCursor into a real HCURSOR for ::SetCursor. This is the
 // ONLY place HCURSOR appears — GanttHitTest.h/.cpp stay COM/Windows-free so
 // GanttCursorForZone can be unit-tested from the ops harness.
@@ -1961,6 +2069,55 @@ void ResetDragGestureState() {
 	g_dragCandidateDy = 0.0f;
 }
 
+// PP_PROJ-based screen-pixel day<->point projection (SR-CRE-01). Used as a
+// fallback when no task shape can supply a px/day scale (empty charts).
+static ProjPx ProjectionPx() {
+	ProjPx r{};
+	r.ok = false;
+	if (g_chartScreenRect.right <= g_chartScreenRect.left) return r;
+	if (g_chartWidthPt <= 0.0f) return r;
+	PpProj proj;
+	if (!ParseProj(g_chartProj, &proj) || proj.ptPerDay <= 0.0f) return r;
+	const double chartScreenWidthPx = (double)(g_chartScreenRect.right - g_chartScreenRect.left);
+	const double scale = chartScreenWidthPx / (double)g_chartWidthPt;
+	r.pxPerDay = (double)proj.ptPerDay * scale;
+	r.originXpx = (double)g_chartScreenRect.left + ((double)proj.originX - (double)g_chartLeftPt) * scale;
+	r.originDay = proj.minDay - proj.pad; // day at originX (frozen PP_PROJ semantics)
+	r.ok = r.pxPerDay > 0.0;
+	return r;
+}
+
+static long AnchorDayFromScreenX(long screenX) {
+	float pxPerDay = ComputeEmptyCellPxPerDay();
+	if (pxPerDay > 0.0f && g_app) {
+		try {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) {
+				PpDocument doc = DocumentFromJson(json);
+				for (const auto& item : g_hitSnapshot.items) {
+					if (item.kind != HtItemKind::Task) continue;
+					const PpTask* task = FindTask(doc, item.id);
+					if (!task) continue;
+					const long refDay = DateToDays(task->start);
+					const long refScreenX = item.rect.left;
+					return refDay + (long)::lround((double)(screenX - refScreenX) / (double)pxPerDay);
+				}
+			}
+		}
+		catch (...) {}
+	}
+	ProjPx proj = ProjectionPx();
+	if (proj.ok) {
+		return proj.originDay + (long)::lround((screenX - proj.originXpx) / proj.pxPerDay);
+	}
+	return 0;
+}
+
+static long DayAtVisibleCenter() {
+	const long centerScreenX = (g_chartScreenRect.left + g_chartScreenRect.right) / 2;
+	return AnchorDayFromScreenX(centerScreenX);
+}
+
 // SCREEN-PIXELS-per-day for the gesture. WM_MOUSEMOVE deltas are screen
 // pixels and must never be mixed with PP_PROJ's ptPerDay field, which is in
 // slide POINTS, without a COM-derived points->pixels zoom factor — which
@@ -1992,6 +2149,8 @@ float ComputeDragPxPerDay(const RECT& anchorRect, long anchorSpanDays) {
 		float widthPx = (float)(item.rect.right - item.rect.left);
 		if (widthPx > 0.0f) return widthPx / (float)span;
 	}
+	ProjPx proj = ProjectionPx();
+	if (proj.ok && proj.pxPerDay > 0.0) return (float)proj.pxPerDay;
 	return 0.0f;
 }
 
@@ -2136,9 +2295,7 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 
 // px-per-day for a CREATE gesture anchored on an EmptyCell (no task rect to
 // derive scale from at the anchor point itself). Reuses ComputeDragPxPerDay's
-// "scan the snapshot for any task with a usable day-span" fallback path by
-// passing an empty anchor rect / zero span, so the scale always comes from an
-// existing task's rect-width / day-span — the same axis all tasks share.
+// task-scan path, then PP_PROJ projection fallback when the chart has zero tasks.
 float ComputeEmptyCellPxPerDay() {
 	RECT empty = {};
 	return ComputeDragPxPerDay(empty, 0);
@@ -2154,38 +2311,14 @@ void StartCreateGesture(const HtHit& hit, POINT downPt) {
 	if (!g_app) return;
 
 	float pxPerDay = ComputeEmptyCellPxPerDay();
-	if (pxPerDay <= 0.0f) return;
-
-	// Derive the anchor day from the down-point x. There is no task rect at
-	// an EmptyCell point to read a day directly from, so instead anchor
-	// against a REFERENCE task already in the snapshot: its rect.left is a
-	// known (day, screen-x) pair (day = task.start, screen-x = rect.left),
-	// and every task shares the same time axis (pxPerDay), so the anchor day
-	// is that reference day plus/minus the screen-pixel offset from the
-	// reference, divided by pxPerDay. This is the documented choice for A4's
-	// "derive px-per-day... or from any task rect in the snapshot" — using a
-	// task rect as the (day, x) reference point avoids a second COM call
-	// beyond the one doc read ComputeEmptyCellPxPerDay's fallback already
-	// performs (that read is reused below via a fresh ReadGanttFromSlide,
-	// which is cheap/idempotent and keeps this function self-contained).
-	std::string json = ReadGanttFromSlide(g_app);
-	if (json.empty()) return;
-	PpDocument doc = DocumentFromJson(json);
-	bool haveRef = false;
-	long refDay = 0;
-	long refScreenX = 0;
-	for (const auto& item : g_hitSnapshot.items) {
-		if (item.kind != HtItemKind::Task) continue;
-		const PpTask* task = FindTask(doc, item.id);
-		if (!task) continue;
-		refDay = DateToDays(task->start);
-		refScreenX = item.rect.left;
-		haveRef = true;
-		break;
+	if (pxPerDay <= 0.0f) {
+		g_creationFailHint = L"Cannot create — chart scale unavailable";
+		return;
 	}
-	if (!haveRef) return;
 
-	long anchorDay = refDay + (long)::lround((double)(downPt.x + g_windowOriginX - refScreenX) / (double)pxPerDay);
+	const long screenX = downPt.x + g_windowOriginX;
+	const long anchorDay = AnchorDayFromScreenX(screenX);
+	g_creationFailHint.clear();
 
 	g_dragKind = DragKind::Create;
 	g_createRowId = hit.rowId;
@@ -2495,7 +2628,10 @@ void CommitCreateGesture(const std::string& rowId, long startDay, long endDay) {
 				// A2, same reasoning as CommitDragGesture: set synchronously,
 				// do not resync chrome here (stale/invalidated snapshot).
 				SetOwnSelection("TASK", newId);
+				g_creationFailHint.clear();
 				RequestOverlayRepaint();
+			} else {
+				g_creationFailHint = L"Cannot create task";
 			}
 		}
 	}
@@ -2685,9 +2821,9 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 		if (HoverInsertFromClientPoint(pt)) {
 			try {
-				HandleHoverInsertRow();
+				HandleHoverQuickAddTask();
 			} catch (...) {
-				OvLog(L"hover row insert failed");
+				OvLog(L"hover quick-add task failed");
 			}
 			return 0;
 		}
@@ -2841,6 +2977,16 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// today, but keeps behavior if the walk and regions ever diverge).
 		if (const EditRegion* region = EditRegionFromClientPoint(pt)) {
 			OpenInlineEditor(*region);
+			return 0;
+		}
+		if (hit.zone == HtZone::EmptyCell && !hit.rowId.empty()) {
+			HtMenuOp op{};
+			op.opKind = HtOpKind::AddTaskAtPoint;
+			try {
+				HandleContextMenuCommand(op, hit, pt);
+			} catch (...) {
+				OvLog(L"empty-cell double-click create failed");
+			}
 			return 0;
 		}
 		return 0;
@@ -3284,25 +3430,22 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	}
 
 	if (g_linkMode && g_appBarShown && g_appBarGeomValid) {
-		const wchar_t* hint = L"Link: click a target task \x00b7 Esc cancels";
-		Gdiplus::Font hintFont(L"Segoe UI", g_tooltipFontPx, FontStyleRegular, UnitPixel);
-		RectF hintBounds;
-		g.MeasureString(hint, -1, &hintFont, PointF(0, 0), &hintBounds);
-		int tipPad = g_tooltipPad;
-		int tipW = (int)hintBounds.Width + tipPad * 2;
-		int tipH = (int)hintBounds.Height + tipPad * 2;
-		int cx = (g_appBarLastRect.left + g_appBarLastRect.right) / 2 - g_windowOriginX;
-		int tipY = g_appBarLastRect.top - g_windowOriginY - tipH - Scale(8);
-		int tipX = cx - tipW / 2;
-		GraphicsPath hintPath;
-		AddRoundRect(hintPath, (REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH, 3.0f);
-		SolidBrush hintBg(GpToken(255, gt::ink));
-		g.FillPath(&hintBg, &hintPath);
-		StringFormat hintFmt;
-		hintFmt.SetAlignment(StringAlignmentCenter);
-		hintFmt.SetLineAlignment(StringAlignmentCenter);
-		SolidBrush hintText(GpToken(255, gt::surface));
-		g.DrawString(hint, -1, &hintFont, RectF((REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH), &hintFmt, &hintText);
+		PaintPositionedHintPill(g, L"Link: click a target task \x00b7 Esc cancels");
+	}
+
+	const wchar_t* emptyCellHint = nullptr;
+	if (!g_creationFailHint.empty()) {
+		emptyCellHint = g_creationFailHint.c_str();
+	} else if (g_emptyCellHoverActive && g_emptyCellHintShownThisSession) {
+		// UpdateEmptyCellHoverHint() (called once per Tick, before this paint
+		// runs) is the sole place that flips shownThisSession once the 600ms
+		// dwell elapses; painting just reads the resulting state instead of
+		// re-deriving "due" here too (see its comment for why the split used
+		// to double-fire).
+		emptyCellHint = L"Drag to create a task \x2014 double-click or right-click for more";
+	}
+	if (emptyCellHint && !g_gestureActive && !g_dragActive && !g_linkMode && !IsEditSessionActive()) {
+		PaintPositionedHintPill(g, emptyCellHint);
 	}
 
 	// Hover-only "PowerPlanner" chip (SR-CHR-02): top-edge band, no selection active.
@@ -4323,6 +4466,19 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 	}
 
 	if ((g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE") && !g_ownSelId.empty()) {
+		if (g_ownSelKind == "TASK" && cmd == HtCmd_Rename) {
+			for (const auto& item : g_hitSnapshot.items) {
+				if (item.kind == HtItemKind::Task && item.id == g_ownSelId) {
+					RECT screenRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+					try { OpenCardEditor(g_ownSelKind, g_ownSelId, screenRect); } catch (...) { OvLog(L"appbar task Rename failed"); }
+					g_appBarValid = false;
+					RequestOverlayRepaint();
+					return;
+				}
+			}
+			OvLog(L"appbar task Rename: no hit rect for selection");
+			return;
+		}
 		HtMenuOp op = (g_ownSelKind == "TASK") ? MapTaskAppBarCommand(cmd) : MapMilestoneAppBarCommand(cmd);
 		if (op.opKind == HtOpKind::Edit) {
 			HtItemKind wantItemKind = (g_ownSelKind == "MILESTONE") ? HtItemKind::Milestone : HtItemKind::Task;
@@ -4505,7 +4661,7 @@ void CommitLinkTarget(const std::string& targetId) {
 
 // Single choke point for every user-gesture commit (drag, create, toolbar
 // button, hover-insert row, inline-edit) — see CommitDragGesture/
-// CommitCreateGesture/HandleToolbarButton/HandleHoverInsertRow/
+// CommitCreateGesture/HandleToolbarButton/HandleHoverQuickAddTask/
 // CommitInlineEdit, all of which call this. StartNewUndoEntryIfPossible()
 // MUST run before the mutation is applied to PowerPoint so the whole gesture
 // (including UpdateGantt's occasional ungroup/regroup on structural edits)
@@ -4788,9 +4944,9 @@ void HandleToolbarButton(int button) {
 	g_mutating = false;
 }
 
-void HandleHoverInsertRow() {
+void HandleHoverQuickAddTask() {
 	if (!g_app || g_mutating || g_hoverRowId.empty()) return;
-	const std::string afterRowId = g_hoverRowId;
+	const std::string rowId = g_hoverRowId;
 
 	g_mutating = true;
 	try {
@@ -4798,24 +4954,35 @@ void HandleHoverInsertRow() {
 		if (json.empty()) { g_mutating = false; return; }
 
 		PpDocument doc = DocumentFromJson(json);
-		std::string rowId = AddRowBelow(doc, afterRowId, "New Row");
-		if (!rowId.empty()) {
-			RebuildChart(doc, rowId);
-			SetOwnSelection("ROW", rowId);
+		if (ComputeEmptyCellPxPerDay() <= 0.0f && !ProjectionPx().ok) {
+			g_creationFailHint = L"Cannot add task — chart scale unavailable";
+			g_mutating = false;
+			return;
+		}
+		const long centerDay = DayAtVisibleCenter();
+		const std::string startISO = DaysToDate(centerDay);
+		const std::string endISO = DaysToDate(centerDay + 4);
+		std::string taskId = AddTask(doc, rowId, "New Task", startISO, endISO);
+		if (!taskId.empty()) {
+			RebuildChart(doc, taskId);
+			SetOwnSelection("TASK", taskId);
+			g_creationFailHint.clear();
 			RequestOverlayRepaint();
 			wchar_t buf[128];
-			::swprintf_s(buf, 128, L"hover insert row below %hs", afterRowId.c_str());
+			::swprintf_s(buf, 128, L"hover quick-add task in row %hs", rowId.c_str());
 			OvLog(buf);
+		} else {
+			g_creationFailHint = L"Cannot add task — row unavailable";
 		}
 	}
 	catch (const _com_error&) {
-		OvLog(L"COM error during hover row insert");
+		OvLog(L"COM error during hover quick-add task");
 	}
 	catch (const std::exception&) {
-		OvLog(L"document error during hover row insert");
+		OvLog(L"document error during hover quick-add task");
 	}
 	catch (...) {
-		OvLog(L"unknown error during hover row insert");
+		OvLog(L"unknown error during hover quick-add task");
 	}
 	g_mutating = false;
 }
@@ -4996,83 +5163,55 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			break;
 		}
 		case HtOpKind::AddTaskAtPoint: {
-			// Mirrors StartCreateGesture's EmptyCell anchor-day derivation: no
-			// task rect at this point to read a day from directly, so anchor
-			// against a reference task already in the (still-valid, since we
-			// have not rebuilt yet) hit snapshot. Falls back to a 7-day span.
-			float pxPerDay = ComputeEmptyCellPxPerDay();
-			if (pxPerDay > 0.0f) {
-				bool haveRef = false;
-				long refDay = 0;
-				long refScreenX = 0;
-				for (const auto& item : g_hitSnapshot.items) {
-					if (item.kind != HtItemKind::Task) continue;
-					const PpTask* task = FindTask(doc, item.id);
-					if (!task) continue;
-					refDay = DateToDays(task->start);
-					refScreenX = item.rect.left;
-					haveRef = true;
-					break;
-				}
-				if (haveRef) {
-					long screenX = clientPt.x + g_windowOriginX;
-					long anchorDay = refDay + (long)::lround((double)(screenX - refScreenX) / (double)pxPerDay);
-					std::string startISO = DaysToDate(anchorDay);
-					std::string endISO = DaysToDate(anchorDay + 6); // default ~1 week span
-					selectId = AddTask(doc, hit.rowId, "New task", startISO, endISO);
-					changed = !selectId.empty();
-					selectKind = "TASK";
-				}
+			if (ComputeEmptyCellPxPerDay() <= 0.0f && !ProjectionPx().ok) {
+				g_creationFailHint = L"Cannot add task — chart scale unavailable";
+				break;
+			}
+			const long screenX = clientPt.x + g_windowOriginX;
+			const long anchorDay = AnchorDayFromScreenX(screenX);
+			const std::string startISO = DaysToDate(anchorDay);
+			const std::string endISO = DaysToDate(anchorDay + 6);
+			selectId = AddTask(doc, hit.rowId, "New task", startISO, endISO);
+			changed = !selectId.empty();
+			if (changed) {
+				selectKind = "TASK";
+				g_creationFailHint.clear();
+			} else {
+				g_creationFailHint = L"Cannot add task here";
 			}
 			break;
 		}
 		case HtOpKind::AddMilestoneAtPoint: {
-			float pxPerDay = ComputeEmptyCellPxPerDay();
-			if (pxPerDay > 0.0f) {
-				bool haveRef = false;
-				long refDay = 0;
-				long refScreenX = 0;
-				for (const auto& item : g_hitSnapshot.items) {
-					if (item.kind != HtItemKind::Task) continue;
-					const PpTask* task = FindTask(doc, item.id);
-					if (!task) continue;
-					refDay = DateToDays(task->start);
-					refScreenX = item.rect.left;
-					haveRef = true;
-					break;
-				}
-				if (haveRef) {
-					long screenX = clientPt.x + g_windowOriginX;
-					long anchorDay = refDay + (long)::lround((double)(screenX - refScreenX) / (double)pxPerDay);
-					selectId = AddMilestone(doc, hit.rowId, "New milestone", DaysToDate(anchorDay));
-					changed = !selectId.empty();
-					selectKind = "MILESTONE";
-				}
+			if (ComputeEmptyCellPxPerDay() <= 0.0f && !ProjectionPx().ok) {
+				g_creationFailHint = L"Cannot add milestone — chart scale unavailable";
+				break;
+			}
+			const long screenX = clientPt.x + g_windowOriginX;
+			const long anchorDay = AnchorDayFromScreenX(screenX);
+			selectId = AddMilestone(doc, hit.rowId, "New milestone", DaysToDate(anchorDay));
+			changed = !selectId.empty();
+			if (changed) {
+				selectKind = "MILESTONE";
+				g_creationFailHint.clear();
+			} else {
+				g_creationFailHint = L"Cannot add milestone here";
 			}
 			break;
 		}
 		case HtOpKind::AddNoteAtPoint: {
-			float pxPerDay = ComputeEmptyCellPxPerDay();
-			if (pxPerDay > 0.0f) {
-				bool haveRef = false;
-				long refDay = 0;
-				long refScreenX = 0;
-				for (const auto& item : g_hitSnapshot.items) {
-					if (item.kind != HtItemKind::Task) continue;
-					const PpTask* task = FindTask(doc, item.id);
-					if (!task) continue;
-					refDay = DateToDays(task->start);
-					refScreenX = item.rect.left;
-					haveRef = true;
-					break;
-				}
-				if (haveRef) {
-					long screenX = clientPt.x + g_windowOriginX;
-					long anchorDay = refDay + (long)::lround((double)(screenX - refScreenX) / (double)pxPerDay);
-					selectId = AddText(doc, "Note", "", hit.rowId, DaysToDate(anchorDay));
-					changed = !selectId.empty();
-					if (changed) selectKind = "TEXT";
-				}
+			if (ComputeEmptyCellPxPerDay() <= 0.0f && !ProjectionPx().ok) {
+				g_creationFailHint = L"Cannot add note — chart scale unavailable";
+				break;
+			}
+			const long screenX = clientPt.x + g_windowOriginX;
+			const long anchorDay = AnchorDayFromScreenX(screenX);
+			selectId = AddText(doc, "Note", "", hit.rowId, DaysToDate(anchorDay));
+			changed = !selectId.empty();
+			if (changed) {
+				selectKind = "TEXT";
+				g_creationFailHint.clear();
+			} else {
+				g_creationFailHint = L"Cannot add note here";
 			}
 			break;
 		}
@@ -5472,6 +5611,8 @@ void Tick() {
 
 		float chartLeft = chart->GetLeft(), chartTop = chart->GetTop();
 		float chartWidth = chart->GetWidth(), chartHeight = chart->GetHeight();
+		g_chartLeftPt = chartLeft;
+		g_chartWidthPt = chartWidth;
 		g_chartScreenRect = {
 			win->PointsToScreenPixelsX(chartLeft),
 			win->PointsToScreenPixelsY(chartTop),
@@ -5496,6 +5637,11 @@ void Tick() {
 		bool chartChanged = !SameRect(oldChartRect, g_chartScreenRect);
 		BuildRowBands(chart, win);
 		bool hoverChanged = UpdateHoverFromCursor();
+		// Transition-only (hidden<->shown), matching UpdateHoverFromCursor's
+		// own return-bool pattern above -- see UpdateEmptyCellHoverHint's
+		// comment for why re-deriving "due" separately here (as before) could
+		// double-fire relative to when Paint actually flips the flag.
+		const bool emptyCellHintChanged = UpdateEmptyCellHoverHint();
 
 		ClearSelectionState();
 		bool chartRootNativelySelected = false;
@@ -5597,7 +5743,8 @@ void Tick() {
 			}
 		} catch (...) { slideRect = g_chartScreenRect; }
 		ShowAppBar(slideRect);
-		if (chartChanged || hoverChanged || mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
+		if (chartChanged || hoverChanged || emptyCellHintChanged || !g_creationFailHint.empty() ||
+			mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
 			RequestOverlayRepaint();
 		}
 
@@ -5766,6 +5913,14 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"linkMode\":" + std::string(g_linkMode ? "true" : "false") + ",";
 	s += "\"linkFromId\":\"" + g_linkFromId + "\",";
 	s += "\"rowCount\":" + std::to_string(g_rowBands.size()) + ",";
+	int taskCount = 0;
+	int milestoneCount = 0;
+	for (const auto& item : g_hitSnapshot.items) {
+		if (item.kind == HtItemKind::Task) ++taskCount;
+		else if (item.kind == HtItemKind::Milestone) ++milestoneCount;
+	}
+	s += "\"taskCount\":" + std::to_string(taskCount) + ",";
+	s += "\"milestoneCount\":" + std::to_string(milestoneCount) + ",";
 	int rowLabelCount = 0;
 	for (const auto& er : g_editRegions) if (er.kind == "ROW_LABEL") ++rowLabelCount;
 	s += "\"rowLabelCount\":" + std::to_string(rowLabelCount) + ",";
@@ -5817,6 +5972,18 @@ void Overlay_PerformAppBarCommandForTest(int cmd) {
 	// After a mutation the appbar is usually dirtied inside handler paths; ensure rebuild on next tick.
 	g_appBarValid = false;
 	RequestOverlayRepaint();
+}
+
+void Overlay_PerformHoverQuickAddForTest(const char* rowId) {
+	// Set the hover-row state HandleHoverQuickAddTask reads, exactly as a real
+	// hover pass over the row gutter would, then drive the SAME code path the
+	// chip's WM_LBUTTONUP handler uses (see HoverInsertFromClientPoint branch).
+	g_hoverRowId = rowId ? rowId : "";
+	try {
+		HandleHoverQuickAddTask();
+	} catch (...) {
+		OvLog(L"hover quick-add task failed");
+	}
 }
 
 void Overlay_GetRenderCountersForTest(long* overlayPaints, long* appBarPaints,

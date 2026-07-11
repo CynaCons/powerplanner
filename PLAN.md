@@ -2,8 +2,8 @@
 
 ## Quick Summary
 
-**Current Version:** v2.4.3 (closed 2026-07-11; open items moved into v2.5.x)
-**Next Milestone:** v2.5.x - Production-grade UI/UX program (5 iterations from the 2026-07-11 full audit)
+**Current Version:** v2.5.1 (COMPLETE 2026-07-11)
+**Next Milestone:** v2.5.2 — Reliable, Discoverable Creation Flows (first of remaining iterations in the v2.5.x program)
 
 ### Key Metrics
 - **Total Iterations:** Web foundation complete; Native on-slide work in progress
@@ -21,12 +21,12 @@
 - Ongoing: extended trace for overall CHART_ROOT move/resize; LockWindowUpdate + flash detection; additional visual reflow hunt (graph/labels) 
 
 ### Next Up
-- **v2.5.0** (ACTIVE) - Overlay lifecycle correctness & render stability — fixes ghost chrome on other monitors + flicker (docs/SRS_OverlayLifecycle.md)
-- v2.5.1 - Calm selection chrome & chart visual quality (docs/SRS_SelectionChromeVisuals.md)
-- v2.5.2 - Reliable, discoverable creation flows (docs/SRS_CreationFlows.md)
-- v2.5.3 - Dependency creation & editing (docs/SRS_DependencyEditing.md)
-- v2.5.4 - Architecture hardening + cohesion + full visual matrix
-- Audit references: docs/overlay-architecture-map.md, docs/onslide-ux-inventory.md
+- **v2.5.2** - Reliable, discoverable creation flows (docs/SRS_CreationFlows.md) — closing (CREATEEMPTY gate)
+- **v2.5.3** - DRASTIC: Direct-manipulation reactivity & smoothness (spec/srs-native/SRS_InteractionSmoothness.md) — user verdict 2026-07-11: "looks good but not usable; not reactive, not smooth, not intuitive"
+- v2.5.4 - Dependency creation & editing (docs/SRS_DependencyEditing.md)
+- v2.5.5 - Architecture hardening + cohesion + full visual matrix
+- (v2.5.0 and v2.5.1 complete — see detailed sections below)
+- Audit references: docs/overlay-architecture-map.md, docs/onslide-ux-inventory.md, spec/srs-native/ (new canonical location for native-only ASPICE SRS tables)
 - Continue to use `trace` + `check-invariants` on any chrome mutation work. Update docs/ *.md and PLAN.md recursively.
 
 ### Test Status
@@ -152,35 +152,40 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 > coordinator visual review (PNGs) → commit → PLAN tick. One iteration loops
 > until its acceptance criteria pass; only then does the next start.
 
-### v2.5.0 - Iteration 1: Overlay Lifecycle Correctness & Render Stability (ACTIVE)
+### v2.5.0 - Iteration 1: Overlay Lifecycle Correctness & Render Stability (COMPLETE)
 **Goal:** No PowerPlanner pixels ever appear where they shouldn't (other monitors, slideshow, background windows); idle chrome is paint-free; edits stop flashing. SRS: docs/SRS_OverlayLifecycle.md
 
-- [ ] Entry gate: GATE-PURE green on current tree; commit the pending v2.4.2/v2.4.3 working-tree fixes as baseline
-- [ ] Strict host gating: drop pid-match foreground branch; require tracked-window foreground (or our windows/owned popups) (SR-LIFE-02a)
-- [ ] View-type guard: hide chrome during slideshow/print-preview/protected view (SR-LIFE-02d)
-- [ ] Monitor fail-closed: chart rect must intersect the tracked window's monitor, else hide (SR-LIFE-06)
-- [ ] Change-gate the overlay SetWindowPos/TOPMOST (mirror app bar pattern); remove redundant chartChanged double repaint (SR-LIFE-11)
-- [ ] Centralize flash masking: single RAII LockWindowUpdate (or equivalent) inside RebuildChart; remove scattered row-op locks (SR-LIFE-13 partial)
-- [ ] Seams: per-window paint/SetWindowPos counters + Overlay_DumpWindowStateForTest (windows, rects, monitors, counters, gating verdict)
-- [ ] Harness: appbar-shot refuses to attach to an already-running PowerPoint (unless --attach); harness_driver desktop sweep asserts zero PowerPlanner* windows post-run
-- [ ] E2E scenarios: overlay-deactivate, overlay-minimize, overlay-slideshow, overlay-idle-stability (paint-free idle ticks); flicker probe in traces
-- [ ] Architecture enabler: extract Tier-A pure headers (OverlayMetrics.h/OverlayGeometry.h/OverlayFormat.h) + shared source list sources.bat
-- [ ] Exit: GATE-FULL + all new scenarios green from clean rebuild; traces re-run; PNG review; docs updated
+- [x] Entry gate: GATE-PURE green (fixed uncommitted SCALE contract break first); baseline commit 14f7d99
+- [x] Strict host gating: pid-match branch removed; tracked-window foreground or our windows/owned popups (SR-LIFE-02a) (9963486)
+- [x] View-type guard: slideshow/print-preview/etc hide chrome (SR-LIFE-02d); harness override (>=1) bypasses new gates
+- [x] Host-rect fail-closed: chart rect must intersect tracked window rect, else hide (SR-LIFE-06)
+- [x] Change-gated overlay SetWindowPos/TOPMOST (mirrors app bar); redundant chartChanged double repaint removed (SR-LIFE-11)
+- [x] Centralized RAII LockWindowUpdate in RebuildChart; scattered row-op locks removed (SR-LIFE-13 partial)
+- [x] Seams: paint/SWP counters + Overlay_DumpWindowStateForTest + Overlay_GetRenderCountersForTest
+- [x] Harness: appbar-shot refuses live-PowerPoint attach (unless --attach); driver orphan-window sweep with post-run kill ordering
+- [x] E2E: GATING (deactivate incl. minimize path) + IDLESTABLE (paint-free idle) stages; overlay_lifecycle scenario PASS; trace parse fixed (full stdout), TRACE COMPLETE OK marker, row-op profiles select ROW; traces row-scale + row-add-below PASS all invariants
+- [x] Architecture enabler: Tier-A pure headers (OverlayFormat/Geometry/Metrics.h, 17 fn + 22 consts) + sources.bat dedup across 4 harness bats (6d80d92)
+- [x] Exit: GATE-FULL GREEN + traces PASS (0 invariant fails) from clean rebuild after i1c; PNG review done (chrome correct in harness ctx; remaining visual issues are v2.5.1 scope)
+- Deferred → v2.5.4: real-slideshow e2e stage (COM SlideShowSettings.Run flake risk); per-monitor-move live e2e (needs multi-monitor test rig)
+- **v2.5.0 COMPLETE 2026-07-11** (commits 14f7d99, 9963486, 6d80d92)
+- Observed during exit review → v2.5.1 input: app bar composite/stale render after context+scale change (left-clipped "Ren…", mixed None-context groups, duplicated Labels/Grid at right edge) = SR-BAR-01/02 named defect
 
 ### v2.5.1 - Iteration 2: Calm Selection Chrome & Chart Visual Quality
 **Goal:** One calm selection language; labels always readable; app bar never clips. SRS: docs/SRS_SelectionChromeVisuals.md
 
-- [ ] Overall chrome: hairline only when CHART_ROOT natively selected; no badge/filled rect stacking on native grips (SR-CHR-01)
-- [ ] "PowerPlanner" chip → small hover-only affordance (SR-CHR-02); nothing drawn when idle+unhovered (SR-CHR-03)
-- [ ] Row selection: left accent + label-safe wash; pixel-verified label visibility in all states (SR-CHR-04)
-- [ ] Consistent thin item frames + handles for task/milestone/marker/text (SR-CHR-05)
-- [ ] Bar label above progress fill + fit fallback chain inside→right→left (SR-VIZ-01)
-- [ ] Marker labels: dedicated band/offset, never over axis text (SR-VIZ-02)
-- [ ] Dependency z-order below text, arrowheads into target edge (SR-VIZ-03)
-- [ ] App bar: content-measured width, overflow collapse policy, no clipping (SR-BAR-01/02)
-- [ ] Tokens: GanttTheme.h + docs/design-tokens.md updated together (SR-TOK-01)
-- [ ] Pixel invariants in harness: label-region stability, no-giant-fill, app-bar completeness; screenshot matrix at 100/150% DPI
-- [ ] Exit: gates + matrix green; before/after PNG gallery for user review
+- [x] Overall chrome: hairline only on native CHART_ROOT selection; halo/handles/badge removed (SR-CHR-01) (4ea06a1)
+- [x] "PowerPlanner" chip → hover-only affordance; nothing drawn idle+unhovered (SR-CHR-02/03)
+- [x] Row selection: left accent + wash alpha 18/10; labels readable (SR-CHR-04)
+- [x] Item frames: 1px, no fill, no handles (SR-CHR-05)
+- [x] TASK_LABEL prim above progress + fit fallback inside→right (left fallback deferred → backlog NUI-08) (SR-VIZ-01)
+- [x] Marker labels: staggered strip above axis headers (SR-VIZ-02)
+- [x] Dependency elbows z-below text, single arrowhead into target edge (SR-VIZ-03)
+- [x] i2b ops harness: SCENE VIZ OK (TASK_LABEL prim/order/placement, 3×DEP elbow, marker strip stagger)
+- [x] App bar: content-measured width on model change, full buffer clear, INSERT→"+" overflow collapse via shared registry, background insert dispatch fixed (SR-BAR-01/02) (2b3eed6)
+- [x] Tokens in GanttTheme.h + design-tokens.md §7 (SR-TOK-01)
+- [x] Pixel self-checks: CHROME CALM idle/overall + APPBAR FIT all contexts in appbar_matrix; 150% DPI matrix deferred → v2.5.4
+- [x] Exit: GATE-FULL GREEN + traces PASS + appbar_matrix/overlay_lifecycle PASS; coordinator PNG review done (no blue rect, marker strip clean, labels readable)
+- **v2.5.1 COMPLETE 2026-07-11** (commits 4ea06a1, 2b3eed6). User visual sign-off pending (gallery at v2.5.4).
 
 ### v2.5.2 - Iteration 3: Reliable, Discoverable Creation Flows
 **Goal:** Creating tasks/milestones/rows/notes is obvious, works on empty charts, and never silently fails. SRS: docs/SRS_CreationFlows.md
@@ -194,7 +199,20 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [ ] E2E: create-task-empty-chart, create-milestone-cell, hover-quick-add-task, scale-while-task-selected, task-rename-route
 - [ ] Exit: gates + scenarios green; PNG review
 
-### v2.5.3 - Iteration 4: Dependency Creation & Editing
+### v2.5.3 - Iteration S: Direct-Manipulation Reactivity & Smoothness (DRASTIC, NEW)
+**Goal:** The editor must FEEL instant: in-place shape reconcile (no delete/recreate), <=200ms single-op latency budget (measured), immediate hover, event-driven selection, optimistic drag-commit echo, inline rename. SRS: spec/srs-native/SRS_InteractionSmoothness.md
+
+- [ ] In-place UpdateGantt reconcile for single-element ops (SR-SMO-01); no Ungroup/Delete-all cycle
+- [ ] Latency instrumentation in traces (opLatencyMs) + op_latency_budget invariant <=200ms (SR-SMO-02)
+- [ ] Drop LockWindowUpdate for single-element ops (SR-SMO-03)
+- [ ] Immediate hover paint on WM_MOUSEMOVE path (SR-SMO-04)
+- [ ] WindowSelectionChange COM sink; tick as watchdog (SR-SMO-05 / ARC-07)
+- [ ] Optimistic drag-commit echo, no old-position flash (SR-SMO-06)
+- [ ] Inline rename on labels (bar/row/milestone/marker/note); card = Edit only (SR-SMO-07)
+- [ ] E2E: task-nudge-latency, task-color-latency, drag-commit-echo profiles + reconcile shape-identity assertions
+- [ ] Exit: gates + latency traces green; LIVE user feel check (final judge)
+
+### v2.5.4 - Iteration 4: Dependency Creation & Editing
 **Goal:** Linking is visible, guided, and reversible per-edge. SRS: docs/SRS_DependencyEditing.md
 
 - [ ] Link-mode crosshair over valid targets + target hover ring (SR-DEP-01/02)
@@ -205,7 +223,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [ ] E2E: link-mode-click-target, link-duplicate-rejected, link-drag-handle, dep-select-delete, link-esc-cancel
 - [ ] Exit: gates + scenarios green; PNG review
 
-### v2.5.4 - Iteration 5: Architecture Hardening, Cohesion & Full Visual Matrix
+### v2.5.5 - Iteration 5: Architecture Hardening, Cohesion & Full Visual Matrix
 **Goal:** Sustainable file structure + end-to-end product cohesion review. Refs: docs/overlay-architecture-map.md split plan, improvements-backlog CI-06/07/08.
 
 - [ ] Overlay.cpp Tier-B split: OverlayState.h struct bundling + OverlayAppBar/CardEditor/Drag/ContextMenu/TestSeams .inc.h extractions (header-only)
@@ -215,6 +233,35 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [ ] Full screenshot matrix (all contexts × 100/150% DPI) + final gallery; slideshow behavior verified
 - [ ] Visual-vocabulary parity web ↔ native pass
 - [ ] Update README gallery + docs; close the program with a summary report
+
+### v2.5.5 - User Feedback Round (2026-07-11): Native Polish & Foundations
+**Goal:** Address live user feedback on native on-slide: PP shape selectability, appbar docking + context, theme-coherent UI surfaces, and project spec/SRS file architecture cleanup. Add requirements (correct ASPICE table format under spec/), e2e harness coverage, and fixes. Ties into v2.5.4 structure work.
+
+- [ ] #1 Shape selectability: internal emitted shapes (task bars, labels, connectors, etc. inside CHART_ROOT) must never be directly selectable as individual PowerPoint shapes; only the CHART_ROOT "app-component" container shall be a selectable PP shape. All intra-component selection must route exclusively through our overlay hit-test + ownSel model. Strengthen suppression (beyond current 150ms Unselect poll), add invariants, document contract.
+- [x] #1 Add SRS in proper table format: spec/srs-native/SRS-NativeUXFoundations.md (SR-SHP-01..04).
+- [ ] #1 E2E: implement profile + run scenario trace_component_shape_protection --check-invariants.
+- [ ] #2 Appbar sticky docking: the app bar shall be positioned immediately below the logical bounds of the CHART_ROOT "app-component" (with small defined gap per tokens), forming a visual unit. Moving/resizing the CHART_ROOT group shall synchronously move the app bar to stay docked. Consider "imaginary outline" of the combined component+bar for future interactions. Fix any lag/offset/gap variance observed in live use.
+- [x] #2 Add SRS: SR-DOCK-01..03 in SRS-NativeUXFoundations.md.
+- [ ] #2 E2E: run trace_appbar_docked + docking verification.
+- [ ] #3 Context-sensitive app bar: selection of overall document / CHART_ROOT / empty shall surface document-level controls (timescale/scale, labels, grid, insert). Selection of a task/row/etc. shall show *only* the relevant actions for that object (no timescale etc.). Refine BuildAppBar / RebuildAppBarModelFromSlide + tests.
+- [x] #3 Add/extend SRS: SR-BAR-01..03.
+- [ ] #3 E2E: run trace_appbar_context_evolution + matrix.
+- [ ] #4 Theme-coherent menus & panels: All right-click context menus, card editors, inline editors, popups, and any future panels shall be custom-rendered using GanttTheme.h / design-tokens.md values and match the approved onslide-mockup.html aesthetic (no default Win32 HMENU or unstyled dialog chrome). Current TrackPopupMenu + standard child controls are non-compliant.
+- [x] #4 Add SRS: SR-THEME-01..03 + cross-cutting SR-NUI in SRS-NativeUXFoundations.md.
+- [ ] #4 E2E + impl: run trace_theme_coherent_surfaces; deliver custom-drawn theme-coherent menu and edit panel.
+- [ ] #4 Requirements rule: any new popup/panel code must have corresponding SRS entry citing theme coherence before implementation.
+- [x] #5 File/Spec architecture cleanup + enforcement (initial):
+  - Redraw documented in new `spec/STRUCTURE.md`; spec/ = Foundation + `spec/srs/` (shared tables); `spec/srs-native/` created for native-only (SRS-NativeUXFoundations.md covers #1–#4 with proper tables).
+  - docs/ remains for notes, plans, inventory, mockups (no new primary SRS).
+  - Created `spec/srs-native/README.md`.
+  - Updated `spec/README.md`, `spec/srs/README.md`, `AGENTS.md` (mandatory rules), `PLAN.md`.
+  - Added 4 harness scenario JSON stubs (`trace_component_shape_protection.json`, `trace_appbar_docked.json`, `trace_appbar_context_evolution.json`, `trace_theme_coherent_surfaces.json`).
+  - [ ] Full conversion of legacy `docs/SRS_*.md` → tables in srs-native + bulk ref sweep + prune.
+- [x] #5 Update AGENTS.md (mandatory registration + correct SRS format/location + harness pairing).
+- [x] #5 Update spec/README.md + created `spec/STRUCTURE.md`.
+- [ ] #5 Remaining file moves, reference fixes, cleanup verification.
+- [ ] All 5 points: after code changes run full relevant harness traces + matrix + `python native/tools/harness_driver.py ... --check-invariants`; update goldens only when intentional; record in PLAN.
+- [x] Smoke / launch verification (this pass): `npm run build` succeeded cleanly (tsc + vite production build). `npm run dev` background launch + HTTP fetch on http://localhost:5180 returned 200 + valid Vite-served PowerPlanner root HTML. Process cleanup successful (no lingering listener). Full output logged. Re-verify required before any future claims involving app launch or native changes.
 
 ### v2.4.4 - Installer + Packaging (deferred)
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons

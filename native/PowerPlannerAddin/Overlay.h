@@ -113,9 +113,18 @@ void Overlay_CancelLinkModeForTest();
 // ops and observe before/immed/after states. Never touches real input.
 void Overlay_PerformAppBarCommandForTest(int cmd);
 
+// Test seam: drive the row-gutter "+" hover quick-add exactly as if the user
+// hovered the row and clicked the chip -- sets the hover-row state
+// HandleHoverQuickAddTask reads (g_hoverRowId) to rowId, then invokes that
+// same handler (adds a 5-day task at the visible-range center of the row and
+// selects it). Used by trace harnesses to exercise the action without a real
+// hover + click gesture. Never touches real input.
+void Overlay_PerformHoverQuickAddForTest(const char* rowId);
+
 // Rich state dump for agent feedback loop: returns a JSON string (static buffer)
 // with current chrome state for reports: own selection, row bands (with rects),
-// drag/gesture state, app bar visibility, visible chrome elements, etc.
+// taskCount/milestoneCount (from the hit snapshot), drag/gesture state, app bar
+// visibility, visible chrome elements, etc.
 // Never touches COM. Safe for harnesses to call after steps.
 const char* Overlay_DumpChromeStateForTest();
 

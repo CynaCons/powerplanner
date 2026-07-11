@@ -1,0 +1,9 @@
+{
+  "name": "trace_component_shape_protection",
+  "description": "E2E feedback #1: Click task body, row label, milestone via simulated hit. Verify ownSel set, no child shape remains natively selected (suppressed), CHART_ROOT or empty is the PP selection. Check no native grips appear on internals in state/screenshots.",
+  "exe": "ppappbarshot",
+  "args": ["--trace", "component-shape-protection"],
+  "timeout": 120,
+  "retries": 2,
+  "check_invariants": true
+}
