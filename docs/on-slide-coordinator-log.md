@@ -939,7 +939,12 @@ performance is tracked here for the end-of-program comparison report.
 | 6 | v2.6.0-conventions-srs (guard) | cursor | claude-sonnet-5 | PASS | Correctly detected work already done, honest 39s report, zero waste |
 | 7 | v2.5.3-latency-trim-round4 | cursor | composer-2.5 | PASS (1 fix-up) | Cached ShapePtr/Tags ptr + O(n) key compare; 1 compile error (MatchKey operator!=). Coordinator found the final 2 cuts itself (fast-path reselect removal + persistent OvLog handle -> 125-172ms stable) |
 | 8 | v2.5.3-truthful-immed | cursor | composer-2.5 | PASS (1 fix-up) | Truthful immed dumps + no chart-sized chrome flash; 1 API-name compile error (GroupItemsPtr). All 4 traces green with hard invariants |
-| 9 | v2.5.3-smoothness-remainder | cursor | composer-2.5 | validating | SMO-04 hover, SMO-06 drag echo, SMO-07 inline rename + 2 new trace profiles |
+| 9 | v2.5.3-smoothness-remainder | cursor | composer-2.5 | PASS (1 fix-up) | SMO-04/06/07 + 2 profiles; 1 API-name compile error (GroupItemsPtr) + 2 stray helper scripts; coordinator verified all green |
+| 10 | v2.6.0-walkthrough-gate | copilot | claude-opus-4.8 | PASS (1 fix-up) | Full runner + 5 goal scripts, self-ran everything incl. error paths; missed raising PPT window before captures (coordinator fixed) |
+| 11 | v2.6.8-spec-migration-1 | codex | gpt-5.5 (CLI upgraded) | PASS | 15-req migration in 6 min, precise honest report, zero fix-ups |
+| 12 | v2.6.8-spec-migration-2 | codex | gpt-5.5 | PASS | 5 files, 52 reqs, flagged SR-BAR id collision itself (coordinator renumbered); zero fix-ups |
+| 13 | v2.6.1-selection-integrity | copilot | claude-opus-4.8 | PASS (1 gate update) | Sink + hotkey scoping + 3 new invariants, self-verified; EDITOR stage expectation update done by coordinator (convention change, not agent fault) |
+| 14 | v2.6.2-direct-manipulation | copilot | claude-opus-4.8 | dispatched | UF-01/02/05/08/09/12 + B2 + M1 + N1 |
 
 ### Log
 - Reordered PLAN.md header: explicit execution order v2.5.3 -> v2.6.0..v2.6.8 (UX is the priority).
@@ -948,3 +953,6 @@ performance is tracked here for the end-of-program comparison report.
 - v2.5.3 latency milestone VERIFIED + committed (cb594ed): nudge 9829->125-172ms, color 17531->78-157ms, hard invariants restored.
 - Live user defect mid-session: app bar over the user's fullscreen game during trace runs -> harness fullscreen-wait guard shipped + verified live vs wowclassic.exe (993afe4).
 - U0: SRS-InteractionConventions.md SR-IXC-01..22 committed (771cb31).
+- v2.5.3 CODE-COMPLETE (latency green + smoothness + sink); only LIVE user feel check pending.
+- U1 committed e54fb32 (sink suppression, scoped hotkeys, context reset). U0 committed 0459e61. Spec migration committed b66825e + 7ed6e11.
+- User live repro mid-session (overlay stays over game after PPT loses focus) -> NOTOPMOST-under-override + visibility-based hides (c795ca0); awaiting user confirmation.

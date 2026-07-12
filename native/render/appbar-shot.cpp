@@ -535,6 +535,11 @@ static bool CheckAppBarFitForContext(
 
 // Screen-capture the rectangle [rc] into a PNG at [path]. Clamps nothing — the
 // caller passes an on-screen rect.
+// Capture ONE window's own pixels (PrintWindow + PW_RENDERFULLCONTENT works
+// for layered/ULW windows on Win8.1+). Screen-rect captures composite whatever
+// overlaps the rect — which hid a two-app-bar-windows bug behind plausible
+// pixels (v2.6.3). Falls back to screen capture when PrintWindow fails.
+static bool CaptureWindowToPng(HWND hwnd, const wchar_t* path);
 static bool CaptureRectToPng(const RECT& rc, const wchar_t* path) {
 	int w = rc.right - rc.left, h = rc.bottom - rc.top;
 	if (w <= 0 || h <= 0) return false;
@@ -557,6 +562,35 @@ static bool CaptureRectToPng(const RECT& rc, const wchar_t* path) {
 	::DeleteDC(mem);
 	::ReleaseDC(NULL, screen);
 	return ok;
+}
+
+static bool CaptureWindowToPng(HWND hwnd, const wchar_t* path) {
+	if (!hwnd || !::IsWindow(hwnd)) return false;
+	RECT r{};
+	if (!::GetWindowRect(hwnd, &r)) return false;
+	int w = r.right - r.left, h = r.bottom - r.top;
+	if (w <= 0 || h <= 0) return false;
+	HDC screen = ::GetDC(NULL);
+	HDC mem = ::CreateCompatibleDC(screen);
+	HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
+	HGDIOBJ old = ::SelectObject(mem, bmp);
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 0x00000002
+#endif
+	BOOL printed = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
+	::SelectObject(mem, old);
+	bool ok = false;
+	if (printed) {
+		Gdiplus::Bitmap bitmap(bmp, NULL);
+		CLSID pngClsid;
+		if (PngEncoderClsid(&pngClsid) >= 0)
+			ok = (bitmap.Save(path, &pngClsid, NULL) == Gdiplus::Ok);
+	}
+	::DeleteObject(bmp);
+	::DeleteDC(mem);
+	::ReleaseDC(NULL, screen);
+	if (!ok) return CaptureRectToPng(r, path); // fallback: composited screen
+	return true;
 }
 
 // ============================================================================
@@ -1243,6 +1277,12 @@ int wmain(int argc, wchar_t** argv) {
 		app.CreateInstance(L"PowerPoint.Application");
 		app->PutVisible(Office::msoTrue);
 		PowerPoint::_PresentationPtr pres = app->GetPresentations()->Add(Office::msoTrue);
+		// Stand-down marker for the REGISTERED add-in loaded inside this
+		// PowerPoint: its own overlay + app bar would exactly overlap the
+		// harness's in-process chrome (two PowerPlannerAppBar windows — mixed
+		// pixels in captures, double chrome for the user). The add-in's Tick
+		// sees this tag and keeps its chrome hidden in harness presentations.
+		try { pres->GetTags()->Add(_bstr_t(L"PP_HARNESS"), _bstr_t(L"1")); } catch (...) {}
 		pres->GetSlides()->Add(1, PowerPoint::ppLayoutBlank);
 		app->GetActiveWindow()->GetView()->GotoSlide(1);
 
@@ -1393,6 +1433,7 @@ int wmain(int argc, wchar_t** argv) {
 			} catch (...) {}
 
 			auto captureStep = [&](const char* step, const wchar_t* profile) -> std::wstring {
+				Overlay_SyncAppBarForTest();
 				const char* state = Overlay_DumpChromeStateForTest();
 				// i4b-latency-traces (v2.5.3, SR-SMO-02) §1: stamp every emitted
 				// TRACE state line with "tMs" (ms since trace start) so the driver
@@ -1414,7 +1455,7 @@ int wmain(int argc, wchar_t** argv) {
 				HWND ab = OverlayAppBarHwnd();
 				if (ab && ::IsWindowVisible(ab)) {
 					RECT r{}; ::GetWindowRect(ab, &r);
-					ok = CaptureRectToPng(r, appPng);
+					ok = CaptureWindowToPng(ab, appPng);
 					// wide context shifted to include chart body above bar
 					RECT wide = r;
 					wide.top -= 380; wide.left -= 120; wide.right += 120; wide.bottom += 30;
@@ -1493,6 +1534,8 @@ int wmain(int argc, wchar_t** argv) {
 				wcscmp(traceProfile, L"row-then-overall") == 0 ||
 				wcscmp(traceProfile, L"task-select-progress") == 0 ||
 				wcscmp(traceProfile, L"component-shape-protection") == 0 ||
+				wcscmp(traceProfile, L"appbar-docked") == 0 ||
+				wcscmp(traceProfile, L"appbar-context-evolution") == 0 ||
 				wcsstr(traceProfile, L"overall-"));
 			if (traceCleanStart) {
 				Overlay_SelectForTest("", ""); // clean start: the branch drives selection itself
@@ -1634,26 +1677,19 @@ int wmain(int argc, wchar_t** argv) {
 				PumpFor(150);
 				captureStep("+1", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"task-scale-keep-sel") == 0) {
-				// Showcase doc task id (MakeShowcaseDocument has no literal t1).
-				Overlay_SelectForTest("TASK", "discovery");
-				try {
-					PowerPoint::ShapesPtr shs = slide->GetShapes();
-					long nn = shs->GetCount();
-					for (long ii = 1; ii <= nn; ++ii) {
-						auto s = shs->Item(_variant_t(ii));
-						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
-						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
-							s->Select(Office::msoTrue);
-							break;
-						}
-					}
-				} catch (...) {}
+				// v2.6.3 SR-BAR-02: scale lives in document context. Deselect,
+				// change scale from component bar, then re-select the task.
+				Overlay_SelectForTest("", "");
 				PumpFor(300);
 				captureStep("pre", traceProfile);
 				Overlay_PerformAppBarCommandForTest(HtCmd_ScaleMonth);
-				captureStep("immed", traceProfile);
+				captureStep("scale-immed", traceProfile);
 				PumpFor(150);
-				captureStep("+1", traceProfile);
+				captureStep("scale+1", traceProfile);
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(300);
+				captureStep("task-resel", traceProfile);
 				PumpFor(300);
 				captureStep("+3", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"task-nudge-latency") == 0) {
@@ -1944,6 +1980,85 @@ int wmain(int argc, wchar_t** argv) {
 				captureStep("+1", traceProfile);
 				PumpFor(300);
 				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"appbar-docked") == 0) {
+				// v2.6.3 SR-DOCK-01/02: bar immediately below chart rect; follows
+				// CHART_ROOT move/resize with no drift at +1/+3 ticks.
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				PowerPoint::ShapePtr dockChart;
+				try {
+					PowerPoint::DocumentWindowPtr w2 = app->GetActiveWindow();
+					PowerPoint::_SlidePtr sl2 = w2->GetView()->GetSlide();
+					PowerPoint::ShapesPtr shs = sl2->GetShapes();
+					long n = shs->GetCount();
+					for (long i = 1; i <= n; ++i) {
+						auto s = shs->Item(_variant_t(i));
+						_bstr_t k = s->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+							dockChart = s;
+							break;
+						}
+					}
+				} catch (...) {}
+				if (dockChart) {
+					float origL = dockChart->GetLeft();
+					float origT = dockChart->GetTop();
+					float origW = dockChart->GetWidth();
+					float origH = dockChart->GetHeight();
+					dockChart->PutLeft(origL + 60.0f);
+					dockChart->PutTop(origT + 20.0f);
+					try { dockChart->Select(Office::msoTrue); } catch (...) {}
+					PumpFor(80);
+					captureStep("move-immed", traceProfile);
+					PumpFor(150);
+					captureStep("move+1", traceProfile);
+					PumpFor(300);
+					captureStep("move+3", traceProfile);
+					dockChart->PutLeft(origL);
+					dockChart->PutTop(origT);
+					dockChart->PutWidth(origW + 120.0f);
+					dockChart->PutHeight(origH + 40.0f);
+					try { dockChart->Select(Office::msoTrue); } catch (...) {}
+					PumpFor(80);
+					captureStep("resize-immed", traceProfile);
+					PumpFor(150);
+					captureStep("resize+1", traceProfile);
+					PumpFor(300);
+					captureStep("resize+3", traceProfile);
+					try {
+						dockChart->PutLeft(origL);
+						dockChart->PutTop(origT);
+						dockChart->PutWidth(origW);
+						dockChart->PutHeight(origH);
+					} catch (...) {}
+				}
+			} else if (traceProfile && wcscmp(traceProfile, L"appbar-context-evolution") == 0) {
+				// v2.6.3 SR-BAR-01/02/03: document context has INSERT+SCALE;
+				// item contexts expose only relevant groups; transitions are immediate.
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(300);
+				captureStep("task-sel", traceProfile);
+				Overlay_SelectForTest("ROW", "research");
+				SelectChartRootNatively(slide);
+				PumpFor(300);
+				captureStep("row-sel", traceProfile);
+				Overlay_SelectForTest("MILESTONE", "m_ship");
+				SelectChartRootNatively(slide);
+				PumpFor(300);
+				captureStep("milestone-sel", traceProfile);
+				Overlay_SelectForTest("MARKER", "today");
+				SelectChartRootNatively(slide);
+				PumpFor(300);
+				captureStep("marker-sel", traceProfile);
+				Overlay_SelectForTest("", "");
+				Overlay_InvalidateAppBarForTest();
+				PumpFor(400);
+				captureStep("component", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"component-shape-protection") == 0) {
 				// v2.6.1 U1 selection integrity (SR-SHP-01..03 / SR-IXC-19/21 /
 				// UF-07 / SR-IXC-09). Three sub-tests in one profile:

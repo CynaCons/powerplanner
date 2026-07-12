@@ -32,7 +32,7 @@ struct AppBarGroup {
 
 struct AppBarModel {
 	std::string name;                  // italic selection name; "" when None
-	std::vector<AppBarGroup> groups;   // left->right; LAST group is always global
+	std::vector<AppBarGroup> groups;   // left->right; INSERT+SCALE only in None (document) context
 };
 
 inline const char* const kAppBarSwatches[8] = {
@@ -152,7 +152,7 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		}
 		if (!task) {
 			AppBarAppendInsertGroup(model);
-			// global only when truly None overall
+			AppBarAppendGlobalGroup(model, doc);
 			return model;
 		}
 		model.name = task->label;
@@ -211,7 +211,6 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		if (AppBarRowRendersRail(doc, task->rowId)) {
 			AppBarAppendRowOpsGroup(model);
 		}
-		AppBarAppendGlobalGroup(model, doc);
 		return model;
 	}
 
@@ -227,7 +226,6 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 			model.groups.push_back(g);
 		}
 		AppBarAppendRowOpsGroup(model);
-		AppBarAppendGlobalGroup(model, doc);
 		return model;
 	}
 
@@ -253,7 +251,6 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 			g.items.push_back(del);
 			model.groups.push_back(g);
 		}
-		AppBarAppendGlobalGroup(model, doc);
 		return model;
 	}
 
@@ -278,7 +275,6 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 			g.items.push_back(del);
 			model.groups.push_back(g);
 		}
-		AppBarAppendGlobalGroup(model, doc);
 		return model;
 	}
 
@@ -301,11 +297,10 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 			g.items.push_back(del);
 			model.groups.push_back(g);
 		}
-		AppBarAppendGlobalGroup(model, doc);
 		return model;
 	}
 
-	// None / fallback: overall component — includes global scale controls
+	// None / fallback: overall component — INSERT + global scale controls
 	AppBarAppendInsertGroup(model);
 	AppBarAppendGlobalGroup(model, doc);
 	return model;

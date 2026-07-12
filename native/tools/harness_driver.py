@@ -531,7 +531,7 @@ CONTINUITY_RULES = [
     "appbar_visible_stable",
     "no_large_sel_drop_to_empty",
     "rowband_count_stable_or_increases",
-    "scale_group_always_reachable",
+    "scale_group_context_appropriate",
 ]
 
 # i4b-latency-traces (v2.5.3, SR-SMO-02) §3: op-dispatch latency for
@@ -706,17 +706,18 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
         "detail": f"counts: {rowcount_seq}",
     })
 
-    # 5. scale_group_always_reachable : SR-EDT-02 (docs/SRS_CreationFlows.md).
-    # The global SCALE/Labels/Grid group is appended for EVERY selection
-    # context (matches the committed ops-test appbar contract "SCALE last
-    # for every sel"). Flag any step where the app bar lacks it.
-    scale_missing = False
-    for sstep, has in has_scale_seq:
-        if not has:
-            scale_missing = True
+    # 5. scale_group_context_appropriate : SR-BAR-01/02 (v2.6.3). SCALE/INSERT
+    # belong in document/component context only; item selections must not show them.
+    item_kinds_for_scale = {"ROW", "TASK", "MILESTONE", "MARKER", "TEXT"}
+    scale_context_bad = False
+    for (sstep, has), (_, kind) in zip(has_scale_seq, own_sel_seq):
+        if kind in item_kinds_for_scale and has:
+            scale_context_bad = True
+        if kind not in item_kinds_for_scale and not has:
+            scale_context_bad = True
     results.append({
-        "rule": "scale_group_always_reachable",
-        "passed": not scale_missing,
+        "rule": "scale_group_context_appropriate",
+        "passed": not scale_context_bad,
         "detail": f"scale-seq: {has_scale_seq} sel:{own_sel_seq}",
     })
 
@@ -849,16 +850,15 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
         })
 
     if profile and profile == "task-scale-keep-sel":
-        # Timing note: the scale rebuild lands at +1, not immed (week,week,
-        # month,month with TASK selected at every step is correct behavior) --
-        # only require the LAST step's scale to differ from pre, not immed's.
-        sel_task_all = all(kind == "TASK" for _, kind in own_sel_seq)
+        # v2.6.3: scale from document context, then re-select task. Scale must
+        # change while TASK is selected again at the end.
+        sel_task_end = own_sel_seq[-1][1] == "TASK" if own_sel_seq else False
         pre_scale = scale_seq[0][1] if scale_seq else ""
         last_scale = scale_seq[-1][1] if scale_seq else pre_scale
         scale_changed = pre_scale != last_scale and bool(last_scale)
         results.append({
             "rule": "sel_survives_scale",
-            "passed": sel_task_all and scale_changed,
+            "passed": sel_task_end and scale_changed,
             "detail": f"sel seq: {own_sel_seq} scale: {scale_seq}",
         })
 
@@ -898,6 +898,135 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
                 "passed": op_latency_ms <= 200,
                 "detail": detail,
             })
+
+    def _appbar_docked_ok(state: Dict[str, Any], tolerance: int = 4) -> bool:
+        chart = state.get("chartRect") or {}
+        bar = state.get("appBarRect") or {}
+        if not chart or not bar:
+            return False
+        gap = bar.get("top", 0) - chart.get("bottom", 0)
+        if gap < 4 or gap > 24:
+            return False
+        bar_cx = (bar.get("left", 0) + bar.get("right", 0)) / 2
+        chart_cx = (chart.get("left", 0) + chart.get("right", 0)) / 2
+        return abs(bar_cx - chart_cx) <= tolerance
+
+    if profile == "appbar-docked":
+        dock_steps = [s for s in steps if s.state.get("appBarVisible")]
+        dock_ok = all(_appbar_docked_ok(s.state) for s in dock_steps) if dock_steps else False
+        results.append({
+            "rule": "appbar_docked_below_chart",
+            "passed": dock_ok,
+            "detail": "checked appBarRect.top ~= chartRect.bottom + gap and horizontal center",
+        })
+        move_steps = [s for s in steps if s.step.startswith("move")]
+        if len(move_steps) >= 2:
+            pre_chart = next((s.state.get("chartRect") for s in steps if s.step == "pre"), {})
+            move_chart = move_steps[-1].state.get("chartRect", {})
+            moved = pre_chart != move_chart and bool(move_chart)
+            results.append({
+                "rule": "appbar_follows_chart_move",
+                "passed": moved and all(_appbar_docked_ok(s.state) for s in move_steps),
+                "detail": f"pre={pre_chart} move={move_chart}",
+            })
+        resize_steps = [s for s in steps if s.step.startswith("resize")]
+        if len(resize_steps) >= 2:
+            resize_chart = resize_steps[-1].state.get("chartRect", {})
+            resized = bool(resize_chart)
+            results.append({
+                "rule": "appbar_follows_chart_resize",
+                "passed": resized and all(_appbar_docked_ok(s.state) for s in resize_steps),
+                "detail": f"resize chartRect={resize_chart}",
+            })
+
+    if profile == "appbar-context-evolution":
+        by_step = {s.step: s.state for s in steps}
+
+        def _has_scale(st: Dict[str, Any]) -> bool:
+            groups = st.get("appBarGroups", []) or []
+            return bool(st.get("hasScaleGroup")) or ("SCALE" in groups)
+
+        def _has_insert(st: Dict[str, Any]) -> bool:
+            return "INSERT" in (st.get("appBarGroups", []) or [])
+
+        pre = by_step.get("pre", {})
+        component = by_step.get("component", {})
+        doc_ctx_ok = _has_scale(pre) and _has_insert(pre) and _has_scale(component) and _has_insert(component)
+        results.append({
+            "rule": "document_context_has_insert_scale",
+            "passed": doc_ctx_ok,
+            "detail": f"pre groups={pre.get('appBarGroups')} component groups={component.get('appBarGroups')}",
+        })
+        item_steps = [
+            ("task-sel", "TASK"),
+            ("row-sel", "ROW"),
+            ("milestone-sel", "MILESTONE"),
+            ("marker-sel", "MARKER"),
+        ]
+        item_pure = True
+        for step_name, want_kind in item_steps:
+            st = by_step.get(step_name, {})
+            if st.get("ownSelKind") != want_kind:
+                item_pure = False
+            if _has_scale(st) or _has_insert(st):
+                item_pure = False
+        results.append({
+            "rule": "item_contexts_exclude_global_groups",
+            "passed": item_pure,
+            "detail": "task/row/milestone/marker steps lack SCALE+INSERT",
+        })
+
+        def _appbar_png_hash(step_name: str) -> str:
+            for st in steps:
+                if st.step != step_name:
+                    continue
+                for art in st.artifacts:
+                    art_norm = art.replace("\\", "/")
+                    if art_norm.endswith("_appbar.png"):
+                        p = REPO_ROOT / art_norm
+                        if p.exists():
+                            return _hash_file(p)
+            # fallback: trace profile naming convention
+            guess = BUILD_DIR / f"trace_{profile}_{step_name}_appbar.png"
+            if guess.exists():
+                return _hash_file(guess)
+            return ""
+
+        pre_hash = _appbar_png_hash("pre")
+        task_hash = _appbar_png_hash("task-sel")
+        marker_hash = _appbar_png_hash("marker-sel")
+        component_hash = _appbar_png_hash("component")
+        pixel_ok = bool(
+            pre_hash and task_hash and pre_hash != task_hash
+            and marker_hash and component_hash and component_hash != marker_hash
+        )
+        results.append({
+            "rule": "appbar_pixels_change_on_context",
+            "passed": pixel_ok,
+            "detail": (
+                f"md5 pre={pre_hash[:8] if pre_hash else '?'} "
+                f"task={task_hash[:8] if task_hash else '?'} "
+                f"marker={marker_hash[:8] if marker_hash else '?'} "
+                f"component={component_hash[:8] if component_hash else '?'}"
+            ),
+        })
+
+        layout_sync_ok = True
+        for step_name in ["pre", "task-sel", "row-sel", "milestone-sel", "marker-sel", "component"]:
+            st = by_step.get(step_name, {})
+            model_groups = st.get("appBarGroups", []) or []
+            layout_groups = st.get("appBarLayoutGroups", []) or []
+            if model_groups != layout_groups:
+                layout_sync_ok = False
+                break
+            if int(st.get("appBarWindowCount", 1)) != 1:
+                layout_sync_ok = False
+                break
+        results.append({
+            "rule": "appbar_model_layout_pixels_sync",
+            "passed": layout_sync_ok,
+            "detail": "appBarGroups == appBarLayoutGroups and appBarWindowCount == 1 at each step",
+        })
 
     if profile == "component-shape-protection":
         # v2.6.1 U1 selection integrity. Steps emitted by the appbar-shot

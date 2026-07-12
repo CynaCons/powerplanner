@@ -138,6 +138,11 @@ void OverlayAppBarContentWidthForTest(int* content, int* window);
 // Overlay_SelectForTest drives a new selection context. Never touches COM.
 void Overlay_InvalidateAppBarForTest();
 
+// Test hook: rebuild + reposition + repaint the app bar immediately from the
+// current ownSel and chart rect (same path as Tick's ShowAppBar). Lets harness
+// captures match g_appBar without waiting for the 150ms timer. Never touches COM.
+void Overlay_SyncAppBarForTest();
+
 // Test hooks for S5 link mode (B7.1). Never touches COM.
 bool Overlay_IsLinkModeForTest();
 void Overlay_CancelLinkModeForTest();

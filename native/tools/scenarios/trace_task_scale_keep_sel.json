@@ -1,6 +1,6 @@
 {
   "name": "trace_task_scale_keep_sel",
-  "description": "v2.5.2 trace: task selected + scale month — selection stays TASK, scale changes (SR-EDT-02)",
+  "description": "v2.6.3 trace: scale from document context then re-select task — scale changes, TASK selected at end (SR-EDT-02 revised)",
   "exe": "ppappbarshot",
   "trace_profile": "task-scale-keep-sel",
   "timeout": 120,

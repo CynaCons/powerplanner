@@ -42,7 +42,7 @@ PP_PROJ metadata).
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
 | SR-EDT-01 | The task context shall expose Rename directly as a button or menu item that maps to the inline/card label editor path. | Task rename must have parity with row rename and not rely only on double-click. | `task-rename-route` asserts command availability and editor opening. | Legacy SR-EDT-01; SRS-InteractionConventions SR-IXC-16 |
-| SR-EDT-02 | The global scale, labels, and grid controls shall remain reachable while an item is selected, with current selection preserved when scale changes. | Scale changes are chart-level operations users still need in item context. | `scale-while-task-selected` asserts scale group reachability and ownSel stability after scale change. | Legacy SR-EDT-02; appbar_matrix |
+| SR-EDT-02 | The global scale, labels, and grid controls shall be reachable from the document/component app bar context (ownSel empty or background/CHART_ROOT). Item selections shall not show SCALE/INSERT; users return to document context (Esc or deselect per SR-IXC-09) to change scale. | Scale is a chart-level setting; item contexts stay focused on the selected element (SR-BAR-02). | `appbar-context-evolution` + `task-scale-keep-sel` assert SCALE only in document context and scale changes from component context. | v2.6.3 SR-BAR-02; supersedes interim SR-EDT-02 |
 | SR-EDT-03 | Day nudge controls, when present, shall use visually directional minus/plus glyphs rather than two identical `1d` labels. | Directional commands must communicate whether they move earlier or later. | App bar/menu screenshot review and command label assertions. | Legacy SR-EDT-03; app bar command rendering |
 
 ## Open / Related

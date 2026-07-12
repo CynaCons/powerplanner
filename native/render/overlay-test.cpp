@@ -473,6 +473,10 @@ int wmain(int argc, wchar_t** argv) {
 			app->PutVisible(Office::msoTrue);
 			wprintf(L"harness: powerpoint started\n");
 			pres = app->GetPresentations()->Add(Office::msoTrue);
+			// Stand-down marker for the registered add-in inside this PowerPoint
+			// (see appbar-shot.cpp): prevents a second overlay/app-bar window pair
+			// from overlapping the harness's in-process chrome.
+			try { pres->GetTags()->Add(_bstr_t(L"PP_HARNESS"), _bstr_t(L"1")); } catch (...) {}
 			{
 				PowerPoint::SlidesPtr slides = pres->GetSlides();
 				slides->Add(1, PowerPoint::ppLayoutBlank);
@@ -2555,6 +2559,11 @@ int wmain(int argc, wchar_t** argv) {
 			// ---- stage 14: APPBAR -----------------------------------------------
 			if (rc == 0) RequireForeground(ppHwnd, &rc);
 			if (rc == 0) {
+				// v2.6.3 SR-BAR-02: SCALE lives only in the DOCUMENT context now —
+				// clear any item selection left by earlier stages before locating
+				// scale buttons (Esc/deselect returns to component context, UF-07).
+				Overlay_SelectForTest("", "");
+				PumpFor(400);
 				bool pass = false;
 				bool step2 = false;
 				bool step3 = false;

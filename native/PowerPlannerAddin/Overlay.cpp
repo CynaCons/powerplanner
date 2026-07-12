@@ -678,8 +678,16 @@ void ClearSelectionState() {
 }
 
 void ClearOwnSelection() {
+	const bool had = !g_ownSelKind.empty() || !g_ownSelId.empty();
 	g_ownSelKind.clear();
 	g_ownSelId.clear();
+	if (had) {
+		g_appBarValid = false;
+		g_appBarModelDirty = true;
+		g_appBarLastMeasuredContentW = 0;
+		g_appBarLastMeasuredContentH = 0;
+		g_appBarGeomValid = false;
+	}
 }
 
 void ClearLinkMode() {
@@ -726,8 +734,17 @@ void SetOwnSelection(const std::string& kind, const std::string& id) {
 	if (g_linkMode && (kind != g_linkFromKind || id != g_linkFromId)) {
 		ClearLinkMode();
 	}
+	const std::string prevKind = g_ownSelKind;
+	const std::string prevId = g_ownSelId;
 	g_ownSelKind = kind;
 	g_ownSelId = id;
+	if (prevKind != kind || prevId != id) {
+		g_appBarValid = false;
+		g_appBarModelDirty = true;
+		g_appBarLastMeasuredContentW = 0;
+		g_appBarLastMeasuredContentH = 0;
+		g_appBarGeomValid = false;
+	}
 
 	// Post-RebuildChart the hit snapshot is empty until the next Tick(). While
 	// ownSel names a chart child, never leave stale CHART_ROOT-sized chrome from
@@ -4444,6 +4461,30 @@ void ShowOverlayForChartRect(const RECT& chart) {
 
 // ---- BOTTOM APP BAR --------------------------------------------------------
 
+void FreeAppBarBackBuffer();
+
+static BOOL CALLBACK DestroyExtraAppBarWindowsProc(HWND hwnd, LPARAM lp) {
+	wchar_t cls[64];
+	if (::GetClassNameW(hwnd, cls, 64) && wcscmp(cls, kAppBarClass) == 0) {
+		HWND keep = reinterpret_cast<HWND>(lp);
+		if (!keep || hwnd != keep)
+			::DestroyWindow(hwnd);
+	}
+	return TRUE;
+}
+
+static int CountAppBarWindows() {
+	int count = 0;
+	::EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
+		wchar_t cls[64];
+		if (::GetClassNameW(hwnd, cls, 64) && wcscmp(cls, kAppBarClass) == 0) {
+			++*reinterpret_cast<int*>(lp);
+		}
+		return TRUE;
+	}, reinterpret_cast<LPARAM>(&count));
+	return count;
+}
+
 AppBarSel AppBarSelFromKind(const std::string& kind) {
 	if (kind == "TASK") return AppBarSel::Task;
 	if (kind == "ROW") return AppBarSel::Row;
@@ -4463,12 +4504,23 @@ void RebuildAppBarModelFromSlide() {
 			PpDocument doc = DocumentFromJson(json);
 			AppBarSel sel = AppBarSelFromKind(g_ownSelKind);
 			g_appBar = BuildAppBar(sel, doc, g_ownSelId);
+			const bool selContextChanged =
+				g_appBarSelKindBuilt != g_ownSelKind || g_appBarSelIdBuilt != g_ownSelId;
 			g_appBarSelKindBuilt = g_ownSelKind;
 			g_appBarSelIdBuilt = g_ownSelId;
 			g_appBarDocSig = doc.scale + (doc.railLabels ? "1" : "0");
 			g_lastScale = doc.scale;
 			g_appBarValid = true;
 			g_appBarModelDirty = true;
+			if (selContextChanged) {
+				// Force remeasure/repaint so a narrower context cannot leave
+				// stale SCALE/Labels pixels from the previous wider bar.
+				g_appBarLastMeasuredContentW = 0;
+				g_appBarLastMeasuredContentH = 0;
+				g_appBarGeomValid = false;
+				g_appBarLayout = AppBarModel{};
+				FreeAppBarBackBuffer();
+			}
 		}
 	}
 	catch (const _com_error&) {
@@ -4484,6 +4536,8 @@ void RebuildAppBarModelFromSlide() {
 }
 
 int AppBarShadowInset() { return Scale(4); }
+
+int AppBarDockGap() { return Scale(8); }
 
 int AppBarContainerHeight() { return Scale(36); }
 
@@ -4616,6 +4670,17 @@ void CollapseAppBarInsertGroup(AppBarModel& model) {
 void ApplyAppBarOverflowPolicy(int maxContentW) {
 	g_appBarLayout = g_appBar;
 	g_appBarInsertPopupItems.clear();
+	// Guard against accidental duplicate SCALE groups after context transitions.
+	for (size_t i = g_appBarLayout.groups.size(); i > 0; --i) {
+		if (!AppBarIsScaleGroup(g_appBarLayout.groups[i - 1])) continue;
+		for (size_t j = i; j < g_appBarLayout.groups.size(); ) {
+			if (AppBarIsScaleGroup(g_appBarLayout.groups[j]))
+				g_appBarLayout.groups.erase(g_appBarLayout.groups.begin() + (ptrdiff_t)j);
+			else
+				++j;
+		}
+		break;
+	}
 	if (maxContentW <= 0) return;
 
 	auto fits = [&]() { return MeasureAppBarWidth(g_appBarLayout) <= maxContentW; };
@@ -4915,18 +4980,29 @@ bool EnsureAppBarBackBuffer(int w, int h) {
 
 void RenderAppBar() {
 	if (!g_appBarHwnd || !g_gdiplusToken) return;
+	// Never paint when the model/layout lags behind ownSel — hover repaints used
+	// to push a stale document-context bitmap after Overlay_SelectForTest (or a
+	// real click) changed selection before the next Tick rebuilt the bar.
+	if (!g_appBarValid || g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt) {
+		wchar_t buf[160];
+		::swprintf_s(buf, 160, L"RenderAppBar SKIP valid=%d own=%hs/%hs built=%hs/%hs",
+			g_appBarValid ? 1 : 0, g_ownSelKind.c_str(), g_ownSelId.c_str(),
+			g_appBarSelKindBuilt.c_str(), g_appBarSelIdBuilt.c_str());
+		OvLog(buf);
+		return;
+	}
 	RECT wr;
-	if (!::GetWindowRect(g_appBarHwnd, &wr)) return;
+	if (!::GetWindowRect(g_appBarHwnd, &wr)) { OvLog(L"RenderAppBar SKIP GetWindowRect"); return; }
 	int w = wr.right - wr.left, h = wr.bottom - wr.top;
-	if (w <= 0 || h <= 0) return;
-	if (!EnsureAppBarBackBuffer(w, h)) return;
+	if (w <= 0 || h <= 0) { OvLog(L"RenderAppBar SKIP zero size"); return; }
+	if (!EnsureAppBarBackBuffer(w, h)) { OvLog(L"RenderAppBar SKIP backbuffer"); return; }
 	try {
 		if (g_abBits && g_abW > 0 && g_abH > 0)
 			::memset(g_abBits, 0, (size_t)g_abW * (size_t)g_abH * 4u);
 		Gdiplus::Bitmap surface(w, h, w * 4, PixelFormat32bppPARGB, (BYTE*)g_abBits);
-		if (surface.GetLastStatus() != Gdiplus::Ok) return;
+		if (surface.GetLastStatus() != Gdiplus::Ok) { OvLog(L"RenderAppBar SKIP surface"); return; }
 		Gdiplus::Graphics g(&surface);
-		if (g.GetLastStatus() != Gdiplus::Ok) return;
+		if (g.GetLastStatus() != Gdiplus::Ok) { OvLog(L"RenderAppBar SKIP graphics"); return; }
 		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
 		g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 		g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
@@ -4937,8 +5013,19 @@ void RenderAppBar() {
 		POINT src = { 0, 0 };
 		SIZE size = { w, h };
 		BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-		if (::UpdateLayeredWindow(g_appBarHwnd, NULL, &dst, &size, g_abDc, &src, 0, &bf, ULW_ALPHA))
+		if (::UpdateLayeredWindow(g_appBarHwnd, NULL, &dst, &size, g_abDc, &src, 0, &bf, ULW_ALPHA)) {
 			++g_appBarPaintCount;
+			wchar_t okBuf[200];
+			::swprintf_s(okBuf, 200, L"RenderAppBar OK %dx%d name=%hs groups=%d barWindows=%d hwnd=%p",
+				w, h, g_appBarLayout.name.c_str(), (int)g_appBarLayout.groups.size(),
+				CountAppBarWindows(), (void*)g_appBarHwnd);
+			OvLog(okBuf);
+		} else {
+			DWORD err = ::GetLastError();
+			wchar_t errBuf[96];
+			::swprintf_s(errBuf, 96, L"RenderAppBar ULW FAILED err=%lu", err);
+			OvLog(errBuf);
+		}
 	}
 	catch (const std::exception&) {
 		OvLog(L"app-bar render failed (std::exception)");
@@ -4963,7 +5050,8 @@ LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			}
 			if (newHover != g_appBarHoverCmd) {
 				g_appBarHoverCmd = newHover;
-				RenderAppBar();
+				if (g_appBarValid && g_ownSelKind == g_appBarSelKindBuilt && g_ownSelId == g_appBarSelIdBuilt)
+					RenderAppBar();
 			}
 			TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
 			::TrackMouseEvent(&tme);
@@ -4972,7 +5060,8 @@ LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		if (msg == WM_MOUSELEAVE) {
 			if (g_appBarHoverCmd != 0) {
 				g_appBarHoverCmd = 0;
-				RenderAppBar();
+				if (g_appBarValid && g_ownSelKind == g_appBarSelKindBuilt && g_ownSelId == g_appBarSelIdBuilt)
+					RenderAppBar();
 			}
 			return 0;
 		}
@@ -5005,6 +5094,10 @@ LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 void EnsureAppBarWindow() {
+	// Orphan cleanup: a prior crashed harness run can leave a visible
+	// PowerPlannerAppBar HWND while g_appBarHwnd is NULL — captures then show a
+	// stale composite while the dump reads the live model (H1).
+	::EnumWindows(DestroyExtraAppBarWindowsProc, reinterpret_cast<LPARAM>(g_appBarHwnd));
 	if (g_appBarHwnd) return;
 	WNDCLASSEXW wc = { sizeof(wc) };
 	wc.lpfnWndProc = AppBarWndProc;
@@ -5032,7 +5125,7 @@ void HideAppBar(bool keepGeomCache = false) {
 	}
 }
 
-void ShowAppBar(const RECT& slideRect) {
+void ShowAppBar(const RECT& chartScreenRect, const RECT& slideScreenRect) {
 	EnsureAppBarWindow();
 	if (!g_appBarHwnd) return;
 	bool dpiChanged = UpdateDpiForWindow(g_appBarHwnd);
@@ -5041,16 +5134,25 @@ void ShowAppBar(const RECT& slideRect) {
 		RebuildAppBarModelFromSlide();
 	}
 	const int shadow = AppBarShadowInset();
-	int maxW = (int)((slideRect.right - slideRect.left) * 0.94);
+	int maxW = (int)((slideScreenRect.right - slideScreenRect.left) * 0.94);
+	if (maxW <= 0)
+		maxW = std::max(0, (int)(chartScreenRect.right - chartScreenRect.left));
 	int maxContentW = std::max(0, maxW - shadow * 2);
 	ApplyAppBarOverflowPolicy(maxContentW);
 	MeasureAppBar();
 	int w = g_appBarContentW + shadow * 2;
 	if (w > maxW) w = maxW;
 	int h = g_appBarContentH + shadow * 2;
-	int cx = (slideRect.left + slideRect.right) / 2;
+	int cx = (chartScreenRect.left + chartScreenRect.right) / 2;
 	int x = cx - w / 2;
-	int y = slideRect.bottom - Scale(8) - h;
+	int y = chartScreenRect.bottom + AppBarDockGap();
+	// SR-DOCK-01: clamp horizontal position to slide edges.
+	if (slideScreenRect.right > slideScreenRect.left) {
+		const int slideL = slideScreenRect.left;
+		const int slideR = slideScreenRect.right;
+		if (x < slideL) x = slideL;
+		if (x + w > slideR) x = std::max(slideL, slideR - w);
+	}
 	RECT want = { x, y, x + w, y + h };
 	const int prevWindowW = g_appBarGeomValid ? (g_appBarLastRect.right - g_appBarLastRect.left) : 0;
 	const int prevWindowH = g_appBarGeomValid ? (g_appBarLastRect.bottom - g_appBarLastRect.top) : 0;
@@ -6415,6 +6517,46 @@ void Tick() {
 		if (!win) { if (g_shown) OvLog(L"Tick: no active window - hiding"); HideOverlay(); HideAppBar(); return; }
 		g_pptHwnd = (HWND)(INT_PTR)g_app->GetHWND();
 
+		// Harness stand-down: the trace/e2e harnesses drive their OWN in-process
+		// overlay against a PowerPoint they launch; the registered add-in inside
+		// that PowerPoint must not create a SECOND overlapping overlay/app-bar
+		// (two PowerPlannerAppBar windows = mixed chrome, corrupted captures).
+		// The harness tags its presentation PP_HARNESS=1; the add-in (running in
+		// POWERPNT.EXE, unlike the harness exes) hides while it is active. The
+		// COM tag read is cached and re-checked every 64 ticks (~10s).
+		{
+			static bool s_isPowerPntProcess = []() {
+				wchar_t path[MAX_PATH] = L"";
+				::GetModuleFileNameW(NULL, path, MAX_PATH);
+				const wchar_t* base = ::wcsrchr(path, L'\\');
+				base = base ? base + 1 : path;
+				return ::_wcsicmp(base, L"POWERPNT.EXE") == 0;
+			}();
+			static int s_harnessCheckTick = 0;
+			static bool s_harnessPresentation = false;
+			if (s_isPowerPntProcess) {
+				if ((s_harnessCheckTick & 63) == 0) {
+					try {
+						PowerPoint::_PresentationPtr pres = win->GetPresentation();
+						_bstr_t tag = pres->GetTags()->Item(_bstr_t(L"PP_HARNESS"));
+						s_harnessPresentation = tag.length() && ::wcscmp((const wchar_t*)tag, L"1") == 0;
+						++s_harnessCheckTick; // cache only after a SUCCESSFUL read
+					} catch (...) {
+						// Startup COM flake: retry next tick instead of caching
+						// "not harness" for ~10s (the bar would photobomb runs).
+						s_harnessPresentation = false;
+					}
+				} else {
+					++s_harnessCheckTick;
+				}
+				if (s_harnessPresentation) {
+					HideOverlay();
+					HideAppBar(true);
+					return;
+				}
+			}
+		}
+
 		// Host-scoping: the overlay chrome (selection frame + toolbar) may be
 		// visible ONLY while PowerPoint is the active app (see
 		// IsHostActiveForOverlayChrome's comment above). If PowerPoint is not
@@ -6605,7 +6747,7 @@ void Tick() {
 				NormalizeRect(slideRect);
 			}
 		} catch (...) { slideRect = g_chartScreenRect; }
-		ShowAppBar(slideRect);
+		ShowAppBar(g_chartScreenRect, slideRect);
 		if (chartChanged || hoverChanged || emptyCellHintChanged || !g_creationFailHint.empty() ||
 			mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
 			RequestOverlayRepaint();
@@ -6800,6 +6942,17 @@ const char* Overlay_GetSelectedIdForTest() { return g_ownSelId.c_str(); }
 void Overlay_InvalidateAppBarForTest() {
 	g_appBarValid = false;
 	g_appBarModelDirty = true;
+	g_appBarLastMeasuredContentW = 0;
+	g_appBarLastMeasuredContentH = 0;
+	g_appBarGeomValid = false;
+	g_appBarLayout = AppBarModel{};
+	FreeAppBarBackBuffer();
+}
+
+void Overlay_SyncAppBarForTest() {
+	if (!g_appBarHwnd || ::IsRectEmpty(&g_chartScreenRect)) return;
+	RECT slideRect = g_chartScreenRect;
+	ShowAppBar(g_chartScreenRect, slideRect);
 }
 
 bool Overlay_IsLinkModeForTest() { return g_linkMode; }
@@ -6810,9 +6963,12 @@ void Overlay_CancelLinkModeForTest() {
 }
 
 void Overlay_SelectForTest(const char* kind, const char* id) {
-	if (!kind || !*kind) { ClearOwnSelection(); Overlay_InvalidateAppBarForTest(); return; }
-	SetOwnSelection(kind, id ? id : "");
-	Overlay_InvalidateAppBarForTest();
+	if (!kind || !*kind) { ClearOwnSelection(); Overlay_InvalidateAppBarForTest(); }
+	else {
+		SetOwnSelection(kind, id ? id : "");
+		Overlay_InvalidateAppBarForTest();
+	}
+	Overlay_SyncAppBarForTest();
 }
 
 int Overlay_GetSelectedKindForTest() {
@@ -6900,6 +7056,12 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"cardVisible\":" + std::string((g_cardHwnd && ::IsWindowVisible(g_cardHwnd)) ? "true" : "false") + ",";
 	s += "\"appBarVisible\":" + std::string(g_appBarShown ? "true" : "false") + ",";
 	s += "\"appBarValid\":" + std::string(g_appBarValid ? "true" : "false") + ",";
+	if (g_appBarGeomValid) {
+		s += "\"appBarRect\":{\"left\":" + std::to_string(g_appBarLastRect.left) + ",\"top\":" + std::to_string(g_appBarLastRect.top)
+			+ ",\"right\":" + std::to_string(g_appBarLastRect.right) + ",\"bottom\":" + std::to_string(g_appBarLastRect.bottom) + "},";
+	} else {
+		s += "\"appBarRect\":{},";
+	}
 	s += "\"scale\":\"" + g_lastScale + "\",";
 	s += "\"chartRect\":{\"left\":" + std::to_string(g_chartScreenRect.left) + ",\"top\":" + std::to_string(g_chartScreenRect.top) + ",\"right\":" + std::to_string(g_chartScreenRect.right) + ",\"bottom\":" + std::to_string(g_chartScreenRect.bottom) + "},";
 	s += "\"selScreenRect\":{\"left\":" + std::to_string(g_selScreenRect.left) + ",\"top\":" + std::to_string(g_selScreenRect.top) + ",\"right\":" + std::to_string(g_selScreenRect.right) + ",\"bottom\":" + std::to_string(g_selScreenRect.bottom) + "},";
@@ -6910,6 +7072,13 @@ const char* Overlay_DumpChromeStateForTest() {
 		s += "\"" + g_appBar.groups[i].label + "\"";
 	}
 	s += "],";
+	s += "\"appBarLayoutGroups\":[";
+	for (size_t i = 0; i < g_appBarLayout.groups.size(); ++i) {
+		if (i > 0) s += ",";
+		s += "\"" + g_appBarLayout.groups[i].label + "\"";
+	}
+	s += "],";
+	s += "\"appBarWindowCount\":" + std::to_string(CountAppBarWindows()) + ",";
 	bool hasScale = false;
 	for (const auto& gr : g_appBar.groups) {
 		if (gr.label == "SCALE") { hasScale = true; break; }

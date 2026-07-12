@@ -1145,29 +1145,38 @@ static int AppBarCountSwatches(const AppBarModel& model) {
 static bool AppBarGlobalOk(const AppBarModel& model, const PpDocument& doc, const char* ctx) {
 	bool ok = true;
 	ok = Check(!model.groups.empty(), "appbar global: model has groups") && ok;
-	const AppBarGroup& global = model.groups.back();
-	ok = Check(global.label == "SCALE", "appbar global: last group is SCALE") && ok;
-	ok = Check(global.items.size() >= 7, "appbar global: SCALE has scale+labels+grid items") && ok;
+	const AppBarGroup* global = AppBarFindGroup(model, "SCALE");
+	ok = Check(global != nullptr, "appbar global: SCALE group present") && ok;
+	if (!global) return ok;
+	ok = Check(global->items.size() >= 7, "appbar global: SCALE has scale+labels+grid items") && ok;
 	const int scaleCmds[] = {
 		HtCmd_ScaleDay, HtCmd_ScaleWeek, HtCmd_ScaleMonth,
 		HtCmd_ScaleQuarter, HtCmd_ScaleYear
 	};
 	const char* scaleLabels[] = { "D", "W", "M", "Q", "Y" };
 	for (int i = 0; i < 5; ++i) {
-		ok = Check(global.items[i].cmd == scaleCmds[i] &&
-			global.items[i].label == scaleLabels[i] &&
-			global.items[i].icon == AppBarIcon::ScaleSeg,
+		ok = Check(global->items[i].cmd == scaleCmds[i] &&
+			global->items[i].label == scaleLabels[i] &&
+			global->items[i].icon == AppBarIcon::ScaleSeg,
 			"appbar global: scale segment order") && ok;
 	}
 	int activeCount = 0;
-	for (int i = 0; i < 5; ++i) if (global.items[i].active) ++activeCount;
+	for (int i = 0; i < 5; ++i) if (global->items[i].active) ++activeCount;
 	ok = Check(activeCount == 1, "appbar global: exactly one scale segment active") && ok;
-	const AppBarItem* labelsItem = AppBarFindItem(global, HtCmd_ToggleRailLabels);
+	const AppBarItem* labelsItem = AppBarFindItem(*global, HtCmd_ToggleRailLabels);
 	ok = Check(labelsItem != nullptr && labelsItem->label == "Labels" &&
 		labelsItem->icon == AppBarIcon::LabelsToggle &&
 		labelsItem->active == doc.railLabels,
 		"appbar global: Labels item tracks railLabels") && ok;
-	ok = Check(AppBarFindItem(global, HtCmd_CycleGrid) != nullptr, "appbar global: Grid item present") && ok;
+	ok = Check(AppBarFindItem(*global, HtCmd_CycleGrid) != nullptr, "appbar global: Grid item present") && ok;
+	(void)ctx;
+	return ok;
+}
+
+static bool AppBarItemContextOk(const AppBarModel& model, const char* ctx) {
+	bool ok = true;
+	ok = Check(AppBarFindGroup(model, "SCALE") == nullptr, "appbar item: no SCALE group") && ok;
+	ok = Check(AppBarFindGroup(model, "INSERT") == nullptr, "appbar item: no INSERT group") && ok;
 	(void)ctx;
 	return ok;
 }
@@ -1200,15 +1209,18 @@ static bool RunAppBarModelChecks() {
 		PpDocument doc;
 		doc.scale = "month";
 		AppBarModel m = BuildAppBar(AppBarSel::None, doc, "");
-		ok = Check(m.groups.back().items[2].active, "appbar scale: month -> M active") && ok;
-		ok = Check(!m.groups.back().items[0].active && !m.groups.back().items[4].active,
+		const AppBarGroup* scale = AppBarFindGroup(m, "SCALE");
+		ok = Check(scale && scale->items[2].active, "appbar scale: month -> M active") && ok;
+		ok = Check(scale && !scale->items[0].active && !scale->items[4].active,
 			"appbar scale: month -> D/Q inactive") && ok;
 		doc.scale = "quarter";
 		m = BuildAppBar(AppBarSel::None, doc, "");
-		ok = Check(m.groups.back().items[3].active, "appbar scale: quarter -> Q active") && ok;
+		scale = AppBarFindGroup(m, "SCALE");
+		ok = Check(scale && scale->items[3].active, "appbar scale: quarter -> Q active") && ok;
 		doc.railLabels = true;
 		m = BuildAppBar(AppBarSel::None, doc, "");
-		const AppBarItem* labelsItem = AppBarFindItem(m.groups.back(), HtCmd_ToggleRailLabels);
+		scale = AppBarFindGroup(m, "SCALE");
+		const AppBarItem* labelsItem = scale ? AppBarFindItem(*scale, HtCmd_ToggleRailLabels) : nullptr;
 		ok = Check(labelsItem && labelsItem->active, "appbar scale: railLabels -> Labels active") && ok;
 	}
 
@@ -1280,7 +1292,7 @@ static bool RunAppBarModelChecks() {
 		m = BuildAppBar(AppBarSel::Task, doc, "t1");
 		unlink = AppBarFindItemInModel(m, HtCmd_Unlink);
 		ok = Check(unlink && unlink->enabled, "appbar task: Unlink enabled when dep touches task") && ok;
-		ok = AppBarGlobalOk(m, doc, "task") && ok;
+		ok = AppBarItemContextOk(m, "task") && ok;
 	}
 
 	// --- Task rail-row rule ---
@@ -1316,7 +1328,7 @@ static bool RunAppBarModelChecks() {
 			ok = Check(row->items[5].cmd == HtCmd_OutdentRow && row->items[5].label == "Outdent", "appbar row: Outdent") && ok;
 			ok = Check(row->items[6].cmd == HtCmd_DeleteRow && row->items[6].danger, "appbar row: danger DeleteRow") && ok;
 		}
-		ok = AppBarGlobalOk(m, doc, "row") && ok;
+		ok = AppBarItemContextOk(m, "row") && ok;
 	}
 
 	// --- Milestone ---
@@ -1337,7 +1349,7 @@ static bool RunAppBarModelChecks() {
 		const AppBarItem* del = AppBarFindItemInModel(m, HtCmd_Delete);
 		ok = Check(del && del->danger, "appbar milestone: danger Delete") && ok;
 		ok = Check(AppBarCountSwatches(m) == 0, "appbar milestone: no swatches") && ok;
-		ok = AppBarGlobalOk(m, doc, "milestone") && ok;
+		ok = AppBarItemContextOk(m, "milestone") && ok;
 	}
 
 	// --- Marker ---
@@ -1356,7 +1368,7 @@ static bool RunAppBarModelChecks() {
 		ok = Check(AppBarFindItemInModel(m, HtCmd_NudgePlus1) != nullptr, "appbar marker: NudgePlus1") && ok;
 		const AppBarItem* del = AppBarFindItemInModel(m, HtCmd_Delete);
 		ok = Check(del && del->danger, "appbar marker: danger Delete") && ok;
-		ok = AppBarGlobalOk(m, doc, "marker") && ok;
+		ok = AppBarItemContextOk(m, "marker") && ok;
 	}
 
 	// --- Note ---
@@ -1373,10 +1385,10 @@ static bool RunAppBarModelChecks() {
 		doc.texts[0].label = "";
 		m = BuildAppBar(AppBarSel::Note, doc, "n1");
 		ok = Check(m.name == "Note", "appbar note: empty label falls back to Note") && ok;
-		ok = AppBarGlobalOk(m, doc, "note") && ok;
+		ok = AppBarItemContextOk(m, "note") && ok;
 	}
 
-	// --- Global LAST for every selection type ---
+	// --- Document vs item context (SR-BAR-01/02) ---
 	{
 		PpDocument doc;
 		doc.rows.push_back(PpRow{"r1", "R", "", false});
@@ -1384,15 +1396,12 @@ static bool RunAppBarModelChecks() {
 		doc.milestones.push_back(PpMilestone{"m1", "M", "2026-01-01", "r1", ""});
 		doc.markers.push_back(PpMarker{"mk1", "today", "Mk", "2026-01-01", ""});
 		doc.texts.push_back(PpText{"n1", "N", "", "r1", "2026-01-01", "", 0, 0});
-		const AppBarSel sels[] = {
-			AppBarSel::None, AppBarSel::Task, AppBarSel::Row,
-			AppBarSel::Milestone, AppBarSel::Marker, AppBarSel::Note
-		};
-		const char* ids[] = { "", "t1", "r1", "m1", "mk1", "n1" };
-		for (int i = 0; i < 6; ++i) {
-			AppBarModel m = BuildAppBar(sels[i], doc, ids[i]);
-			ok = Check(m.groups.back().label == "SCALE", "appbar global: SCALE last for every sel") && ok;
-		}
+		ok = AppBarGlobalOk(BuildAppBar(AppBarSel::None, doc, ""), doc, "none") && ok;
+		ok = AppBarItemContextOk(BuildAppBar(AppBarSel::Task, doc, "t1"), "task") && ok;
+		ok = AppBarItemContextOk(BuildAppBar(AppBarSel::Row, doc, "r1"), "row") && ok;
+		ok = AppBarItemContextOk(BuildAppBar(AppBarSel::Milestone, doc, "m1"), "milestone") && ok;
+		ok = AppBarItemContextOk(BuildAppBar(AppBarSel::Marker, doc, "mk1"), "marker") && ok;
+		ok = AppBarItemContextOk(BuildAppBar(AppBarSel::Note, doc, "n1"), "note") && ok;
 	}
 
 	return ok;

@@ -255,12 +255,12 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [ ] #1 Shape selectability: internal emitted shapes (task bars, labels, connectors, etc. inside CHART_ROOT) must never be directly selectable as individual PowerPoint shapes; only the CHART_ROOT "app-component" container shall be a selectable PP shape. All intra-component selection must route exclusively through our overlay hit-test + ownSel model. Strengthen suppression (beyond current 150ms Unselect poll), add invariants, document contract.
 - [x] #1 Add SRS in proper table format: spec/srs-native/SRS-NativeUXFoundations.md (SR-SHP-01..04).
 - [ ] #1 E2E: implement profile + run scenario trace_component_shape_protection --check-invariants.
-- [ ] #2 Appbar sticky docking: the app bar shall be positioned immediately below the logical bounds of the CHART_ROOT "app-component" (with small defined gap per tokens), forming a visual unit. Moving/resizing the CHART_ROOT group shall synchronously move the app bar to stay docked. Consider "imaginary outline" of the combined component+bar for future interactions. Fix any lag/offset/gap variance observed in live use.
+- [x] #2 Appbar sticky docking: the app bar shall be positioned immediately below the logical bounds of the CHART_ROOT "app-component" (with small defined gap per tokens), forming a visual unit. Moving/resizing the CHART_ROOT group shall synchronously move the app bar to stay docked. Consider "imaginary outline" of the combined component+bar for future interactions. Fix any lag/offset/gap variance observed in live use.
 - [x] #2 Add SRS: SR-DOCK-01..03 in SRS-NativeUXFoundations.md.
-- [ ] #2 E2E: run trace_appbar_docked + docking verification.
-- [ ] #3 Context-sensitive app bar: selection of overall document / CHART_ROOT / empty shall surface document-level controls (timescale/scale, labels, grid, insert). Selection of a task/row/etc. shall show *only* the relevant actions for that object (no timescale etc.). Refine BuildAppBar / RebuildAppBarModelFromSlide + tests.
+- [x] #2 E2E: run trace_appbar_docked + docking verification.
+- [x] #3 Context-sensitive app bar: selection of overall document / CHART_ROOT / empty shall surface document-level controls (timescale/scale, labels, grid, insert). Selection of a task/row/etc. shall show *only* the relevant actions for that object (no timescale etc.). Refine BuildAppBar / RebuildAppBarModelFromSlide + tests.
 - [x] #3 Add/extend SRS: SR-BAR-01..03.
-- [ ] #3 E2E: run trace_appbar_context_evolution + matrix.
+- [x] #3 E2E: run trace_appbar_context_evolution + matrix.
 - [ ] #4 Theme-coherent menus & panels: All right-click context menus, card editors, inline editors, popups, and any future panels shall be custom-rendered using GanttTheme.h / design-tokens.md values and match the approved onslide-mockup.html aesthetic (no default Win32 HMENU or unstyled dialog chrome). Current TrackPopupMenu + standard child controls are non-compliant.
 - [x] #4 Add SRS: SR-THEME-01..03 + cross-cutting SR-NUI in SRS-NativeUXFoundations.md.
 - [ ] #4 E2E + impl: run trace_theme_coherent_surfaces; deliver custom-drawn theme-coherent menu and edit panel.
@@ -343,11 +343,12 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 
 ### v2.6.3 - Iteration U3: App Bar Docking + Context Purity
 **Goal:** The bar is part of the component and shows only what's relevant. Absorbs v2.5.5 #2/#3 (SR-DOCK, SR-BAR).
-- [ ] SR-DOCK-01/02: dock the bar to CHART_ROOT's screen rect bottom + token gap; moves/resizes with the group; clamp at slide edges (fixes M5 overlap by construction)
-- [ ] SR-BAR-02: item contexts show ONLY item-relevant groups (remove global INSERT/SCALE from task/row/milestone/marker contexts; revisit interim SR-EDT-02) — document context (empty click/Esc per UF-07) is where scale/insert live
-- [ ] Fix duplicated SCALE group / stale composite render defect (seen in trace captures)
-- [ ] E2E: trace_appbar_docked + trace_appbar_context_evolution implemented + matrix re-run
-- [ ] MILESTONE GATE: user visual pass on docking + contexts
+- [x] SR-DOCK-01/02: dock the bar to CHART_ROOT's screen rect bottom + token gap; moves/resizes with the group; clamp at slide edges (fixes M5 overlap by construction)
+- [x] SR-BAR-02: item contexts show ONLY item-relevant groups (remove global INSERT/SCALE from task/row/milestone/marker contexts; revisit interim SR-EDT-02) — document context (empty click/Esc per UF-07) is where scale/insert live
+- [x] Fix duplicated SCALE group / stale composite render defect (seen in trace captures)
+- [x] E2E: trace_appbar_docked + trace_appbar_context_evolution implemented + matrix re-run
+- [x] Root-caused capture corruption: the REGISTERED add-in inside harness PowerPoints ran a second overlay/app-bar exactly overlapping the harness chrome (screen captures composited both). Fix: harness tags its presentation PP_HARNESS=1 and the add-in (POWERPNT.EXE process only) stands down; app-bar captures now use PrintWindow (window-own pixels, immune to overlap); RenderAppBar paint diagnostics kept
+- [ ] MILESTONE GATE: user visual pass on docking + contexts (captures ready: trace_appbar-context-evolution_*_appbar.png + trace_appbar_docked)
 
 ### v2.6.4 - Iteration U4: Multi-Select
 **Goal:** Standard Ctrl/Shift selection semantics. 
