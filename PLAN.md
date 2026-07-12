@@ -395,6 +395,44 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] Screenshot matrix (gallery_matrix scenario, 10 contexts, PrintWindow-true bar/menu/card strips) + README refreshed to native-v5-* captures (bar strips are PrintWindow-true; display was 200% DPI — 100/150% sweep not available headlessly). Web<->native parity pass still open below
 - [x] Close the program: 5 cold walkthroughs PASS, closing cohesion review appended to docs/onslide-ux-inventory.md, provider comparison + summary in docs/on-slide-coordinator-log.md. OPEN at close: user gates (v2.5.3 live feel check; U3 docking visual pass; U5 zero-instruction walkthrough), Tier-B split, web<->native parity pass, 100/150% DPI matrix (display was 200%)
 
+# Phase 12: Time Window Editing (v2.7.x — registered 2026-07-12, PLAN ONLY, awaiting user approval)
+
+**Input:** user feature request 2026-07-12 — arrow ports on the timescale header to drag-resize the chart's time window; two-phase render (axis preview during drag, full rescale on drop); lossless clip/hide of out-of-window elements (rail always complete). Full design: docs/time-window-plan.md (subagent-reviewed).
+**Open decisions D1-D4** listed at the end of the plan doc — user veto requested.
+**Review outcome (2026-07-12, adversarial subagent, 37 tool uses over the actual code):** 3 CRITICAL (C1 ReflowFromSlide back-projects clipped geometry -> data corruption; C2 rect-derived px/day + anchor math falsified by clipped bars; C3 structural classifiers ignore window fields -> flash + JSON patcher drops the window), 5 MAJOR (label-overhang bounds drift, undo/scene-cache interaction, DEP unit-clip, hidden-selection reset must generalize, DocDatesFitPaddedWindow contradiction), 10 minor. All folded into docs/time-window-plan.md W1-W3 amendments. Verdict: implementable as sliced after the W1 amendments.
+
+### v2.7.0 - W0: SRS + foundation spec (no code)
+- [ ] spec/srs-native/SRS-TimeWindow.md (SR-WIN-01..~14 tables) + spec/data-model.md + schema additions (windowStart/windowEnd, absent = auto-fit)
+- [ ] Scenario stubs: trace_window_edge_drag, trace_window_clip_rerender, trace_window_commit_latency
+
+### v2.7.1 - W1: model + scene clipping (pure layer)
+- [ ] windowStart/End in PpDocument + JSON round-trip (canonical omits empty); SetTimeWindow/ClearTimeWindow ops + guards + ops-test
+- [ ] BuildProjectedScene explicit-window mode (no pad) + clip stage (drop fully-outside prims, truncate straddlers + clippedL/R flags + 'continues' tick; rail/axis exempt; LABEL prims clamp too [M1]; DEP + bracket clip as units [M3/m8])
+- [ ] C1: ReflowFromSlide must never back-project clipped/hidden shapes into doc dates (skip out-of-window elements or PP_CLIP tag) + Repair-layout-lossless e2e
+- [ ] C3: windowStart/End join IsStructuralDocChange + IsStructuralDocDelta/JSON patchers; window commits force the paint lock
+- [ ] PP_PROJ + PP_ROWY rewrite on window change; fast path hard-ineligible on window change; InvalidateSceneCache on window change; new pp_proj_matches_window invariant
+- [ ] Gates: ops-test clip/lossless cases, conformance byte-identical, full trace regression
+
+### v2.7.2 - W2: ports + drag + axis preview (UI, commit stubbed)
+- [ ] Hover-gated arrow ports on the header band (paint + HtZone::WindowPortL/R + dump rects windowPortL/RRect)
+- [ ] DragKind::WindowEdgeL/R: snapped candidate, window pill, clamps (min 1 unit, max 20y, no edge crossing), Esc cancel (repaint on clear)
+- [ ] Axis-preview paint pass (header-band strip for the CANDIDATE window; shapes untouched during drag)
+- [ ] Gates: trace_window_edge_drag (mid-gesture dump + header pixel-diff), IDLESTABLE stays paint-free, full drag-suite regression
+
+### v2.7.3 - W3: commit + clipping e2e + budget
+- [ ] CommitWindowGesture (snapshot-locals rule) -> SetTimeWindow -> RebuildChart; one undo entry; hidden-selection reset generalized to ANY de-emitting op (M4)
+- [ ] C2: clipped-bar px/day + anchor-day math prefer PP_PROJ (ComputeDragPxPerDay / ComputeEmptyCellPxPerDay / AnchorDayFromScreenX) + clipped-chart create/drag e2e
+- [ ] M2: Ctrl+Z-then-edit e2e (scene cache must not re-apply an undone window) + PP_DOC drift probe; m4 ChartWindowHiDay tightened; m6 driver budget rule; m9 Esc-cancel + zero-delta-materialization e2e
+- [ ] trace_window_clip_rerender: shrink hides 'discovery' (bar gone, rail row present, doc unchanged) -> expand back -> geometry/props IDENTICAL (lossless)
+- [ ] trace_window_commit_latency: window_commit_budget <= 2000ms (measure first; optimize via re-emission only if red)
+- [ ] Gates: all new + full regression + walkthrough all
+
+### v2.7.4 - W4: settings + polish + close
+- [ ] Settings popover: 'Time window: Fit to tasks' reset + current-window display; header hover hint teaches the gesture
+- [ ] Cold walkthrough 'change-the-time-window' added to gate set; gallery-window captures; README note
+- [ ] MILESTONE GATE: user visual/feel pass
+- Follow-ups registered (not in scope): W-FUP-1 axis pan, W-FUP-2 wheel zoom, W-FUP-3 auto scale-switch, W-FUP-4 web parity
+
 ### v2.4.4 - Installer + Packaging (deferred)
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
 
