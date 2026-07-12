@@ -396,6 +396,28 @@ static bool JsonFieldNonEmpty(const char* dump, const char* key) {
 	return p && p[::strlen(needle)] != '"';
 }
 
+static int CountRowBandsBetween(const char* dump, const char* rowA, const char* rowB) {
+	if (!dump || !rowA || !rowB) return -1;
+	const char* bands = ::strstr(dump, "\"rowBands\":[");
+	if (!bands) return -1;
+	std::vector<std::string> ids;
+	const char* p = bands;
+	while ((p = ::strstr(p, "\"rowId\":\"")) != nullptr) {
+		p += 9;
+		const char* end = ::strchr(p, '"');
+		if (!end) break;
+		ids.emplace_back(p, end - p);
+		p = end + 1;
+	}
+	int ia = -1, ib = -1;
+	for (size_t i = 0; i < ids.size(); ++i) {
+		if (ids[i] == rowA) ia = (int)i;
+		if (ids[i] == rowB) ib = (int)i;
+	}
+	if (ia < 0 || ib < 0) return -1;
+	return (ia > ib ? ia - ib : ib - ia) + 1;
+}
+
 static int JsonFieldInt(const char* dump, const char* key, int fallback = 0) {
 	if (!dump || !key) return fallback;
 	char needle[64];
@@ -1536,6 +1558,7 @@ int wmain(int argc, wchar_t** argv) {
 				wcscmp(traceProfile, L"component-shape-protection") == 0 ||
 				wcscmp(traceProfile, L"appbar-docked") == 0 ||
 				wcscmp(traceProfile, L"appbar-context-evolution") == 0 ||
+				wcscmp(traceProfile, L"multi-row-delete") == 0 ||
 				wcsstr(traceProfile, L"overall-"));
 			if (traceCleanStart) {
 				Overlay_SelectForTest("", ""); // clean start: the branch drives selection itself
@@ -2124,6 +2147,72 @@ int wmain(int argc, wchar_t** argv) {
 				Overlay_InvalidateAppBarForTest();
 				PumpFor(450);
 				captureStep("reset", traceProfile);           // ownSel empty, SCALE present
+			} else if (traceProfile && wcscmp(traceProfile, L"multi-row-delete") == 0) {
+				// v2.6.4 UF-03: Ctrl/Shift multi-select + bulk delete (SR-IXC-18).
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				const int preRowCount = JsonFieldInt(Overlay_DumpChromeStateForTest(), "rowCount", -1);
+
+				HWND ov = OverlayHwnd();
+				RECT band{};
+				auto clickRow = [&](const char* rowId, WPARAM mk) -> bool {
+					if (!ov) return false;
+					if (!ParseRowBandFromDump(Overlay_DumpChromeStateForTest(), rowId, &band)) return false;
+					// Click in the LEFT RAIL (row label zone): the band center x sits
+					// mid-chart where the TODAY marker's full-height hit band runs —
+					// a center click selects the MARKER, not the row.
+					POINT pt{ band.left + 40, (band.top + band.bottom) / 2 };
+					WalkClick(ov, pt, mk);
+					PumpFor(280);
+					return true;
+				};
+
+				bool shiftOk = false;
+				if (clickRow("research", 0)) {
+					captureStep("shift-anchor", traceProfile);
+					if (clickRow("launch", MK_SHIFT)) {
+						const char* shiftDump = Overlay_DumpChromeStateForTest();
+						const int got = JsonFieldInt(shiftDump, "ownSelCount", 0);
+						const int want = CountRowBandsBetween(shiftDump, "research", "launch");
+						shiftOk = (want > 0 && got == want);
+						wprintf(L"MULTIROW shiftRange=%s ownSelCount=%d want=%d\n",
+							shiftOk ? L"PASS" : L"FAIL", got, want);
+						captureStep("shift-range", traceProfile);
+					}
+				}
+
+				Overlay_SelectForTest("", "");
+				Overlay_InvalidateAppBarForTest();
+				PumpFor(300);
+
+				bool ctrlOk = false;
+				bool deleteOk = false;
+				if (clickRow("research", 0)) {
+					captureStep("ctrl-anchor", traceProfile);
+					if (clickRow("design", MK_CONTROL)) {
+						const int got = JsonFieldInt(Overlay_DumpChromeStateForTest(), "ownSelCount", 0);
+						ctrlOk = (got == 2);
+						wprintf(L"MULTIROW ctrlToggle=%s ownSelCount=%d\n",
+							ctrlOk ? L"PASS" : L"FAIL", got);
+						captureStep("ctrl-two", traceProfile);
+						Overlay_SetSlideFocusOverrideForTest(1);
+						Overlay_PerformAppBarCommandForTest(HtCmd_Delete);
+						PumpFor(450);
+						captureStep("post-delete", traceProfile);
+						const char* postDump = Overlay_DumpChromeStateForTest();
+						const int postRows = JsonFieldInt(postDump, "rowCount", -1);
+						const int postSel = JsonFieldInt(postDump, "ownSelCount", -1);
+						deleteOk = (preRowCount >= 0 && postRows == preRowCount - 2 && postSel == 0);
+						wprintf(L"MULTIROW bulkDelete=%s rowCount %d->%d ownSelCount=%d\n",
+							deleteOk ? L"PASS" : L"FAIL", preRowCount, postRows, postSel);
+						Overlay_SetSlideFocusOverrideForTest(-1);
+					}
+				}
+
+				const bool multiRowPass = shiftOk && ctrlOk && deleteOk;
+				wprintf(L"MULTIROW %s (shift=%d ctrl=%d delete=%d)\n",
+					multiRowPass ? L"PASS" : L"FAIL", shiftOk ? 1 : 0, ctrlOk ? 1 : 0, deleteOk ? 1 : 0);
 			} else {
 				// default: just exercise select + a row op
 				Overlay_PerformAppBarCommandForTest(HtCmd_AddRowBelow);

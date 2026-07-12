@@ -352,9 +352,9 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 
 ### v2.6.4 - Iteration U4: Multi-Select
 **Goal:** Standard Ctrl/Shift selection semantics. 
-- [ ] UF-03: Ctrl+click toggles, Shift+click ranges (rows first; tasks/milestones next); ownSel model → set of (kind,id)
-- [ ] Multi-selection chrome + app bar context (Delete + shared ops only); Del key + right-click Delete operate on the whole set, one undo entry
-- [ ] E2E: multi-row-select-delete scenario
+- [x] UF-03: Ctrl+click toggles, Shift+click row ranges; ownSel = primary + ordered extras (full back-compat for single-select consumers)
+- [x] Multi chrome on every member + AppBarSel::Multi ('N selected' + Delete); bulk delete via bar/Del/menu in ONE undo entry
+- [x] E2E: trace_multi_row_delete PASS (shift-range=5 rows, ctrl-toggle=2, bulk delete 6->4 rows, selection cleared; profile clicks the left rail — band-center clicks hit the TODAY marker band)
 ### v2.6.5 - Iteration U5: Linking + Creation Discoverability (absorbs v2.5.4)
 **Goal:** Linking and creation are visible, guided, standard. SRS: SRS_DependencyEditing → tables.
 - [ ] UF-11: port-based linking — selected bar shows L/R ports; drag from port → ports appear on candidate bars + rubber-band preview; drop links (replaces click-click link mode as primary; keep menu entry)

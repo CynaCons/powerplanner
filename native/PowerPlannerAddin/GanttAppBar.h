@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-enum class AppBarSel { None, Task, Row, Milestone, Marker, Note };
+enum class AppBarSel { None, Task, Row, Milestone, Marker, Note, Multi };
 
 enum class AppBarIcon {
 	None, Row, Task, Milestone, Marker, Note, Edit, Swatch,
@@ -136,8 +136,24 @@ inline std::string AppBarLabelPlacementWord(const std::string& labelPlacement) {
 	return "bar";
 }
 
-inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::string& selId) {
+inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::string& selId, int multiCount = 0) {
 	AppBarModel model;
+
+	if (sel == AppBarSel::Multi) {
+		const int n = multiCount > 0 ? multiCount : 2;
+		model.name = std::to_string(n) + " selected";
+		{
+			AppBarGroup g;
+			AppBarItem del;
+			del.cmd = HtCmd_Delete;
+			del.label = "Delete";
+			del.icon = AppBarIcon::Delete;
+			del.danger = true;
+			g.items.push_back(del);
+			model.groups.push_back(g);
+		}
+		return model;
+	}
 
 	if (sel == AppBarSel::None) {
 		AppBarAppendInsertGroup(model);

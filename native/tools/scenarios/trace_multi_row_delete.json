@@ -1,0 +1,10 @@
+{
+  "name": "trace_multi_row_delete",
+  "description": "v2.6.4 UF-03 trace: Ctrl+click row multi-select, Shift+click row range, bulk delete in one undo entry",
+  "exe": "ppappbarshot",
+  "trace_profile": "multi-row-delete",
+  "timeout": 180,
+  "retries": 1,
+  "expected_markers": ["MULTIROW PASS", "TRACE COMPLETE OK"],
+  "check_invariants": false
+}

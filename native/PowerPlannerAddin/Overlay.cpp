@@ -156,6 +156,7 @@ bool g_appBarModelDirty = true;   // true  => model changed, force repaint
 AppBarModel g_appBar;
 bool g_appBarValid = false;
 std::string g_appBarSelKindBuilt, g_appBarSelIdBuilt;
+bool g_appBarIsMultiBuilt = false;
 std::string g_appBarDocSig;
 std::string g_lastScale = "week";
 int g_appBarHoverCmd = 0;
@@ -198,6 +199,11 @@ std::string g_suppressedId;
 // of from PowerPoint's Selection.
 std::string g_ownSelKind;
 std::string g_ownSelId;
+struct OwnSelEntry {
+	std::string kind;
+	std::string id;
+};
+std::vector<OwnSelEntry> g_ownSelExtra;
 
 // ---- S5 link mode (B7.1) ----------------------------------------------------
 // Active while the user is picking a dependency target after pressing Link on
@@ -211,6 +217,7 @@ std::string g_linkFromKind;
 // gesture.
 bool g_captureActive = false;
 POINT g_mouseDownPt = {};
+WPARAM g_mouseDownMk = 0;
 // kDragThresholdPx (DPI-scaled) is declared with the other chrome metrics above.
 
 // ---- drag-move-resize gesture state -----------------------------------------
@@ -519,6 +526,7 @@ void CancelCardEdit();
 void CloseCardEditor();
 bool IsEditSessionActive();
 void CancelDragGesture();
+static bool DeleteOwnSelectionsInDocument();
 void ComputeDragCandidateDates(DragKind kind, const std::string& origStart, const std::string& origEnd,
 	long deltaDays, std::string& outStart, std::string& outEnd);
 void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, const std::string& targetRowId,
@@ -678,9 +686,10 @@ void ClearSelectionState() {
 }
 
 void ClearOwnSelection() {
-	const bool had = !g_ownSelKind.empty() || !g_ownSelId.empty();
+	const bool had = !g_ownSelKind.empty() || !g_ownSelId.empty() || !g_ownSelExtra.empty();
 	g_ownSelKind.clear();
 	g_ownSelId.clear();
+	g_ownSelExtra.clear();
 	if (had) {
 		g_appBarValid = false;
 		g_appBarModelDirty = true;
@@ -688,6 +697,120 @@ void ClearOwnSelection() {
 		g_appBarLastMeasuredContentH = 0;
 		g_appBarGeomValid = false;
 	}
+}
+
+// Forward decls for the multi-select helpers below (definitions later in file).
+bool IsItemOwnSelKind(const std::string& kind);
+static bool TryPublishItemChromeFromSnapshot(const std::string& kind, const std::string& id);
+void SetOwnSelection(const std::string& kind, const std::string& id);
+
+static int OwnSelCount() {
+	if (g_ownSelKind.empty() || g_ownSelId.empty()) return 0;
+	return 1 + (int)g_ownSelExtra.size();
+}
+
+static bool HasMultiSelection() {
+	return !g_ownSelExtra.empty();
+}
+
+static void InvalidateAppBarForSelectionChange() {
+	g_appBarValid = false;
+	g_appBarModelDirty = true;
+	g_appBarLastMeasuredContentW = 0;
+	g_appBarLastMeasuredContentH = 0;
+	g_appBarGeomValid = false;
+}
+
+// Update primary ownSel without clearing g_ownSelExtra (multi-select paths).
+static void SetOwnSelectionPrimary(const std::string& kind, const std::string& id) {
+	if (id.empty()) {
+		ClearOwnSelection();
+		ClearLinkMode();
+		return;
+	}
+	if (g_linkMode && (kind != g_linkFromKind || id != g_linkFromId)) {
+		ClearLinkMode();
+	}
+	const std::string prevKind = g_ownSelKind;
+	const std::string prevId = g_ownSelId;
+	const bool prevMulti = HasMultiSelection();
+	g_ownSelKind = kind;
+	g_ownSelId = id;
+	const bool multiNow = HasMultiSelection();
+	if (prevKind != kind || prevId != id || prevMulti != multiNow) {
+		InvalidateAppBarForSelectionChange();
+	}
+
+	if (IsItemOwnSelKind(kind)) {
+		if (!::IsRectEmpty(&g_chartScreenRect) && SameRect(g_selScreenRect, g_chartScreenRect)) {
+			::SetRectEmpty(&g_selScreenRect);
+			::SetRectEmpty(&g_frameRect);
+			g_hasSelectionChrome = false;
+			g_selKind.clear();
+			g_selId.clear();
+			g_buttonsValid = false;
+		}
+		if (!TryPublishItemChromeFromSnapshot(kind, id) &&
+			!::IsRectEmpty(&g_lastKnownItemSelRect) &&
+			!SameRect(g_lastKnownItemSelRect, g_chartScreenRect)) {
+			g_selKind = kind;
+			g_selId = id;
+			g_selScreenRect = g_lastKnownItemSelRect;
+			g_hasSelectionChrome = true;
+		}
+	}
+}
+
+static void ToggleOwnSelectionMember(const std::string& kind, const std::string& id) {
+	if (id.empty()) return;
+	if (g_ownSelKind == kind && g_ownSelId == id) {
+		if (!g_ownSelExtra.empty()) {
+			const OwnSelEntry promoted = g_ownSelExtra.front();
+			g_ownSelExtra.erase(g_ownSelExtra.begin());
+			SetOwnSelectionPrimary(promoted.kind, promoted.id);
+		} else {
+			ClearOwnSelection();
+		}
+		return;
+	}
+	for (size_t i = 0; i < g_ownSelExtra.size(); ++i) {
+		if (g_ownSelExtra[i].kind == kind && g_ownSelExtra[i].id == id) {
+			g_ownSelExtra.erase(g_ownSelExtra.begin() + (ptrdiff_t)i);
+			InvalidateAppBarForSelectionChange();
+			return;
+		}
+	}
+	if (!g_ownSelKind.empty() && !g_ownSelId.empty()) {
+		g_ownSelExtra.push_back({ g_ownSelKind, g_ownSelId });
+	}
+	SetOwnSelectionPrimary(kind, id);
+}
+
+static void SelectRowRangeFromPrimary(const std::string& clickedRowId) {
+	if (clickedRowId.empty()) return;
+	if (g_ownSelKind != "ROW" || g_ownSelId.empty()) {
+		SetOwnSelection("ROW", clickedRowId);
+		return;
+	}
+	int iAnchor = -1, iClick = -1;
+	for (size_t i = 0; i < g_rowBands.size(); ++i) {
+		if (g_rowBands[i].rowId == g_ownSelId) iAnchor = (int)i;
+		if (g_rowBands[i].rowId == clickedRowId) iClick = (int)i;
+	}
+	if (iAnchor < 0 || iClick < 0) {
+		SetOwnSelection("ROW", clickedRowId);
+		return;
+	}
+	const int lo = std::min(iAnchor, iClick);
+	const int hi = std::max(iAnchor, iClick);
+	std::vector<OwnSelEntry> extras;
+	for (int i = lo; i <= hi; ++i) {
+		const std::string& rid = g_rowBands[(size_t)i].rowId;
+		if (rid == clickedRowId) continue;
+		extras.push_back({ "ROW", rid });
+	}
+	g_ownSelExtra = std::move(extras);
+	SetOwnSelectionPrimary("ROW", clickedRowId);
 }
 
 void ClearLinkMode() {
@@ -726,47 +849,8 @@ static bool TryPublishItemChromeFromSnapshot(const std::string& kind, const std:
 }
 
 void SetOwnSelection(const std::string& kind, const std::string& id) {
-	if (id.empty()) {
-		ClearOwnSelection();
-		ClearLinkMode();
-		return;
-	}
-	if (g_linkMode && (kind != g_linkFromKind || id != g_linkFromId)) {
-		ClearLinkMode();
-	}
-	const std::string prevKind = g_ownSelKind;
-	const std::string prevId = g_ownSelId;
-	g_ownSelKind = kind;
-	g_ownSelId = id;
-	if (prevKind != kind || prevId != id) {
-		g_appBarValid = false;
-		g_appBarModelDirty = true;
-		g_appBarLastMeasuredContentW = 0;
-		g_appBarLastMeasuredContentH = 0;
-		g_appBarGeomValid = false;
-	}
-
-	// Post-RebuildChart the hit snapshot is empty until the next Tick(). While
-	// ownSel names a chart child, never leave stale CHART_ROOT-sized chrome from
-	// the prior native root selection (visible one-tick full-chart flash).
-	if (IsItemOwnSelKind(kind)) {
-		if (!::IsRectEmpty(&g_chartScreenRect) && SameRect(g_selScreenRect, g_chartScreenRect)) {
-			::SetRectEmpty(&g_selScreenRect);
-			::SetRectEmpty(&g_frameRect);
-			g_hasSelectionChrome = false;
-			g_selKind.clear();
-			g_selId.clear();
-			g_buttonsValid = false;
-		}
-		if (!TryPublishItemChromeFromSnapshot(kind, id) &&
-			!::IsRectEmpty(&g_lastKnownItemSelRect) &&
-			!SameRect(g_lastKnownItemSelRect, g_chartScreenRect)) {
-			g_selKind = kind;
-			g_selId = id;
-			g_selScreenRect = g_lastKnownItemSelRect;
-			g_hasSelectionChrome = true;
-		}
-	}
+	g_ownSelExtra.clear();
+	SetOwnSelectionPrimary(kind, id);
 }
 
 bool SameSelectionState(bool hasSelection, const RECT& selRect, const std::string& selId, const std::string& selKind) {
@@ -2224,37 +2308,48 @@ bool HandleSetCursor(HWND hwnd) {
 // background-RowBand (empty row id)/Outside all clear the selection. Chrome
 // is re-synced by the caller's next Tick() (or immediately, for the
 // harness's benefit, by calling SyncSelectionChromeFromOwnSelection after
-// this).
-void ApplyClickSelection(const HtHit& hit) {
+// this). Ctrl+click toggles membership; Shift+click on a row selects a
+// contiguous row range from the primary row anchor.
+void ApplyClickSelection(const HtHit& hit, bool ctrlDown, bool shiftDown) {
+	auto selectItem = [&](const std::string& kind, const std::string& id) {
+		if (ctrlDown) ToggleOwnSelectionMember(kind, id);
+		else SetOwnSelection(kind, id);
+	};
+
 	switch (hit.zone) {
 	case HtZone::TaskBody:
 	case HtZone::TaskEdgeL:
 	case HtZone::TaskEdgeR:
 	case HtZone::TaskProgressEdge:
-		SetOwnSelection("TASK", hit.id);
+		if (shiftDown) return; // tasks join multi via Ctrl only
+		selectItem("TASK", hit.id);
 		return;
 	case HtZone::Milestone:
-		SetOwnSelection("MILESTONE", hit.id);
+		if (shiftDown) return;
+		selectItem("MILESTONE", hit.id);
 		return;
 	case HtZone::Marker:
-		SetOwnSelection("MARKER", hit.id);
+		if (shiftDown) return;
+		selectItem("MARKER", hit.id);
 		return;
 	case HtZone::Text:
-		SetOwnSelection("TEXT", hit.id);
+		if (shiftDown) return;
+		selectItem("TEXT", hit.id);
 		return;
 	case HtZone::RowBand:
 		if (!hit.rowId.empty()) {
-			SetOwnSelection("ROW", hit.rowId);
+			if (shiftDown) SelectRowRangeFromPrimary(hit.rowId);
+			else if (ctrlDown) ToggleOwnSelectionMember("ROW", hit.rowId);
+			else SetOwnSelection("ROW", hit.rowId);
 		} else {
-			ClearOwnSelection(); // empty rowId = chart background
+			ClearOwnSelection();
 		}
 		return;
 	case HtZone::Label:
-		// B2.1: a single click on a row's rail NAME selects that ROW (rename
-		// stays on double-click via the edit region). TITLE labels keep the
-		// old behavior — no selection change on single click.
 		if (hit.kind == HtItemKind::RowLabel && !hit.id.empty()) {
-			SetOwnSelection("ROW", hit.id);
+			if (shiftDown) SelectRowRangeFromPrimary(hit.id);
+			else if (ctrlDown) ToggleOwnSelectionMember("ROW", hit.id);
+			else SetOwnSelection("ROW", hit.id);
 		}
 		return;
 	case HtZone::EmptyCell:
@@ -2266,7 +2361,9 @@ void ApplyClickSelection(const HtHit& hit) {
 	// v2.4.1 robust row selection: hover already lights the band; ensure click in row area selects the row
 	// even if the HtHit zone resolution was conservative. First-class rows must be clickable.
 	if (g_ownSelKind.empty() && !g_hoverRowId.empty()) {
-		SetOwnSelection("ROW", g_hoverRowId);
+		if (shiftDown) SelectRowRangeFromPrimary(g_hoverRowId);
+		else if (ctrlDown) ToggleOwnSelectionMember("ROW", g_hoverRowId);
+		else SetOwnSelection("ROW", g_hoverRowId);
 	}
 }
 
@@ -3194,6 +3291,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// the up, from the ORIGINAL down-hit, once we know this was a click).
 		g_lastHit = HitTestClientPoint(pt);
 		g_mouseDownPt = pt;
+		g_mouseDownMk = wp;
 		g_captureActive = true;
 		::SetCapture(hwnd);
 		// Anchor a potential drag gesture on a draggable hit zone. This does
@@ -3345,7 +3443,11 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 				ResetDragGestureState();
 				if (isClick) {
 					HtHit hit = HitTestClientPoint(g_mouseDownPt);
-					ApplyClickSelection(hit);
+					const bool ctrlDown = ((g_mouseDownMk & MK_CONTROL) != 0) ||
+						((::GetKeyState(VK_CONTROL) & 0x8000) != 0);
+					const bool shiftDown = ((g_mouseDownMk & MK_SHIFT) != 0) ||
+						((::GetKeyState(VK_SHIFT) & 0x8000) != 0);
+					ApplyClickSelection(hit, ctrlDown, shiftDown);
 					SyncSelectionChromeFromOwnSelection();
 					RequestOverlayRepaint();
 				} else {
@@ -3388,6 +3490,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 					dy >= -kDragThresholdPx && dy <= kDragThresholdPx);
 				if (isClick) {
 					HtHit hit = HitTestClientPoint(g_mouseDownPt);
+					const bool ctrlDown = ((g_mouseDownMk & MK_CONTROL) != 0) ||
+						((::GetKeyState(VK_CONTROL) & 0x8000) != 0);
+					const bool shiftDown = ((g_mouseDownMk & MK_SHIFT) != 0) ||
+						((::GetKeyState(VK_SHIFT) & 0x8000) != 0);
 					if (g_linkMode) {
 						if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
 							hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone) {
@@ -3395,17 +3501,17 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 								CommitLinkTarget(hit.id);
 							} else {
 								ClearLinkMode();
-								ApplyClickSelection(hit);
+								ApplyClickSelection(hit, ctrlDown, shiftDown);
 								SyncSelectionChromeFromOwnSelection();
 							}
 						} else {
 							ClearLinkMode();
-							ApplyClickSelection(hit);
+							ApplyClickSelection(hit, ctrlDown, shiftDown);
 							SyncSelectionChromeFromOwnSelection();
 						}
 						RequestOverlayRepaint();
 					} else {
-						ApplyClickSelection(hit);
+						ApplyClickSelection(hit, ctrlDown, shiftDown);
 						SyncSelectionChromeFromOwnSelection();
 						RequestOverlayRepaint();
 					}
@@ -3427,7 +3533,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// standard Windows down-then-up-shows-menu right-click idiom.
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		HtHit hit = HitTestClientPoint(pt);
-		ApplyClickSelection(hit);
+		ApplyClickSelection(hit, false, false);
 		SyncSelectionChromeFromOwnSelection();
 		RequestOverlayRepaint();
 		return 0;
@@ -3804,6 +3910,37 @@ static RECT ComputeDragGhostClientRect(DragKind kind, const RECT& anchorScreen, 
 		break;
 	}
 	return ghost;
+}
+
+static void PaintRowBandSelectionWash(Gdiplus::Graphics& g, const std::string& rowId) {
+	for (const auto& band : g_rowBands) {
+		if (band.rowId != rowId) continue;
+		RECT bandClient = {
+			band.screenRect.left - g_windowOriginX,
+			band.screenRect.top - g_windowOriginY,
+			band.screenRect.right - g_windowOriginX,
+			band.screenRect.bottom - g_windowOriginY
+		};
+		Gdiplus::SolidBrush wash(GpToken(gt::chromeRowWashSelect, gt::primary));
+		g.FillRectangle(&wash, (INT)bandClient.left, (INT)bandClient.top,
+			(INT)(bandClient.right - bandClient.left), (INT)(bandClient.bottom - bandClient.top));
+		break;
+	}
+}
+
+static void PaintOwnSelItemFrame(Gdiplus::Graphics& g, const std::string& kind, const std::string& id) {
+	if (!IsItemOwnSelKind(kind) || id.empty()) return;
+	const HtItemKind wantKind = OwnSelKindToHtItemKind(kind);
+	for (const auto& item : g_hitSnapshot.items) {
+		if (item.kind != wantKind || item.id != id) continue;
+		const Gdiplus::REAL fx = (Gdiplus::REAL)(item.rect.left - g_windowOriginX);
+		const Gdiplus::REAL fy = (Gdiplus::REAL)(item.rect.top - g_windowOriginY);
+		const Gdiplus::REAL fw = (Gdiplus::REAL)(item.rect.right - item.rect.left);
+		const Gdiplus::REAL fh = (Gdiplus::REAL)(item.rect.bottom - item.rect.top);
+		Gdiplus::Pen framePen(GpToken(255, gt::primary), ScaleF(gt::chromeItemFramePx));
+		g.DrawRectangle(&framePen, (INT)fx, (INT)fy, (INT)fw, (INT)fh);
+		break;
+	}
 }
 
 void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
@@ -4184,6 +4321,11 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		}
 	}
 
+	for (const auto& extra : g_ownSelExtra) {
+		if (extra.kind == "ROW") PaintRowBandSelectionWash(g, extra.id);
+		else PaintOwnSelItemFrame(g, extra.kind, extra.id);
+	}
+
 	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
 
 	RECT frame = g_frameRect;
@@ -4192,21 +4334,9 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 
 	if (g_ownSelKind == "ROW") {
 		const int inset = Scale(3);
-		Pen edge(GpToken(255, gt::primary), ScaleF(3.0f));
+		Gdiplus::Pen edge(GpToken(255, gt::primary), ScaleF(3.0f));
 		g.DrawLine(&edge, (INT)fx + inset, (INT)fy, (INT)fx + inset, (INT)(fy + fh));
-		for (const auto& band : g_rowBands) {
-			if (band.rowId != g_ownSelId) continue;
-			RECT bandClient = {
-				band.screenRect.left - g_windowOriginX,
-				band.screenRect.top - g_windowOriginY,
-				band.screenRect.right - g_windowOriginX,
-				band.screenRect.bottom - g_windowOriginY
-			};
-			SolidBrush wash(GpToken(gt::chromeRowWashSelect, gt::primary));
-			g.FillRectangle(&wash, (INT)bandClient.left, (INT)bandClient.top,
-				(INT)(bandClient.right - bandClient.left), (INT)(bandClient.bottom - bandClient.top));
-			break;
-		}
+		PaintRowBandSelectionWash(g, g_ownSelId);
 		return;
 	}
 
@@ -4502,12 +4632,15 @@ void RebuildAppBarModelFromSlide() {
 		std::string json = ReadGanttFromSlide(g_app);
 		if (!json.empty()) {
 			PpDocument doc = DocumentFromJson(json);
-			AppBarSel sel = AppBarSelFromKind(g_ownSelKind);
-			g_appBar = BuildAppBar(sel, doc, g_ownSelId);
+			const bool isMulti = HasMultiSelection();
+			AppBarSel sel = isMulti ? AppBarSel::Multi : AppBarSelFromKind(g_ownSelKind);
+			g_appBar = BuildAppBar(sel, doc, g_ownSelId, OwnSelCount());
 			const bool selContextChanged =
-				g_appBarSelKindBuilt != g_ownSelKind || g_appBarSelIdBuilt != g_ownSelId;
+				g_appBarSelKindBuilt != g_ownSelKind || g_appBarSelIdBuilt != g_ownSelId ||
+				g_appBarIsMultiBuilt != isMulti;
 			g_appBarSelKindBuilt = g_ownSelKind;
 			g_appBarSelIdBuilt = g_ownSelId;
+			g_appBarIsMultiBuilt = isMulti;
 			g_appBarDocSig = doc.scale + (doc.railLabels ? "1" : "0");
 			g_lastScale = doc.scale;
 			g_appBarValid = true;
@@ -4983,7 +5116,8 @@ void RenderAppBar() {
 	// Never paint when the model/layout lags behind ownSel — hover repaints used
 	// to push a stale document-context bitmap after Overlay_SelectForTest (or a
 	// real click) changed selection before the next Tick rebuilt the bar.
-	if (!g_appBarValid || g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt) {
+	if (!g_appBarValid || g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt ||
+		g_appBarIsMultiBuilt != HasMultiSelection()) {
 		wchar_t buf[160];
 		::swprintf_s(buf, 160, L"RenderAppBar SKIP valid=%d own=%hs/%hs built=%hs/%hs",
 			g_appBarValid ? 1 : 0, g_ownSelKind.c_str(), g_ownSelId.c_str(),
@@ -5050,7 +5184,8 @@ LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			}
 			if (newHover != g_appBarHoverCmd) {
 				g_appBarHoverCmd = newHover;
-				if (g_appBarValid && g_ownSelKind == g_appBarSelKindBuilt && g_ownSelId == g_appBarSelIdBuilt)
+				if (g_appBarValid && g_ownSelKind == g_appBarSelKindBuilt && g_ownSelId == g_appBarSelIdBuilt &&
+					g_appBarIsMultiBuilt == HasMultiSelection())
 					RenderAppBar();
 			}
 			TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
@@ -5060,7 +5195,8 @@ LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		if (msg == WM_MOUSELEAVE) {
 			if (g_appBarHoverCmd != 0) {
 				g_appBarHoverCmd = 0;
-				if (g_appBarValid && g_ownSelKind == g_appBarSelKindBuilt && g_ownSelId == g_appBarSelIdBuilt)
+				if (g_appBarValid && g_ownSelKind == g_appBarSelKindBuilt && g_ownSelId == g_appBarSelIdBuilt &&
+					g_appBarIsMultiBuilt == HasMultiSelection())
 					RenderAppBar();
 			}
 			return 0;
@@ -5130,7 +5266,8 @@ void ShowAppBar(const RECT& chartScreenRect, const RECT& slideScreenRect) {
 	if (!g_appBarHwnd) return;
 	bool dpiChanged = UpdateDpiForWindow(g_appBarHwnd);
 	if (dpiChanged) UpdateDpiScaledMetrics();
-	if (g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt || !g_appBarValid || g_appBarModelDirty) {
+	if (g_ownSelKind != g_appBarSelKindBuilt || g_ownSelId != g_appBarSelIdBuilt ||
+		g_appBarIsMultiBuilt != HasMultiSelection() || !g_appBarValid || g_appBarModelDirty) {
 		RebuildAppBarModelFromSlide();
 	}
 	const int shadow = AppBarShadowInset();
@@ -5280,6 +5417,22 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 			RequestOverlayRepaint();
 			return;
 		}
+	}
+
+	if (HasMultiSelection() && g_app && !g_mutating) {
+		if (cmd == HtCmd_Delete || cmd == HtCmd_DeleteRow) {
+			g_mutating = true;
+			try {
+				DeleteOwnSelectionsInDocument();
+			} catch (...) {
+				OvLog(L"appbar multi-delete failed");
+			}
+			g_mutating = false;
+			g_appBarValid = false;
+			RequestOverlayRepaint();
+			return;
+		}
+		return;
 	}
 
 	if (g_ownSelKind == "ROW" && !g_ownSelId.empty()) {
@@ -5579,48 +5732,51 @@ void RebuildChart(PpDocument& doc, const std::string& selectId) {
 // snapshot, so — same reasoning as CommitDragGesture/HandleContextMenuCommand
 // — SyncSelectionChromeFromOwnSelection must wait for the next Tick()).
 
-// WM_HOTKEY(Delete): delete the selected task/milestone/text and clear selection.
+static bool DeleteOwnSelectionsInDocument() {
+	if (!g_app) return false;
+	if (OwnSelCount() == 0) return false;
+	PpDocument doc;
+	if (!ReadGanttDocFromSlide(g_app, &doc)) return false;
+	bool changed = false;
+	std::vector<std::pair<std::string, std::string>> nonRows;
+	std::vector<std::string> rowIds;
+	if (!g_ownSelId.empty() && !g_ownSelKind.empty()) {
+		if (g_ownSelKind == "ROW") rowIds.push_back(g_ownSelId);
+		else nonRows.push_back({ g_ownSelKind, g_ownSelId });
+	}
+	for (const auto& e : g_ownSelExtra) {
+		if (e.kind == "ROW") rowIds.push_back(e.id);
+		else nonRows.push_back({ e.kind, e.id });
+	}
+	for (const auto& p : nonRows) {
+		if (p.first == "ROW") rowIds.push_back(p.second);
+		else changed |= DeleteById(doc, p.second);
+	}
+	for (const auto& rowId : rowIds) changed |= DeleteRow(doc, rowId);
+	if (!changed) return false;
+	RebuildChart(doc, "");
+	ClearOwnSelection();
+	RequestOverlayRepaint();
+	return true;
+}
+
+// WM_HOTKEY(Delete): delete the selected task/milestone/text/row(s) and clear selection.
 void HandleHotkeyDelete() {
 	if (!g_app || g_mutating) { OvLog(L"hotkey Delete ignored: busy or no app"); return; }
-	// B1 (v2.6.1) defense-in-depth: the registration gate already prevents the
-	// OS from delivering Delete unless the slide view is focused, but re-check
-	// here so a stray/simulated WM_HOTKEY can never mutate the chart while the
-	// user's focus is in the Notes pane / outline / ribbon (SR-IXC-19/21).
 	if (!IsSlideViewFocusedForHotkeys()) { OvLog(L"hotkey Delete ignored: slide view not focused (B1 scope)"); return; }
-	const std::string selId = g_ownSelId;
-	const std::string selKind = g_ownSelKind;
-	if (selId.empty() || (selKind != "TASK" && selKind != "MILESTONE" && selKind != "TEXT" && selKind != "ROW" && selKind != "MARKER")) {
+	if (OwnSelCount() == 0) {
 		wchar_t buf[128];
-		::swprintf_s(buf, 128, L"hotkey Delete ignored: sel %hs/%hs", selKind.c_str(), selId.c_str());
+		::swprintf_s(buf, 128, L"hotkey Delete ignored: sel %hs/%hs", g_ownSelKind.c_str(), g_ownSelId.c_str());
 		OvLog(buf);
 		return;
 	}
 
 	g_mutating = true;
 	try {
-		PpDocument doc;
-		if (!ReadGanttDocFromSlide(g_app, &doc)) {
-			OvLog(L"hotkey Delete: no PowerPlanner chart doc available");
-		} else {
-			bool changed = false;
-			if (selKind == "ROW") {
-				changed = DeleteRow(doc, selId);
-			} else {
-				changed = DeleteById(doc, selId);
-			}
-			if (!changed) {
-				wchar_t buf[128];
-				::swprintf_s(buf, 128, L"hotkey Delete: no-op for %hs/%hs (id not found?)", selKind.c_str(), selId.c_str());
-				OvLog(buf);
-			}
-			if (changed) {
-				RebuildChart(doc, "");
-				ClearOwnSelection();
-				RequestOverlayRepaint();
-				wchar_t buf[128];
-				::swprintf_s(buf, 128, L"hotkey Delete applied to %hs/%hs", selKind.c_str(), selId.c_str());
-				OvLog(buf);
-			}
+		if (!DeleteOwnSelectionsInDocument()) {
+			wchar_t buf[128];
+			::swprintf_s(buf, 128, L"hotkey Delete: no-op for selection");
+			OvLog(buf);
 		}
 	}
 	catch (const _com_error&) {
@@ -5946,6 +6102,16 @@ void HandleHoverQuickAddTask() {
 void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT clientPt) {
 	if (op.opKind == HtOpKind::None) return;
 	if (!g_app || g_mutating) return;
+	if ((op.opKind == HtOpKind::Delete || op.opKind == HtOpKind::DeleteRow) && HasMultiSelection()) {
+		g_mutating = true;
+		try {
+			DeleteOwnSelectionsInDocument();
+		} catch (...) {
+			OvLog(L"context menu multi-delete failed");
+		}
+		g_mutating = false;
+		return;
+	}
 
 	g_mutating = true;
 	try {
@@ -6993,6 +7159,13 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "{";
 	s += "\"ownSelKind\":\"" + g_ownSelKind + "\",";
 	s += "\"ownSelId\":\"" + g_ownSelId + "\",";
+	s += "\"ownSelCount\":" + std::to_string(OwnSelCount()) + ",";
+	s += "\"ownSelExtra\":[";
+	for (size_t i = 0; i < g_ownSelExtra.size(); ++i) {
+		if (i > 0) s += ",";
+		s += "{\"kind\":\"" + g_ownSelExtra[i].kind + "\",\"id\":\"" + g_ownSelExtra[i].id + "\"}";
+	}
+	s += "],";
 	// v2.6.1 selection integrity: the PowerPoint-native selection kind Tick/the
 	// COM sink most recently observed ("" / "CHART_ROOT" / a child kind), and
 	// whether the Delete/arrow hotkeys are currently registered. Consumed by the
