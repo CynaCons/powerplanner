@@ -1559,6 +1559,7 @@ int wmain(int argc, wchar_t** argv) {
 				}
 			} catch (...) {}
 
+			long windowIdlePaintDeltaForTrace = -1;
 			auto captureStep = [&](const char* step, const wchar_t* profile) -> std::wstring {
 				Overlay_SyncAppBarForTest();
 				const char* state = Overlay_DumpChromeStateForTest();
@@ -1574,6 +1575,12 @@ int wmain(int argc, wchar_t** argv) {
 					::snprintf(tBuf, sizeof(tBuf), "\"tMs\":%llu,", (unsigned long long)tMs);
 					size_t bracePos = stateWithTMs.find('{');
 					if (bracePos != std::string::npos) stateWithTMs.insert(bracePos + 1, tBuf);
+				}
+				if (profile && wcscmp(profile, L"window-edge-drag") == 0 && windowIdlePaintDeltaForTrace >= 0) {
+					char idleBuf[64];
+					::snprintf(idleBuf, sizeof(idleBuf), "\"windowIdlePaintDelta\":%ld,", windowIdlePaintDeltaForTrace);
+					size_t bracePos = stateWithTMs.find('{');
+					if (bracePos != std::string::npos) stateWithTMs.insert(bracePos + 1, idleBuf);
 				}
 				wchar_t appPng[256], ctxPng[256];
 				swprintf_s(appPng, 256, L"native\\build\\trace_%ls_%hs_appbar.png", profile ? profile : L"op", step);
@@ -1619,8 +1626,21 @@ int wmain(int argc, wchar_t** argv) {
 					if (lr.left<scr.left) lr.left=scr.left; if (lr.top<scr.top) lr.top=scr.top;
 					CaptureRectToPng(lr, largePng);
 				}
+				// W2 proof uses a tight header-only capture: a full-chart hash could
+				// change for unrelated host chrome, while this exact region proves the
+				// candidate axis preview overwrote the frozen native header.
+				wchar_t headerPng[256] = L"";
+				if (profile && wcscmp(profile, L"window-edge-drag") == 0) {
+					RECT header{};
+					if (ParseNamedRectFromDump(state, "windowHeaderBandRect", &header)
+						&& header.right > header.left && header.bottom > header.top) {
+						swprintf_s(headerPng, 256, L"native\\build\\trace_%ls_%hs_header.png", profile, step);
+						CaptureRectToPng(header, headerPng);
+					}
+				}
 				wprintf(L"TRACE %hs: %hs\n", step, stateWithTMs.c_str());
 				wprintf(L"TRACE %hs ARTIFACTS: %ls %ls %ls %ls %ls\n", step, appPng, ctxPng, ovPng, chartPng, largePng);
+				if (headerPng[0]) wprintf(L"TRACE %hs ARTIFACTS: %ls\n", step, headerPng);
 				return std::wstring(appPng);
 			};
 
@@ -2224,6 +2244,52 @@ int wmain(int argc, wchar_t** argv) {
 				}
 				captureStep("immed", traceProfile);
 				PumpFor(200);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"window-edge-drag") == 0) {
+				// W2: real hover + posted mouse gesture, with target coordinates read
+				// exclusively from overlay dump rectangles (no geometry duplicate).
+				Overlay_SelectForTest("", "");
+				Overlay_SetCursorPosOverrideForTest(true, POINT{ 0, 0 });
+				PumpFor(300);
+				long paintsBefore = 0, appPaintsBefore = 0, swpBefore = 0, appSwpBefore = 0;
+				long paintsAfter = 0, appPaintsAfter = 0, swpAfter = 0, appSwpAfter = 0;
+				Overlay_GetRenderCountersForTest(&paintsBefore, &appPaintsBefore, &swpBefore, &appSwpBefore);
+				PumpFor(300); // idle-stable proof: no hover transition, hence no overlay paint
+				Overlay_GetRenderCountersForTest(&paintsAfter, &appPaintsAfter, &swpAfter, &appSwpAfter);
+				windowIdlePaintDeltaForTrace = paintsAfter - paintsBefore;
+				captureStep("pre", traceProfile);
+
+				HWND ov = OverlayHwnd();
+				const char* preDump = Overlay_DumpChromeStateForTest();
+				RECT header{}, rightPort{};
+				if (ov && ParseNamedRectFromDump(preDump, "windowHeaderBandRect", &header)
+					&& header.right > header.left && header.bottom > header.top) {
+					POINT hover = { (header.left + header.right) / 2, (header.top + header.bottom) / 2 };
+					POINT hoverClient = hover;
+					::ScreenToClient(ov, &hoverClient);
+					Overlay_SetCursorPosOverrideForTest(true, hover);
+					::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)hoverClient.x, (short)hoverClient.y));
+					PumpFor(160);
+					captureStep("hover", traceProfile);
+
+					if (ParseNamedRectFromDump(Overlay_DumpChromeStateForTest(), "windowPortRRect", &rightPort)
+						&& rightPort.right > rightPort.left && rightPort.bottom > rightPort.top) {
+						POINT port = { (rightPort.left + rightPort.right) / 2, (rightPort.top + rightPort.bottom) / 2 };
+						// The screenshot harness runs near 200% DPI; ~340 px is about
+						// two visible week units and stays far from the min-span clamp.
+						PostScreenDragStart(ov, port, -340);
+						captureStep("mid", traceProfile);
+						PostScreenDragFinish(ov, port, -340);
+					} else {
+						wprintf(L"WINDOWEDGE: windowPortRRect not published after header hover\n");
+					}
+				} else {
+					wprintf(L"WINDOWEDGE: windowHeaderBandRect not published\n");
+				}
+				captureStep("immed", traceProfile);
+				PumpFor(150);
 				captureStep("+1", traceProfile);
 				PumpFor(300);
 				captureStep("+3", traceProfile);

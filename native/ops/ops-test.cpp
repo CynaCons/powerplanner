@@ -445,6 +445,8 @@ static bool RunCursorMapChecks() {
 	// review.
 	static const struct { HtZone zone; HtCursor expected; const char* msg; } kZoneCases[] = {
 		{ HtZone::Outside,    HtCursor::Default, "cursor: Outside -> Default" },
+		{ HtZone::WindowPortL,HtCursor::SizeWE,  "cursor: WindowPortL -> SizeWE" },
+		{ HtZone::WindowPortR,HtCursor::SizeWE,  "cursor: WindowPortR -> SizeWE" },
 		{ HtZone::TaskBody,   HtCursor::SizeAll, "cursor: TaskBody -> SizeAll" },
 		{ HtZone::TaskEdgeL,  HtCursor::SizeWE,  "cursor: TaskEdgeL -> SizeWE" },
 		{ HtZone::TaskEdgeR,  HtCursor::SizeWE,  "cursor: TaskEdgeR -> SizeWE" },
@@ -459,7 +461,7 @@ static bool RunCursorMapChecks() {
 	// If this fires, a zone was added to/removed from HtZone without updating
 	// kZoneCases above -- the exhaustiveness this test promises would silently
 	// lapse otherwise.
-	static_assert(kZoneCount == 10, "HtZone case count changed: update kZoneCases in RunCursorMapChecks");
+	static_assert(kZoneCount == 12, "HtZone case count changed: update kZoneCases in RunCursorMapChecks");
 
 	for (const auto& c : kZoneCases) {
 		ok = Check(GanttCursorForZone(c.zone) == c.expected, c.msg) && ok;
@@ -705,6 +707,45 @@ static const Prim* FindPrim(const Scene& sc, const char* kind, const char* id) {
 		if (p.tagKind == kind && (id == nullptr || p.tagId == id)) return &p;
 	}
 	return nullptr;
+}
+
+// W2 m2: keep the extracted axis helper independently exercised in the
+// PowerPoint-free harness. The scene conformance fixture guards byte identity;
+// these cases pin the helper's reusable label/tick contract for the overlay.
+static bool RunAxisTierLayoutChecks() {
+	bool ok = true;
+	PpDocument week;
+	week.scale = "week";
+	AxisTierLayout axis = ComputeAxisTierLayout(week, "2026-06-01", "2026-08-10", 3, 8.0f,
+		176.0f, 924.0f, 36.0f, 51.0f, 30.0f, 288.0f);
+	ok = Check(axis.hasBottomBand, "axis helper: week has two header bands") && ok;
+	ok = Check(!axis.topLabels.empty() && !axis.bottomLabels.empty(), "axis helper: week emits top and bottom labels") && ok;
+	ok = Check(!axis.ticks.empty() && !axis.majorTicks.empty(), "axis helper: week emits separator and major ticks") && ok;
+	ok = Check(axis.bandDivider.left == 176.0f && axis.bandDivider.right == 924.0f
+		&& axis.bandDivider.top == 51.0f, "axis helper: divider uses caller geometry") && ok;
+	for (const auto& label : axis.topLabels) {
+		ok = Check(label.rect.left >= 176.0f && label.rect.right <= 924.0f && !label.centered,
+			"axis helper: clipped top labels stay in caller bounds") && ok;
+	}
+
+	PpDocument dense;
+	dense.scale = "day";
+	dense.axisNumbering = "cw";
+	AxisTierLayout day = ComputeAxisTierLayout(dense, "2026-01-01", "2027-12-31", 0, 4.0f,
+		176.0f, 924.0f, 36.0f, 51.0f, 30.0f, 288.0f);
+	ok = Check(day.hasBottomBand && !day.bottomLabels.empty(), "axis helper: day tier emits labels") && ok;
+	ok = Check(day.ticks.size() <= 150, "axis helper: dense separator ticks coarsen at cap") && ok;
+	ok = Check(!day.bottomLabels.empty() && day.bottomLabels.front().label.find("CW ") == 0,
+		"axis helper: CW numbering reaches reusable labels") && ok;
+
+	PpDocument year;
+	year.scale = "year";
+	AxisTierLayout single = ComputeAxisTierLayout(year, "2024-01-01", "2028-12-31", 0, 4.0f,
+		176.0f, 924.0f, 36.0f, 51.0f, 30.0f, 288.0f);
+	ok = Check(!single.hasBottomBand && single.bottomLabels.empty() && single.majorTicks.empty(),
+		"axis helper: year keeps a single band without duplicate majors") && ok;
+	if (ok) std::printf("AXIS TIER LAYOUT OK\n");
+	return ok;
 }
 
 static bool RunThemeTokenChecks() {
@@ -2089,6 +2130,9 @@ int main() {
 
 	bool themeOk = RunThemeTokenChecks();
 	ok = themeOk && ok;
+
+	bool axisTierOk = RunAxisTierLayoutChecks();
+	ok = axisTierOk && ok;
 
 	bool labelOpsOk = RunLabelOpsChecks();
 	ok = labelOpsOk && ok;

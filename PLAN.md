@@ -414,10 +414,13 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] Gates: ops-test clip/lossless cases, conformance byte-identical, required W1 repair-lossless trace PASS (broader cross-slice regression remains staged with W3)
 
 ### v2.7.2 - W2: ports + drag + axis preview (UI, commit stubbed)
-- [ ] Hover-gated arrow ports on the header band (paint + HtZone::WindowPortL/R + dump rects windowPortL/RRect)
-- [ ] DragKind::WindowEdgeL/R: snapped candidate, window pill, clamps (min 1 unit, max 20y, no edge crossing), Esc cancel (repaint on clear)
-- [ ] Axis-preview paint pass (header-band strip for the CANDIDATE window; shapes untouched during drag)
-- [ ] Gates: trace_window_edge_drag (mid-gesture dump + header pixel-diff), IDLESTABLE stays paint-free, full drag-suite regression
+- [x] M2: extract the COM-free/GDI-free pure axis-tier layout helper from BuildGanttScene; add pure helper tests as needed and gate the refactor alone with 1/1 byte-identical conformance fixtures before UI work
+- [x] M1/M10: hover-gated arrow ports on the derived header band (paint + HtZone::WindowPortL/R + dump rects windowPortL/RRect), transition-only so IDLESTABLE remains paint-free
+- [x] M3: window port hit tests precede HitTestClientPoint without changing marker/link-port/row-adder hit bands
+- [x] DragKind::WindowEdgeL/R: D2 auto-window materialization, snapped candidate, window pill, min-one-unit / scale-dependent-axis-cap / no-cross clamps, and Esc/capture-loss repaint-on-clear; release uses snapshot locals and W2 CommitWindowGesture seam stub only
+- [x] Axis-preview paint pass (header-band strip for the CANDIDATE window via the pure layout helper; shapes untouched during drag)
+- [x] Gates: m2 byte-identical conformance checkpoint; trace_window_edge_drag (mid-gesture dump + header pixel-diff + stubbed document fields), IDLESTABLE stays paint-free, full drag-suite regression
+- [x] Harness hygiene: classify window-edge-drag as a view-only gesture so the generic item-selection continuity rule does not create a false failure in its persisted trace report
 
 ### v2.7.3 - W3: commit + clipping e2e + budget
 - [ ] CommitWindowGesture (snapshot-locals rule) -> SetTimeWindow -> RebuildChart; one undo entry; hidden-selection reset generalized to ANY de-emitting op (M4)

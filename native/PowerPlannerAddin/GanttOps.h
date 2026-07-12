@@ -52,6 +52,10 @@ bool SetTaskDates(PpDocument& doc, const std::string& taskId, const std::string&
 bool SetTitle(PpDocument& doc, const std::string& title);
 bool SetEntityLabel(PpDocument& doc, const std::string& id, const std::string& label);
 bool SetScale(PpDocument& doc, const std::string& scale);
+// Shared window guard vocabulary. Gesture code uses these pure bounds while
+// previewing; SetTimeWindow enforces the same rules at the model boundary.
+long MinimumWindowSpanDays(const std::string& startISO, const std::string& scale);
+long MaximumWindowEndDay(const std::string& startISO, const std::string& scale);
 // Store an explicit visible window. Dates must be canonical ISO YYYY-MM-DD,
 // span at least one visible scale unit, and stay within the scale-dependent
 // axis-major emission cap. No gesture snapping happens here.

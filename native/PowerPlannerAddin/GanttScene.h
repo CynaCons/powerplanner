@@ -19,6 +19,7 @@
 
 #include "GanttModel.h"
 #include "GanttLayout.h"
+#include "GanttAxisLayout.h"
 #include "Scene.h"
 #include "GanttTheme.h"
 #include <algorithm>
@@ -36,9 +37,6 @@ inline std::wstring Widen(const std::string& s) {
 	::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
 	return w;
 }
-
-inline const char* const kMonthNames[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" };
-inline const char* const kMonthUpper[] = { "JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC" };
 
 // Rough Segoe UI width estimate (points) for label-fit without measuring at emit time.
 inline float EstimateTextWidthPt(const std::string& text, float fontSize) {
@@ -80,176 +78,41 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 	{ Style s; s.fill = true; s.fillBgr = Bgr(th.railSurface); Prim p = scene::rect(MARGIN, chartTop, ROW_GUTTER, chartBottom - chartTop, s); p.tagKind = "RAIL_FILL"; sc.prims.push_back(p); }
 	{ Style s; s.line = true; s.lineBgr = Bgr(th.divider); s.lineWeight = 1.0f; Prim p = scene::line(MARGIN + ROW_GUTTER, chartTop, MARGIN + ROW_GUTTER, chartBottom, s); p.tagKind = "RAIL_DIVIDER"; sc.prims.push_back(p); }
 
-	// Hierarchical two-band date header (spec R3). The top band is one tier
-	// coarser than the bottom; separator ticks in the plot follow the bottom
-	// tier (overridable via doc.gridDensity), with the coarser top-tier
-	// boundaries drawn as heavier "major" ticks. Every band cell / tick carries
-	// a stable per-cell id (Y/Q/M/W/D + ISO) so UpdateGantt's diff stays stable
-	// as the visible range grows/shrinks. PP_PROJ (the day↔point mapping) is
-	// untouched — this only changes which header shapes are drawn.
+	// Hierarchical two-band date header. ComputeAxisTierLayout owns all
+	// calendar/tier/visibility math; this scene-only pass applies tokens and
+	// turns the pure result into primitives in its historical emission order.
 	{
 		const float plotLeft = MARGIN + ROW_GUTTER;
 		const float headTop = chartTop - AXIS_H;
 		const float headMid = chartTop - AXIS_H / 2.0f;
-		const long minDAbs = DateToDays(minD), maxDAbs = DateToDays(maxD);
-
-		auto sinceMon = [](long day) -> int {           // 0 = day is a Monday
-			int dow = (int)((((day % 7) + 4) % 7 + 7) % 7); // 0 = Sunday
-			return (dow + 6) % 7;
-		};
-		auto ymd = [](const std::string& iso, int& y, int& m, int& d) {
-			y = m = d = 0; sscanf_s(iso.c_str(), "%d-%d-%d", &y, &m, &d);
-		};
-		auto firstOfMonth = [](int y, int m) -> long {
-			char b[16]; sprintf_s(b, "%04d-%02d-01", y, m); return DateToDays(b);
-		};
-
-		using Meta = std::pair<std::string, std::string>; // {id, label}
-		// Emit cell-start boundaries for a tier covering [minD..maxD] (the first
-		// cell may start before minD; a trailing sentinel start gives the last
-		// cell its right edge). meta[i] describes the cell [starts[i],starts[i+1]).
-		auto genTier = [&](const std::string& tier, std::vector<long>& starts, std::vector<Meta>& meta) {
-			starts.clear(); meta.clear();
-			int y0, m0, d0, y1, m1, d1; ymd(minD, y0, m0, d0); ymd(maxD, y1, m1, d1);
-			if (tier == "year") {
-				for (int y = y0; y <= y1 + 1; ++y) starts.push_back(firstOfMonth(y, 1));
-				for (int y = y0; y <= y1; ++y) { char id[8], lb[8]; sprintf_s(id, "Y%04d", y); sprintf_s(lb, "%d", y); meta.push_back({ id, lb }); }
-			} else if (tier == "quarter") {
-				int y = y0, q = (m0 - 1) / 3 + 1, q1 = (m1 - 1) / 3 + 1;
-				std::vector<std::pair<int, int>> cells;
-				while (y < y1 || (y == y1 && q <= q1)) { cells.push_back({ y, q }); if (++q > 4) { q = 1; ++y; } }
-				for (auto& c : cells) starts.push_back(firstOfMonth(c.first, (c.second - 1) * 3 + 1));
-				starts.push_back(firstOfMonth(y, (q - 1) * 3 + 1));
-				for (auto& c : cells) { char id[12], lb[16]; sprintf_s(id, "Q%04d-%d", c.first, c.second); sprintf_s(lb, "Q%d %d", c.second, c.first); meta.push_back({ id, lb }); }
-			} else if (tier == "month") {
-				int y = y0, m = m0;
-				std::vector<std::pair<int, int>> cells;
-				while (y < y1 || (y == y1 && m <= m1)) { cells.push_back({ y, m }); if (++m > 12) { m = 1; ++y; } }
-				for (auto& c : cells) starts.push_back(firstOfMonth(c.first, c.second));
-				starts.push_back(firstOfMonth(y, m));
-				bool first = true;
-				for (auto& c : cells) {
-					char id[12]; sprintf_s(id, "M%04d-%02d", c.first, c.second);
-					std::string lb = kMonthUpper[(c.second - 1) % 12];
-					if (first) { char yb[8]; sprintf_s(yb, " %d", c.first); lb += yb; first = false; } // year on the first month
-					meta.push_back({ id, lb });
-				}
-			} else if (tier == "week") {
-				long mon = minDAbs - sinceMon(minDAbs);
-				for (long w = mon; w <= maxDAbs; w += 7) starts.push_back(w);
-				starts.push_back(starts.empty() ? mon : starts.back() + 7);
-				for (size_t i = 0; i + 1 < starts.size(); ++i) {
-					std::string iso = DaysToDate(starts[i]); int yy, mm, dd; ymd(iso, yy, mm, dd);
-					char id[20]; sprintf_s(id, "W%s", iso.c_str()); char lb[16];
-					if (doc.axisNumbering == "cw") sprintf_s(lb, "CW %d", IsoCalendarWeekNumber(starts[i]));
-					else sprintf_s(lb, "%d", dd);
-					meta.push_back({ id, lb });
-				}
-			} else if (tier == "day") {
-				for (long dd = minDAbs; dd <= maxDAbs; ++dd) starts.push_back(dd);
-				starts.push_back(maxDAbs + 1);
-				for (long dd = minDAbs; dd <= maxDAbs; ++dd) {
-					std::string iso = DaysToDate(dd); int yy, mm, dv; ymd(iso, yy, mm, dv);
-					char id[20]; sprintf_s(id, "D%s", iso.c_str()); char lb[16];
-					if (doc.axisNumbering == "cw") sprintf_s(lb, "CW %d", IsoCalendarWeekNumber(dd));
-					else sprintf_s(lb, "%d", dv);
-					meta.push_back({ id, lb });
-				}
+		const AxisTierLayout axis = ComputeAxisTierLayout(doc, minD, maxD, pad, ptPerDay,
+			plotLeft, chartRight, headTop, headMid, AXIS_H, chartBottom);
+		auto emitLabels = [&](const std::vector<AxisTierLabel>& labels, const char* kind, unsigned long color) {
+			for (const auto& label : labels) {
+				Style style; style.textBgr = Bgr(color); style.fontSize = 7.0f; style.bold = true;
+				style.align = label.centered ? TextAlign::Center : TextAlign::Left;
+				Prim text = scene::text(label.rect.left, label.rect.top,
+					label.rect.right - label.rect.left, label.rect.bottom - label.rect.top,
+					Widen(label.label), style);
+				text.tagKind = kind; text.tagId = label.id; sc.prims.push_back(text);
 			}
 		};
-
-		auto emitBandLabels = [&](const std::vector<long>& starts, const std::vector<Meta>& meta,
-			const char* kind, float bandY, float bandH, unsigned long color, TextAlign al, bool thinDays) {
-			int step = 1;
-			if (thinDays) step = (ptPerDay >= 10.0f) ? 1 : (ptPerDay >= 5.0f ? 2 : 7); // else Mondays only
-			for (size_t i = 0; i + 1 < starts.size() && i < meta.size(); ++i) {
-				if (thinDays && step > 1) {
-					if (step == 7) { if (sinceMon(starts[i]) != 0) continue; }
-					else if ((int)(i % step) != 0) continue;
-				}
-				float xs = xToPt(starts[i] - vs), xe = xToPt(starts[i + 1] - vs);
-				float visStart = std::max(xs, plotLeft), visEnd = std::min(xe, chartRight);
-				if (visEnd - visStart < 2.0f) continue;
-				Style ts; ts.textBgr = Bgr(color); ts.fontSize = 7.0f; ts.bold = true; ts.align = al;
-				float tx = (al == TextAlign::Left) ? visStart + 4.0f : visStart;
-				float tw = (al == TextAlign::Left) ? std::max(6.0f, visEnd - visStart - 6.0f) : (visEnd - visStart);
-				Prim t = scene::text(tx, bandY, tw, bandH, Widen(meta[i].second), ts);
-				t.tagKind = kind; t.tagId = meta[i].first; sc.prims.push_back(t);
-			}
-		};
-
-		auto countVisibleBoundaries = [&](const std::vector<long>& starts, const std::vector<Meta>& meta) {
-			int c = 0;
-			for (size_t i = 0; i < meta.size() && i < starts.size(); ++i) {
-				float x = xToPt(starts[i] - vs);
-				if (x > plotLeft + 0.5f && x <= chartRight) ++c;
-			}
-			return c;
-		};
-		auto emitTicks = [&](const std::vector<long>& starts, const std::vector<Meta>& meta,
-			const char* kind, float yTop, unsigned long color, float weight, bool dash) {
-			for (size_t i = 0; i < meta.size() && i < starts.size(); ++i) {
-				float x = xToPt(starts[i] - vs);
-				if (x <= plotLeft + 0.5f || x > chartRight) continue;
-				Style g; g.line = true; g.lineBgr = Bgr(color); g.lineWeight = weight; g.dash = dash;
-				Prim ln = scene::line(x, yTop, x, chartBottom, g);
-				ln.tagKind = kind; ln.tagId = meta[i].first; sc.prims.push_back(ln);
-			}
-		};
-
-		// Scale -> (top tier, bottom tier). year is a single full-height band.
-		std::string topTier, botTier;
-		if (doc.scale == "year") { topTier = "year"; botTier = ""; }
-		else if (doc.scale == "quarter") { topTier = "year"; botTier = "quarter"; }
-		else if (doc.scale == "month") { topTier = "year"; botTier = "month"; }
-		else if (doc.scale == "day") { topTier = "month"; botTier = "day"; }
-		else { topTier = "month"; botTier = "week"; } // week (default)
-
-		// Bottom band + its divider (skipped for the single-band year scale).
-		if (!botTier.empty()) {
-			std::vector<long> bs; std::vector<Meta> bm; genTier(botTier, bs, bm);
-			emitBandLabels(bs, bm, "AXIS_BOT", headMid, AXIS_H / 2.0f, gt::ink2, TextAlign::Center, botTier == "day");
-			Style d; d.line = true; d.lineBgr = Bgr(th.divider); d.lineWeight = gt::hairline;
-			Prim ln = scene::line(plotLeft, headMid, chartRight, headMid, d); ln.tagKind = "AXIS_BANDDIV"; sc.prims.push_back(ln);
+		emitLabels(axis.bottomLabels, "AXIS_BOT", gt::ink2);
+		if (axis.hasBottomBand) {
+			Style style; style.line = true; style.lineBgr = Bgr(th.divider); style.lineWeight = gt::hairline;
+			Prim line = scene::line(axis.bandDivider.left, axis.bandDivider.top, axis.bandDivider.right, axis.bandDivider.bottom, style);
+			line.tagKind = "AXIS_BANDDIV"; sc.prims.push_back(line);
 		}
-
-		// Top band labels.
-		{
-			std::vector<long> ts_; std::vector<Meta> tm; genTier(topTier, ts_, tm);
-			float topBandH = botTier.empty() ? AXIS_H : AXIS_H / 2.0f;
-			emitBandLabels(ts_, tm, "AXIS_TOP", headTop, topBandH, gt::ink3, TextAlign::Left, false);
-		}
-
-		// Separator ticks (bottom tier, or gridDensity override), with a ~150
-		// cap: on overflow, coarsen one tier (day→week→month→quarter→year) and
-		// regenerate. "none" draws no ticks; labels are unaffected either way.
-		std::string dens = doc.gridDensity;
-		std::string tickTier;
-		if (dens == "none") tickTier = "";
-		else if (dens.empty() || dens == "auto") tickTier = botTier.empty() ? "year" : botTier;
-		else tickTier = dens;
-
-		if (!tickTier.empty()) {
-			auto coarser = [](const std::string& t) -> std::string {
-				if (t == "day") return "week"; if (t == "week") return "month";
-				if (t == "month") return "quarter"; if (t == "quarter") return "year";
-				return "";
-			};
-			std::vector<long> ks; std::vector<Meta> km; genTier(tickTier, ks, km);
-			while (countVisibleBoundaries(ks, km) > 150) {
-				std::string c = coarser(tickTier); if (c.empty()) break;
-				tickTier = c; genTier(tickTier, ks, km);
+		emitLabels(axis.topLabels, "AXIS_TOP", gt::ink3);
+		auto emitTicks = [&](const std::vector<AxisTierTick>& ticks, const char* kind, unsigned long color, float weight) {
+			for (const auto& tick : ticks) {
+				Style style; style.line = true; style.lineBgr = Bgr(color); style.lineWeight = weight; style.dash = tick.dashed;
+				Prim line = scene::line(tick.x, tick.top, tick.x, tick.bottom, style);
+				line.tagKind = kind; line.tagId = tick.id; sc.prims.push_back(line);
 			}
-			float tickTop = botTier.empty() ? headTop : headMid;
-			emitTicks(ks, km, "AXIS_TICK", tickTop, th.divider, gt::hairline, doc.gridStyle == "dotted");
-		}
-
-		// Major ticks at top-tier boundaries (heavier, outline2). Skipped for
-		// year (its ticks already sit at year boundaries).
-		if (!botTier.empty()) {
-			std::vector<long> ms_; std::vector<Meta> mm2; genTier(topTier, ms_, mm2);
-			emitTicks(ms_, mm2, "AXIS_MAJOR", headTop, gt::outline2, gt::hairline_major, false);
-		}
+		};
+		emitTicks(axis.ticks, "AXIS_TICK", th.divider, gt::hairline);
+		emitTicks(axis.majorTicks, "AXIS_MAJOR", gt::outline2, gt::hairline_major);
 	}
 
 	// Row dividers (Material list style), full width. Tagged with the OWNING

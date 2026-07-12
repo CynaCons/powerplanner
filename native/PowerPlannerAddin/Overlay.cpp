@@ -4,6 +4,7 @@
 #include "GanttJson.h"
 #include "GanttOps.h"
 #include "GanttHitTest.h"
+#include "GanttAxisLayout.h"
 #include "GanttAppBar.h"
 #include "GanttCommandRegistry.h"
 #include "GanttTheme.h"
@@ -51,6 +52,9 @@ const COLORREF HANDLE_INNER = RGB(138, 180, 248);
 const COLORREF SURFACE = RGB(255, 255, 255);
 const COLORREF SURFACE_VARIANT = RGB(241, 243, 244);
 const COLORREF TEXT = RGB(60, 64, 67);
+// Mirrors GanttScene.h's AXIS_H without pulling that Win32-bound scene header
+// into the overlay; both source the canonical theme axis-height token.
+constexpr float kAxisHeaderHeightPt = gt::axis_height;
 // ---- DPI-scaled chrome metrics ---------------------------------------------
 // All chrome pixel constants below are expressed at the 96-DPI (100% Windows
 // scaling) baseline and scaled per-tick through HtScalePx (MulDiv(base,dpi,96)
@@ -236,7 +240,7 @@ WPARAM g_mouseDownMk = 0;
 // without ever early-returning (the ghost still needs to paint every tick).
 bool g_gestureActive = false;
 bool g_dragActive = false;
-enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, TaskProgress, Milestone, Create, Marker, Text, LinkPort };
+enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, TaskProgress, Milestone, Create, Marker, Text, LinkPort, WindowEdgeL, WindowEdgeR };
 DragKind g_dragKind = DragKind::None;
 std::string g_dragId;          // task, milestone, marker, or text PP_ID being dragged
 RECT g_dragAnchorRect = {};    // original screen rect of the dragged item at gesture start
@@ -249,6 +253,13 @@ int g_dragOrigPercent = 0;     // task percent at gesture start (TaskProgress on
 int g_dragCandidatePercent = 0; // live percent preview (TaskProgress only)
 std::string g_dragPillText;    // last date/% pill text (harness dump, SR-IXC-03/06)
 RECT g_dragPreviewRect = {};   // screen rect of create/task ghost (harness dump)
+
+// W2 time-window gesture state. This is deliberately preview-only: the
+// candidate baseline and axis document are snapshotted on port-down and never
+// mutate PP_DOC or PowerPoint shapes until W3 owns the commit path.
+PpDocument g_windowPreviewDoc;
+std::string g_windowCandidateStart;
+std::string g_windowCandidateEnd;
 
 // ---- text-move gesture state -------------------------------------------------
 // A Text drag moves the PpText by a screen-pixel offset translated back into
@@ -315,6 +326,10 @@ std::wstring g_badge = L"PowerPlanner \x2014 click a bar to edit";
 RECT g_buttonRects[BUTTON_COUNT] = {};
 RECT g_frameRect = {};
 RECT g_chartScreenRect = {};
+// M1: there is no HEADER_BAND in the semantic child snapshot. BuildRowBands
+// derives this screen rect from the first PP_ROWY lane top minus scaled AXIS_H.
+RECT g_headerBandScreenRect = {};
+bool g_windowHeaderHover = false;
 static float g_chartLeftPt = 0.0f;
 static float g_chartWidthPt = 0.0f;
 RECT g_selScreenRect = {};
@@ -548,6 +563,8 @@ void CommitLinkTarget(const std::string& targetId);
 HtHit HitTestClientPoint(POINT pt);
 void CommitLinkPortDrop(const std::string& fromIdIn, const std::string& fromKindIn, const std::string& targetId);
 static void StartLinkPortDrag(const std::string& id, const std::string& kind, bool fromRight, POINT downPt);
+static void StartWindowEdgeDrag(HtZone zone, POINT downPt);
+static void CommitWindowGesture(const std::string& startISO, const std::string& endISO);
 void HandleHoverQuickAddRow(bool insertAbove);
 
 const PpTask* FindTask(const PpDocument& doc, const std::string& id) {
@@ -1074,6 +1091,155 @@ static void PaintLinkPortChip(Gdiplus::Graphics& g, POINT centerClient, bool hig
 	g.DrawPath(&edge, &path);
 }
 
+static bool IsWindowEdgeDragKind(DragKind kind) {
+	return kind == DragKind::WindowEdgeL || kind == DragKind::WindowEdgeR;
+}
+
+static bool IsWindowEdgeDragActive() {
+	return g_gestureActive && IsWindowEdgeDragKind(g_dragKind);
+}
+
+static bool ShouldShowWindowPorts() {
+	return !::IsRectEmpty(&g_headerBandScreenRect)
+		&& (g_windowHeaderHover || IsWindowEdgeDragActive());
+}
+
+static RECT WindowPortHitRectScreen(bool rightPort) {
+	if (!ShouldShowWindowPorts()) return {};
+	const int hitRadius = LINK_PORT_RADIUS + Scale(2);
+	const int cx = rightPort
+		? g_headerBandScreenRect.right - hitRadius
+		: g_headerBandScreenRect.left + hitRadius;
+	const int cy = (g_headerBandScreenRect.top + g_headerBandScreenRect.bottom) / 2;
+	return { cx - hitRadius, cy - hitRadius, cx + hitRadius, cy + hitRadius };
+}
+
+static HtZone HitTestWindowPortAtClient(POINT clientPt) {
+	if (!ShouldShowWindowPorts() || g_linkMode || IsEditSessionActive()) return HtZone::Outside;
+	const POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
+	const RECT left = WindowPortHitRectScreen(false);
+	const RECT right = WindowPortHitRectScreen(true);
+	if (::PtInRect(&left, screenPt)) return HtZone::WindowPortL;
+	if (::PtInRect(&right, screenPt)) return HtZone::WindowPortR;
+	return HtZone::Outside;
+}
+
+static void PaintWindowPort(Gdiplus::Graphics& g, const RECT& hitScreen, bool rightPort, bool highlighted) {
+	if (::IsRectEmpty(&hitScreen)) return;
+	POINT center = {
+		(hitScreen.left + hitScreen.right) / 2 - g_windowOriginX,
+		(hitScreen.top + hitScreen.bottom) / 2 - g_windowOriginY
+	};
+	PaintLinkPortChip(g, center, highlighted);
+	const int d = std::max(3, LINK_PORT_RADIUS / 2);
+	Gdiplus::Point arrow[3] = {};
+	if (rightPort) {
+		arrow[0] = { center.x - d / 2, center.y - d };
+		arrow[1] = { center.x - d / 2, center.y + d };
+		arrow[2] = { center.x + d, center.y };
+	} else {
+		arrow[0] = { center.x + d / 2, center.y - d };
+		arrow[1] = { center.x + d / 2, center.y + d };
+		arrow[2] = { center.x - d, center.y };
+	}
+	Gdiplus::SolidBrush glyph(GpToken(255, gt::primary));
+	g.FillPolygon(&glyph, arrow, 3);
+}
+
+static void PaintWindowPorts(Gdiplus::Graphics& g) {
+	if (!ShouldShowWindowPorts()) return;
+	PaintWindowPort(g, WindowPortHitRectScreen(false), false,
+		IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeL);
+	PaintWindowPort(g, WindowPortHitRectScreen(true), true,
+		IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeR);
+}
+
+// W2's two-phase renderer: paint the candidate axis only into the header
+// overlay strip. The source shapes and their PP_* tags are intentionally never
+// touched on mouse move; W3 will own the one-shot document/rebuild commit.
+static void PaintWindowAxisPreview(Gdiplus::Graphics& g) {
+	if (!g_dragActive || !IsWindowEdgeDragActive() || g_windowCandidateStart.empty()
+		|| g_windowCandidateEnd.empty() || ::IsRectEmpty(&g_headerBandScreenRect)) return;
+	const int left = g_headerBandScreenRect.left - g_windowOriginX;
+	const int top = g_headerBandScreenRect.top - g_windowOriginY;
+	const int right = g_headerBandScreenRect.right - g_windowOriginX;
+	const int bottom = g_headerBandScreenRect.bottom - g_windowOriginY;
+	if (right <= left || bottom <= top) return;
+
+	// Opaque strip clears the frozen native header pixels below before painting
+	// the candidate. Timeline labels/ticks begin after the rail; the header
+	// fill deliberately spans the whole band, matching HEADER_BAND.
+	Gdiplus::SolidBrush fill(GpToken(255, gt::headerBand));
+	g.FillRectangle(&fill, left, top, right - left, bottom - top);
+	int plotLeft = g_hitSnapshot.railRightPx - g_windowOriginX;
+	if (plotLeft <= left || plotLeft >= right) plotLeft = left;
+	const long startDay = DateToDays(g_windowCandidateStart);
+	const long endDay = DateToDays(g_windowCandidateEnd);
+	const long visibleDays = std::max(1L, endDay - startDay + 1);
+	const float previewPtPerDay = (float)(right - plotLeft) / (float)visibleDays;
+	const float axisH = (float)(bottom - top);
+	const float headMid = (float)top + axisH / 2.0f;
+	const AxisTierLayout axis = ComputeAxisTierLayout(g_windowPreviewDoc,
+		g_windowCandidateStart, g_windowCandidateEnd, 0, previewPtPerDay,
+		(float)plotLeft, (float)right, (float)top, headMid, axisH, (float)bottom);
+
+	auto paintLabels = [&](const std::vector<AxisTierLabel>& labels, unsigned long color) {
+		Gdiplus::Font font(L"Segoe UI", std::max(7.0f, ScaleF(7.0f)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+		Gdiplus::SolidBrush brush(GpToken(255, color));
+		for (const auto& label : labels) {
+			Gdiplus::StringFormat format;
+			format.SetAlignment(label.centered ? Gdiplus::StringAlignmentCenter : Gdiplus::StringAlignmentNear);
+			format.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			format.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+			const std::wstring text = Widen(label.label);
+			g.DrawString(text.c_str(), -1, &font,
+				Gdiplus::RectF(label.rect.left, label.rect.top,
+					label.rect.right - label.rect.left, label.rect.bottom - label.rect.top),
+				&format, &brush);
+		}
+	};
+	paintLabels(axis.bottomLabels, gt::ink2);
+	if (axis.hasBottomBand) {
+		Gdiplus::Pen divider(GpToken(255, gt::outline), ScaleF(gt::hairline));
+		g.DrawLine(&divider, (INT)axis.bandDivider.left, (INT)axis.bandDivider.top,
+			(INT)axis.bandDivider.right, (INT)axis.bandDivider.bottom);
+	}
+	paintLabels(axis.topLabels, gt::ink3);
+	auto paintTicks = [&](const std::vector<AxisTierTick>& ticks, unsigned long color, float weight) {
+		for (const auto& tick : ticks) {
+			Gdiplus::Pen pen(GpToken(255, color), ScaleF(weight));
+			if (tick.dashed) pen.SetDashStyle(Gdiplus::DashStyleDot);
+			g.DrawLine(&pen, (INT)tick.x, (INT)tick.top, (INT)tick.x, (INT)tick.bottom);
+		}
+	};
+	paintTicks(axis.ticks, gt::outline, gt::hairline);
+	paintTicks(axis.majorTicks, gt::outline2, gt::hairline_major);
+}
+
+static void PaintWindowPill(Gdiplus::Graphics& g) {
+	if (!g_dragActive || !IsWindowEdgeDragActive() || g_dragPillText.empty()) return;
+	const std::wstring text = Widen(g_dragPillText);
+	Gdiplus::Font font(L"Segoe UI", g_tooltipFontPx, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+	Gdiplus::RectF bounds;
+	g.MeasureString(text.c_str(), -1, &font, Gdiplus::PointF(0, 0), &bounds);
+	const int w = (int)bounds.Width + g_tooltipPad * 2;
+	const int h = (int)bounds.Height + g_tooltipPad * 2;
+	int x = g_dragLastPt.x + Scale(14);
+	int y = g_dragLastPt.y + Scale(14);
+	if (x + w > g_headerBandScreenRect.right - g_windowOriginX) x = g_headerBandScreenRect.right - g_windowOriginX - w;
+	if (x < INFL) x = INFL;
+	Gdiplus::GraphicsPath path;
+	AddRoundRect(path, (Gdiplus::REAL)x, (Gdiplus::REAL)y, (Gdiplus::REAL)w, (Gdiplus::REAL)h, 3.0f);
+	Gdiplus::SolidBrush bg(GpToken(245, gt::ink));
+	g.FillPath(&bg, &path);
+	Gdiplus::StringFormat format;
+	format.SetAlignment(Gdiplus::StringAlignmentCenter);
+	format.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+	Gdiplus::SolidBrush fg(GpToken(255, gt::surface));
+	g.DrawString(text.c_str(), -1, &font, Gdiplus::RectF((Gdiplus::REAL)x, (Gdiplus::REAL)y,
+		(Gdiplus::REAL)w, (Gdiplus::REAL)h), &format, &fg);
+}
+
 static void PaintLinkPortsForSnapshot(Gdiplus::Graphics& g) {
 	const bool linkDragActive = g_gestureActive && g_dragKind == DragKind::LinkPort;
 	for (const auto& item : g_hitSnapshot.items) {
@@ -1216,6 +1382,8 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 	if (!chart || !win) {
 		g_rowBands.clear();
 		g_editRegions.clear();
+		::SetRectEmpty(&g_headerBandScreenRect);
+		g_windowHeaderHover = false;
 		InvalidateHitSnapshot();
 		return;
 	}
@@ -1224,6 +1392,8 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		if (!items) {
 			g_rowBands.clear();
 			g_editRegions.clear();
+			::SetRectEmpty(&g_headerBandScreenRect);
+			g_windowHeaderHover = false;
 			InvalidateHitSnapshot();
 			return;
 		}
@@ -1234,6 +1404,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		}
 		g_rowBands.clear();
 		g_editRegions.clear();
+		::SetRectEmpty(&g_headerBandScreenRect);
 		g_hitSnapshot = HtSnapshot{};
 		g_hitSnapshot.chartRect = ToHtRect(g_chartScreenRect);
 		g_hitSnapshot.edgeBandPx = Scale((int)kHtEdgePx);
@@ -1380,6 +1551,23 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			int railRightScreen = win->PointsToScreenPixelsX(chartLeftPt + rowy.railR * xScale);
 			g_hitSnapshot.railLeftPx = railLeftScreen;
 			g_hitSnapshot.railRightPx = railRightScreen;
+			// M1: derive the header band from the model-derived first row lane.
+			// HEADER_BAND itself remains out of the semantic item walk, avoiding a
+			// synthetic header "item" in task/marker hit ordering. PP_ROWY is in
+			// chart-local points; yScale maps it through any fitted chart frame.
+			if (!rowy.rows.empty()) {
+				float firstTop = rowy.rows.front().top;
+				for (const auto& entry : rowy.rows) firstTop = std::min(firstTop, entry.top);
+				const float headerTopPt = chartTopPt + (firstTop - kAxisHeaderHeightPt) * yScale;
+				const float headerBottomPt = chartTopPt + firstTop * yScale;
+				g_headerBandScreenRect = {
+					g_chartScreenRect.left,
+					win->PointsToScreenPixelsY(headerTopPt),
+					g_chartScreenRect.right,
+					win->PointsToScreenPixelsY(headerBottomPt)
+				};
+				NormalizeRect(g_headerBandScreenRect);
+			}
 			for (const auto& entry : rowy.rows) {
 				float absTop = chartTopPt + entry.top * yScale;
 				float absBot = chartTopPt + entry.bot * yScale;
@@ -1446,6 +1634,8 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		OvLog(buf);
 		g_rowBands.clear();
 		g_editRegions.clear();
+		::SetRectEmpty(&g_headerBandScreenRect);
+		g_windowHeaderHover = false;
 		InvalidateHitSnapshot();
 	}
 	catch (const std::exception&) {
@@ -1455,6 +1645,8 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		OvLog(L"BuildRowBands: parse error - cleared");
 		g_rowBands.clear();
 		g_editRegions.clear();
+		::SetRectEmpty(&g_headerBandScreenRect);
+		g_windowHeaderHover = false;
 		InvalidateHitSnapshot();
 	}
 }
@@ -1521,12 +1713,17 @@ void SyncSelectionChromeFromOwnSelection() {
 bool UpdateHoverFromCursor() {
 	std::string oldId = g_hoverRowId;
 	RECT oldRect = g_hoverBandRect;
+	const bool oldWindowHeaderHover = g_windowHeaderHover;
 	ClearHoverState();
+	g_windowHeaderHover = false;
 
 	POINT pt = {};
 	if (!OverlayGetCursorPos(&pt) || !::PtInRect(&g_chartScreenRect, pt)) {
-		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect);
+		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
+			|| oldWindowHeaderHover != g_windowHeaderHover;
 	}
+	if (!::IsRectEmpty(&g_headerBandScreenRect) && ::PtInRect(&g_headerBandScreenRect, pt))
+		g_windowHeaderHover = true;
 
 	for (const auto& band : g_rowBands) {
 		if (pt.y >= band.screenRect.top && pt.y <= band.screenRect.bottom) {
@@ -1539,7 +1736,8 @@ bool UpdateHoverFromCursor() {
 		}
 	}
 	LayoutHoverInsertHotspot();
-	return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect);
+	return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
+		|| oldWindowHeaderHover != g_windowHeaderHover;
 }
 
 // Single repaint entry point: everything that wants pixels on screen goes
@@ -2475,7 +2673,10 @@ bool HandleSetCursor(HWND hwnd) {
 	HtZone zone = HtZone::Outside;
 	if (!overChromeWidget) {
 		if (!::PtInRect(&g_chartScreenRect, screenPt)) return false; // truly outside: default cursor
-		zone = HitTestClientPoint(pt).zone;
+		// Match WM_LBUTTONDOWN precedence: a header port must not inherit a
+		// marker's full-height semantic band and display the wrong cursor.
+		zone = HitTestWindowPortAtClient(pt);
+		if (zone == HtZone::Outside) zone = HitTestClientPoint(pt).zone;
 	}
 	HtCursor cur = GanttCursorForZone(zone, overChromeWidget);
 	HCURSOR hc = HCursorForHtCursor(cur);
@@ -2593,6 +2794,9 @@ void ResetDragGestureState() {
 	g_dragCandidatePercent = 0;
 	g_dragPillText.clear();
 	::SetRectEmpty(&g_dragPreviewRect);
+	g_windowPreviewDoc = PpDocument{};
+	g_windowCandidateStart.clear();
+	g_windowCandidateEnd.clear();
 	g_linkDragFromRight = false;
 	g_linkDragHoverId.clear();
 	g_linkDragHoverKind.clear();
@@ -2683,6 +2887,125 @@ static long SnapDayToScale(long day, const std::string& scale) {
 		return day;
 	}
 	return day;
+}
+
+// Clamp a single moving edge while the opposite window edge remains fixed.
+// The pure GanttOps bounds are reused so preview cannot show a commit that W3
+// would reject. The binary search handles the calendar-dependent maximum span
+// (month/year lengths) without a per-day walk across a multi-year drag.
+static long ClampWindowEdgeDay(DragKind kind, long candidateDay, long startDay,
+	long endDay, const std::string& scale) {
+	if (kind == DragKind::WindowEdgeR) {
+		const long minEnd = startDay + MinimumWindowSpanDays(DaysToDate(startDay), scale);
+		const long maxEnd = MaximumWindowEndDay(DaysToDate(startDay), scale);
+		return std::max(minEnd, std::min(maxEnd, candidateDay));
+	}
+	if (kind == DragKind::WindowEdgeL) {
+		// Find the earliest start whose scale-dependent maximum reaches endDay.
+		if (endDay > MaximumWindowEndDay(DaysToDate(candidateDay), scale)) {
+			long lo = candidateDay, hi = endDay;
+			while (lo < hi) {
+				const long mid = lo + (hi - lo) / 2;
+				if (endDay <= MaximumWindowEndDay(DaysToDate(mid), scale)) hi = mid;
+				else lo = mid + 1;
+			}
+			candidateDay = lo;
+		}
+		// A calendar unit's day count depends on the candidate start. Move left
+		// until the kept end is at least one complete visible unit away.
+		while (candidateDay < endDay
+			&& endDay - candidateDay < MinimumWindowSpanDays(DaysToDate(candidateDay), scale)) {
+			--candidateDay;
+		}
+	}
+	return candidateDay;
+}
+
+static void ComputeWindowEdgeCandidate(DragKind kind, const std::string& baselineStart,
+	const std::string& baselineEnd, float pxPerDay, long dx, const std::string& scale,
+	std::string* outStart, std::string* outEnd) {
+	if (!outStart || !outEnd) return;
+	long startDay = DateToDays(baselineStart);
+	long endDay = DateToDays(baselineEnd);
+	long candidateDay = (kind == DragKind::WindowEdgeL) ? startDay : endDay;
+	if (pxPerDay > 0.0f) candidateDay += (long)::lround((double)dx / (double)pxPerDay);
+	candidateDay = SnapDayToScale(candidateDay, scale);
+	candidateDay = ClampWindowEdgeDay(kind, candidateDay, startDay, endDay, scale);
+	if (kind == DragKind::WindowEdgeL) startDay = candidateDay;
+	else if (kind == DragKind::WindowEdgeR) endDay = candidateDay;
+	*outStart = DaysToDate(startDay);
+	*outEnd = DaysToDate(endDay);
+}
+
+static void UpdateWindowEdgeDragCandidate(long dx) {
+	std::string candidateStart, candidateEnd;
+	ComputeWindowEdgeCandidate(g_dragKind, g_dragOrigStart, g_dragOrigEnd, g_dragPxPerDay,
+		dx, g_windowPreviewDoc.scale, &candidateStart, &candidateEnd);
+	g_windowCandidateStart = candidateStart;
+	g_windowCandidateEnd = candidateEnd;
+	const long oldSpan = DateToDays(g_dragOrigEnd) - DateToDays(g_dragOrigStart);
+	const long newSpan = DateToDays(candidateEnd) - DateToDays(candidateStart);
+	const long spanDelta = newSpan - oldSpan;
+	const long oldEdge = (g_dragKind == DragKind::WindowEdgeL)
+		? DateToDays(g_dragOrigStart) : DateToDays(g_dragOrigEnd);
+	const long newEdge = (g_dragKind == DragKind::WindowEdgeL)
+		? DateToDays(candidateStart) : DateToDays(candidateEnd);
+	g_dragDeltaDays = newEdge - oldEdge;
+	char pill[96];
+	::snprintf(pill, sizeof(pill), "%s -> %s (%+ldd)", candidateStart.c_str(), candidateEnd.c_str(), spanDelta);
+	g_dragPillText = pill;
+}
+
+static void StartWindowEdgeDrag(HtZone zone, POINT downPt) {
+	if ((zone != HtZone::WindowPortL && zone != HtZone::WindowPortR) || !g_app) return;
+	ResetDragGestureState();
+	PpDocument doc;
+	if (!ReadGanttDocFromSlide(g_app, &doc)) return;
+	ProjPx projection = ProjectionPx();
+	if (!projection.ok || projection.pxPerDay <= 0.0) return;
+
+	std::string baselineStart, baselineEnd;
+	if (!doc.windowStart.empty() && !doc.windowEnd.empty()) {
+		baselineStart = doc.windowStart;
+		baselineEnd = doc.windowEnd;
+	} else {
+		// D2: first drag materializes only an in-memory baseline matching the
+		// current auto-fit projection. PP_PROJ has no maxDay, so reconstruct
+		// the right edge from the document's true max date plus its current pad.
+		PpProj proj;
+		if (!ParseProj(g_chartProj, &proj)) return;
+		std::string maxDate;
+		auto considerMax = [&](const std::string& iso) {
+			if (!iso.empty() && (maxDate.empty() || iso > maxDate)) maxDate = iso;
+		};
+		for (const auto& task : doc.tasks) { considerMax(task.start); considerMax(task.end); }
+		for (const auto& milestone : doc.milestones) considerMax(milestone.date);
+		if (maxDate.empty()) maxDate = DaysToDate(proj.minDay + 30);
+		baselineStart = DaysToDate(proj.minDay - proj.pad);
+		baselineEnd = DaysToDate(DateToDays(maxDate) + proj.pad);
+	}
+	if (baselineStart.empty() || baselineEnd.empty() || DateToDays(baselineEnd) <= DateToDays(baselineStart)) return;
+
+	g_dragKind = (zone == HtZone::WindowPortL) ? DragKind::WindowEdgeL : DragKind::WindowEdgeR;
+	g_dragOrigStart = baselineStart;
+	g_dragOrigEnd = baselineEnd;
+	g_windowCandidateStart = baselineStart;
+	g_windowCandidateEnd = baselineEnd;
+	g_windowPreviewDoc = doc;
+	g_dragPxPerDay = (float)projection.pxPerDay;
+	g_dragLastPt = downPt;
+	g_dragAnchorRect = WindowPortHitRectScreen(zone == HtZone::WindowPortR);
+	g_gestureActive = true;
+}
+
+// W2 COMMIT SEAM STUB — W3 will dispatch SetTimeWindow + RebuildChart from
+// these snapshot parameters. Do not mutate document/tags/shapes in this slice.
+static void CommitWindowGesture(const std::string& startISO, const std::string& endISO) {
+	wchar_t msg[160];
+	::swprintf_s(msg, 160, L"W2 CommitWindowGesture STUB: %hs -> %hs (no document mutation)",
+		startISO.c_str(), endISO.c_str());
+	OvLog(msg);
+	RequestOverlayRepaint();
 }
 
 static long SnapGestureDeltaDays(DragKind kind, const std::string& origStart, const std::string& origEnd,
@@ -3072,6 +3395,11 @@ void UpdateDragGesture(POINT pt) {
 		} else {
 			return; // still within click threshold: no ghost yet
 		}
+	}
+	if (IsWindowEdgeDragKind(g_dragKind)) {
+		UpdateWindowEdgeDragCandidate(dx);
+		RequestOverlayRepaint(); // preview-only: no document/shape write on move
+		return;
 	}
 
 	if (g_dragKind == DragKind::Create) {
@@ -3483,6 +3811,20 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		if (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) ||
 			RowBoundaryInsertFromClientPoint(pt) >= 0 || GripFromClientPoint(pt)) return 0;
+		// M3: these header affordances win before semantic hit testing. Marker
+		// bands intentionally span the full chart (including the header), so
+		// changing their bands instead would regress marker selection elsewhere.
+		const HtZone windowPort = HitTestWindowPortAtClient(pt);
+		if (windowPort == HtZone::WindowPortL || windowPort == HtZone::WindowPortR) {
+			OvLog(windowPort == HtZone::WindowPortL ? L"WINDOWPORT left down" : L"WINDOWPORT right down");
+			g_lastHit = { windowPort };
+			g_mouseDownPt = pt;
+			g_mouseDownMk = wp;
+			g_captureActive = true;
+			::SetCapture(hwnd);
+			StartWindowEdgeDrag(windowPort, pt);
+			return 0;
+		}
 		std::string portId, portKind;
 		bool portRight = false;
 		if (HitTestLinkPortAtClient(pt, &portId, &portKind, &portRight)) {
@@ -3576,6 +3918,12 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		float gesturePxPerPt = g_dragPxPerPt;
 		RECT dragAnchorRect = g_dragAnchorRect;
 		RECT dragTargetRowRect = g_dragTargetRowRect;
+		// Snapshot all W2 candidate values before ReleaseCapture. Capture release
+		// synchronously routes WM_CAPTURECHANGED, which resets every g_drag*/
+		// g_window* global; W3's real commit must keep this stale-global rule.
+		std::string windowCandidateStart = g_windowCandidateStart;
+		std::string windowCandidateEnd = g_windowCandidateEnd;
+		std::string windowScale = g_windowPreviewDoc.scale;
 		// Snapshot the link-drag hover target BEFORE any capture release path
 		// can clear it (same reasoning as every other snapshot above), and
 		// recompute from THIS up-point as the authority — the last MOUSEMOVE's
@@ -3592,7 +3940,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 		long finalDx = pt.x - g_mouseDownPt.x;
 		long finalDy = pt.y - g_mouseDownPt.y;
-		if (wasGestureActive && dragKind == DragKind::Text) {
+		if (wasGestureActive && IsWindowEdgeDragKind(dragKind) && gesturePxPerDay > 0.0f) {
+			ComputeWindowEdgeCandidate(dragKind, dragOrigStart, dragOrigEnd, gesturePxPerDay,
+				finalDx, windowScale, &windowCandidateStart, &windowCandidateEnd);
+		} else if (wasGestureActive && dragKind == DragKind::Text) {
 			// Points, not days (see UpdateDragGesture's Text branch): recompute
 			// the final candidate dx/dy from THIS up-point rather than trusting
 			// the last MOUSEMOVE, same reasoning as every other kind's day-delta
@@ -3664,7 +4015,11 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// from these up/down endpoints) commits via GanttOps; otherwise this
 		// is a plain click and selects exactly as before.
 		if (wasCaptureActive) {
-			if (wasGestureActive && wasDragActive && dragKind == DragKind::Create) {
+			if (wasGestureActive && wasDragActive && IsWindowEdgeDragKind(dragKind)) {
+				// Snapshot locals above are the sole source after Reset/release.
+				ResetDragGestureState();
+				CommitWindowGesture(windowCandidateStart, windowCandidateEnd);
+			} else if (wasGestureActive && wasDragActive && dragKind == DragKind::Create) {
 				// Create-drag: span < 0.5 day is treated as a click (no task
 				// created) per the task spec — existing EmptyCell click
 				// semantics (ClearOwnSelection, via ApplyClickSelection) apply
@@ -4534,7 +4889,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		tipFmt.SetLineAlignment(StringAlignmentCenter);
 		SolidBrush tipText(Color(255, 255, 255, 255));
 		g.DrawString(tip.c_str(), -1, &tipFont, RectF((REAL)tipX, (REAL)tipY, (REAL)tipW, (REAL)tipH), &tipFmt, &tipText);
-	} else if (g_gestureActive && g_dragActive) {
+	} else if (g_gestureActive && g_dragActive && !IsWindowEdgeDragKind(g_dragKind)) {
 		RECT anchor = {
 			g_dragAnchorRect.left - g_windowOriginX,
 			g_dragAnchorRect.top - g_windowOriginY,
@@ -4772,6 +5127,16 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	for (const auto& extra : g_ownSelExtra) {
 		if (extra.kind == "ROW") PaintRowBandSelectionWash(g, extra.id);
 		else PaintOwnSelItemFrame(g, extra.kind, extra.id);
+	}
+
+	// W2 window-edge two-phase preview must precede the selection-chrome early
+	// return below: header hover normally has no selected item at all.
+	if (g_gestureActive && g_dragActive && IsWindowEdgeDragKind(g_dragKind)) {
+		PaintWindowAxisPreview(g);
+		PaintWindowPill(g);
+	}
+	if (!g_gestureActive || IsWindowEdgeDragKind(g_dragKind)) {
+		PaintWindowPorts(g);
 	}
 
 	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
@@ -7732,6 +8097,8 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"hotkeysActive\":" + std::string(g_hotkeysActive ? "true" : "false") + ",";
 	s += "\"linkMode\":" + std::string(g_linkMode ? "true" : "false") + ",";
 	s += "\"linkDragActive\":" + std::string((g_gestureActive && g_dragKind == DragKind::LinkPort && g_dragActive) ? "true" : "false") + ",";
+	s += "\"windowDragActive\":" + std::string((IsWindowEdgeDragActive() && g_dragActive) ? "true" : "false") + ",";
+	s += "\"windowPillText\":\"" + (IsWindowEdgeDragActive() ? g_dragPillText : "") + "\",";
 	s += "\"linkFromId\":\"" + g_linkFromId + "\",";
 	int depCount = 0;
 	{
@@ -7760,6 +8127,11 @@ const char* Overlay_DumpChromeStateForTest() {
 			}
 		}
 		if (!portDone) s += "\"linkPortLeftRect\":{},\"linkPortRightRect\":{},";
+		const RECT windowPortL = WindowPortHitRectScreen(false);
+		const RECT windowPortR = WindowPortHitRectScreen(true);
+		s += "\"windowHeaderBandRect\":" + (IsRectEmpty(&g_headerBandScreenRect) ? std::string("{}") : rectJson(g_headerBandScreenRect)) + ",";
+		s += "\"windowPortLRect\":" + (IsRectEmpty(&windowPortL) ? std::string("{}") : rectJson(windowPortL)) + ",";
+		s += "\"windowPortRRect\":" + (IsRectEmpty(&windowPortR) ? std::string("{}") : rectJson(windowPortR)) + ",";
 		for (int i = 0; i < 2; ++i) {
 			const char* key = (i == 0) ? "rowAdderAboveRect" : "rowAdderBelowRect";
 			if (g_rowBoundaryInsertValid[i]) {

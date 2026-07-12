@@ -1,6 +1,6 @@
 # Time Window Editing — Feature Plan (v2.7.x)
 
-**Registered:** 2026-07-12 (user feature request). **Status:** REVIEWED — adversarial subagent review 2026-07-12 found 3 critical / 5 major / 10 minor issues; ALL folded into the sections below (marked 'review-amended' / 'amended per review'). APPROVED by user 2026-07-12 (D1 = non-interactive arrow-port continuation glyph; D2-D4 defaults confirmed). W1 COMPLETE 2026-07-12 (model, pure scene clipping, C1/C3/cache hardening, and repair-lossless trace green); W2 remains next.
+**Registered:** 2026-07-12 (user feature request). **Status:** REVIEWED — adversarial subagent review 2026-07-12 found 3 critical / 5 major / 10 minor issues; ALL folded into the sections below (marked 'review-amended' / 'amended per review'). APPROVED by user 2026-07-12 (D1 = non-interactive arrow-port continuation glyph; D2-D4 defaults confirmed). W1 COMPLETE 2026-07-12 (model, pure scene clipping, C1/C3/cache hardening, and repair-lossless trace green). W2 COMPLETE 2026-07-12: pure `GanttAxisLayout` extraction (1/1 conformance preserved), PP_ROWY-derived header ports, preview-only snapped edge drag/axis strip, and stubbed no-mutation release seam; W3 remains next for the real commit.
 **One-line:** the chart gets an explicit, user-controlled time window, edited by dragging
 arrow ports at the left/right ends of the timescale header; elements outside the window
 clip or hide (losslessly — the document keeps everything), and the whole chart rescales

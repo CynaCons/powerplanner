@@ -548,6 +548,8 @@ HtCursor GanttCursorForZone(HtZone zone) {
 	case HtZone::TaskEdgeR:
 	case HtZone::TaskProgressEdge:
 	case HtZone::Marker:
+	case HtZone::WindowPortL:
+	case HtZone::WindowPortR:
 		return HtCursor::SizeWE;
 	case HtZone::EmptyCell:
 		return HtCursor::Cross;

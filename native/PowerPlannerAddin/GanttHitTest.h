@@ -70,6 +70,10 @@ struct HtSnapshot {
 // thin tasks stay resizable; see GanttHitTestPoint for the full ordering.
 enum class HtZone {
 	Outside,    // not inside chartRect
+	// Overlay-owned time-window header ports. These are classified before the
+	// semantic snapshot test because marker bands intentionally span the header.
+	WindowPortL,
+	WindowPortR,
 	TaskBody,   // inside a task bar, away from its edges (id = task id)
 	TaskEdgeL,  // within +-kHtEdgePx of a task's left edge (id = task id)
 	TaskEdgeR,  // within +-kHtEdgePx of a task's right edge (id = task id)
