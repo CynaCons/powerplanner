@@ -55,3 +55,22 @@ brackets unreachable; task Rename hunt.
   (−10%/+10% exist; spec doc stale).
 - Dependencies: only FS creatable; no per-edge delete; no type picker
   (AddDependency supports 4 types in GanttOps).
+
+## v2.6.x closing review (2026-07-12)
+
+Evidence: `walkthrough all` passed all five cold flows with every expected
+capture; the U8 gallery captured document, task, row, milestone, marker,
+multi-row, dependency, settings, context-menu, and card states. The host was
+200% DPI and offered no headless 100%/150% monitor override; each gallery app
+bar/menu/card companion capture was a successful `PrintWindow` capture.
+
+- **Change a date:** click a task, drag its body, read the live date pill, and press Esc to return to the document bar; the operation is direct and the final nudge trace measured 156 ms. **Rough edge / UF candidate:** the selected bar has no explicit on-object “drag to move / drag ends to resize” cue, so the action is still inferred from a thin frame and cursor.
+- **Link two tasks:** select the source, use **Link**, then pick the target; the prompt explains the state and Esc exits it. **Rough edge / UF candidate:** the direct port is close to the resize end, and the link capture can show PowerPoint's native CHART_ROOT handles/overlapping chrome, which competes with the custom selection model.
+- **Add a milestone:** choose the visible **Milestone** insert, drag the newly selected diamond to a snapped date, then Esc to leave the context. **Rough edge / UF candidate:** the creation hint teaches Alt+double-click, but the default bar does not make the alternative creation routes equally obvious once the chart is dense.
+- **Delete three rows:** Ctrl+click accumulates rows, the compact “2 selected” bar exposes Delete, and one Delete removes the selected rows. **Rough edge / UF candidate:** the pale row washes and small count are easy to miss, and the capture gives no advance summary of the tasks that a cascading row delete will remove.
+- **Rename a task:** select it, choose the explicit **Rename** command, type inline, and press Enter; Esc cancels/deselects. **Rough edge / UF candidate:** double-click still opens the properties card while Rename opens inline editing, so two natural entry points still mean different things.
+
+Additional gallery finding / UF candidate: the dependency bar reads
+`Discovery ? Wireframes` rather than using a proper arrow glyph on this
+code-page build (matching the existing C4566 warning). Fix the string encoding
+before treating dependency selection as presentation-grade.

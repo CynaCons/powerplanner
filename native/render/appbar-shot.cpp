@@ -629,6 +629,86 @@ static bool CaptureWindowToPng(HWND hwnd, const wchar_t* path) {
 	return true;
 }
 
+// Gallery captures need proof that the app bar/menu/card was captured from the
+// owning window, rather than from the screen composite.  Unlike the general
+// harness helper above, this deliberately has no BitBlt fallback.
+static bool CaptureWindowPrintWindowToPng(HWND hwnd, const wchar_t* path) {
+	if (!hwnd || !::IsWindow(hwnd) || !::IsWindowVisible(hwnd)) return false;
+	RECT r{};
+	if (!::GetWindowRect(hwnd, &r)) return false;
+	const int w = r.right - r.left, h = r.bottom - r.top;
+	if (w <= 0 || h <= 0) return false;
+	HDC screen = ::GetDC(NULL);
+	HDC mem = ::CreateCompatibleDC(screen);
+	HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
+	HGDIOBJ old = ::SelectObject(mem, bmp);
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 0x00000002
+#endif
+	const BOOL printed = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
+	::SelectObject(mem, old);
+	bool ok = false;
+	if (printed) {
+		Gdiplus::Bitmap bitmap(bmp, NULL);
+		CLSID pngClsid;
+		if (PngEncoderClsid(&pngClsid) >= 0)
+			ok = (bitmap.Save(path, &pngClsid, NULL) == Gdiplus::Ok);
+	}
+	::DeleteObject(bmp);
+	::DeleteDC(mem);
+	::ReleaseDC(NULL, screen);
+	return ok;
+}
+
+static void UnionCaptureRect(RECT* target, const RECT& addition) {
+	if (!target) return;
+	if (::IsRectEmpty(target)) { *target = addition; return; }
+	if (addition.left < target->left) target->left = addition.left;
+	if (addition.top < target->top) target->top = addition.top;
+	if (addition.right > target->right) target->right = addition.right;
+	if (addition.bottom > target->bottom) target->bottom = addition.bottom;
+}
+
+// Save the full chart context as gallery-<context>.png and, separately, strict
+// PrintWindow captures for the app bar and any open menu/card surface.
+static bool CaptureGalleryContext(PowerPoint::_ApplicationPtr& app, const wchar_t* context,
+	HWND floating = NULL, const wchar_t* floatingSuffix = nullptr) {
+	if (!context || !*context) return false;
+	RECT chart{};
+	if (!GetChartRootScreenRect(app, &chart)) return false;
+	RECT full = chart;
+	bool ok = true;
+	wchar_t path[320];
+	HWND appBar = OverlayAppBarHwnd();
+	::swprintf_s(path, 320, L"native\\build\\gallery-%ls-appbar.png", context);
+	const bool appBarOk = CaptureWindowPrintWindowToPng(appBar, path);
+	wprintf(L"GALLERY %ls PRINTWINDOW appbar %ls\n", context, appBarOk ? L"OK" : L"FAIL");
+	ok = ok && appBarOk;
+	if (appBar && ::IsWindowVisible(appBar)) {
+		RECT r{}; ::GetWindowRect(appBar, &r); UnionCaptureRect(&full, r);
+	}
+	if (floating && floatingSuffix && *floatingSuffix) {
+		::swprintf_s(path, 320, L"native\\build\\gallery-%ls-%ls.png", context, floatingSuffix);
+		const bool floatingOk = CaptureWindowPrintWindowToPng(floating, path);
+		wprintf(L"GALLERY %ls PRINTWINDOW %ls %ls\n", context, floatingSuffix,
+			floatingOk ? L"OK" : L"FAIL");
+		ok = ok && floatingOk;
+		if (::IsWindowVisible(floating)) {
+			RECT r{}; ::GetWindowRect(floating, &r); UnionCaptureRect(&full, r);
+		}
+	}
+	const int screenW = ::GetSystemMetrics(SM_CXSCREEN);
+	const int screenH = ::GetSystemMetrics(SM_CYSCREEN);
+	if (full.left < 0) full.left = 0;
+	if (full.top < 0) full.top = 0;
+	if (full.right > screenW) full.right = screenW;
+	if (full.bottom > screenH) full.bottom = screenH;
+	::swprintf_s(path, 320, L"native\\build\\gallery-%ls.png", context);
+	const bool chartOk = CaptureRectToPng(full, path);
+	wprintf(L"GALLERY %ls FULLCHART %ls\n", context, chartOk ? L"OK" : L"FAIL");
+	return ok && chartOk;
+}
+
 // ============================================================================
 // Cold UX walkthrough runner (v2.6.0 gate; SR-IXC-01..22 / SR-IXC-22).
 //
@@ -1295,6 +1375,10 @@ int wmain(int argc, wchar_t** argv) {
 	for (int i = 1; i < argc; ++i) {
 		if (wcscmp(argv[i], L"--attach") == 0) { attach = true; break; }
 	}
+	bool gallery = false;
+	for (int i = 1; i < argc; ++i) {
+		if (wcscmp(argv[i], L"--gallery") == 0) { gallery = true; break; }
+	}
 	HWND existingPpt = ::FindWindowW(L"PPTFrameClass", nullptr);
 	if (existingPpt && !attach) {
 		wprintf(L"APPBARSHOT REFUSE: PowerPoint already running; close it or pass --attach\n");
@@ -1339,8 +1423,15 @@ int wmain(int argc, wchar_t** argv) {
 			title->GetFill()->PutVisible(Office::msoFalse);
 		}
 
+		PpDocument showcaseDoc = MakeShowcaseDocument();
+		// The gallery has one explicit dependency-selection frame. Keep the
+		// normal harness fixture untouched so existing traces remain byte-for-byte
+		// representative of their established setup.
+		if (gallery) {
+			showcaseDoc.deps.push_back({ "d_gallery_discovery_wireframes", "discovery", "wireframes", "finish-to-start" });
+		}
 		int cnt = 0;
-		HRESULT hr = InsertGantt(app, MakeShowcaseDocument(), &cnt);
+		HRESULT hr = InsertGantt(app, showcaseDoc, &cnt);
 		if (FAILED(hr)) throw _com_error(hr);
 		FitChartRootToSlide(app);
 
@@ -2415,6 +2506,112 @@ int wmain(int argc, wchar_t** argv) {
 
 		Overlay_SetHostActiveOverrideForTest(1);
 		PumpFor(1800); // several 150ms ticks: chart overlay + app bar show + paint
+
+		// --gallery: repeatable U8 visual-review sweep. Each primary PNG is the
+		// full chart context; companion appbar/menu/card PNGs are strict
+		// PrintWindow captures so they cannot hide an overlapping-window defect.
+		if (gallery) {
+			UINT dpi = 96;
+			typedef UINT(WINAPI * GetDpiForWindowFn)(HWND);
+			if (HMODULE user32 = ::GetModuleHandleW(L"user32.dll")) {
+				if (auto getDpiForWindow = (GetDpiForWindowFn)::GetProcAddress(user32, "GetDpiForWindow")) {
+					if (ppHwnd) dpi = getDpiForWindow(ppHwnd);
+				}
+			}
+			wprintf(L"GALLERY DPI %u (%u%%)\n", dpi, (dpi * 100 + 48) / 96);
+			wprintf(L"GALLERY 150PCT SKIPPED: no headless monitor/DPI override is available\n");
+
+			bool galleryOk = true;
+			auto selectContext = [&](const char* kind, const char* id, const wchar_t* name) {
+				Overlay_SelectForTest(kind, id);
+				if (kind && *kind) SelectChartRootNatively(slide);
+				else {
+					try { app->GetActiveWindow()->GetSelection()->Unselect(); } catch (...) {}
+				}
+				PumpFor(500);
+				galleryOk = CaptureGalleryContext(app, name) && galleryOk;
+			};
+
+			selectContext("", "", L"document");
+			selectContext("TASK", "visual", L"task");
+			selectContext("ROW", "research", L"row");
+			selectContext("MILESTONE", "m_ship", L"milestone");
+			selectContext("MARKER", "today", L"marker");
+
+			// Use the real Ctrl+click selection path for the multi-selection frame.
+			Overlay_SelectForTest("", "");
+			try { app->GetActiveWindow()->GetSelection()->Unselect(); } catch (...) {}
+			PumpFor(300);
+			HWND overlay = OverlayHwnd();
+			RECT researchBand{}, designBand{};
+			const char* multiDump = Overlay_DumpChromeStateForTest();
+			bool multiOk = overlay
+				&& ParseRowBandFromDump(multiDump, "research", &researchBand)
+				&& ParseRowBandFromDump(multiDump, "design", &designBand);
+			if (multiOk) {
+				WalkClick(overlay, POINT{ researchBand.left + 40, (researchBand.top + researchBand.bottom) / 2 }, 0);
+				PumpFor(280);
+				WalkClick(overlay, POINT{ designBand.left + 40, (designBand.top + designBand.bottom) / 2 }, MK_CONTROL);
+				PumpFor(350);
+				multiOk = JsonFieldInt(Overlay_DumpChromeStateForTest(), "ownSelCount", 0) == 2;
+			}
+			wprintf(L"GALLERY MULTI %ls\n", multiOk ? L"OK" : L"FAIL");
+			galleryOk = multiOk && CaptureGalleryContext(app, L"multi") && galleryOk;
+
+			selectContext("DEP", "d_gallery_discovery_wireframes", L"dep-link");
+
+			// Settings is document-context only. Its menu owns a strict PrintWindow
+			// companion capture alongside the full-chart frame.
+			Overlay_SelectForTest("", "");
+			try { app->GetActiveWindow()->GetSelection()->Unselect(); } catch (...) {}
+			PumpFor(300);
+			Overlay_ShowSettingsMenuForTest();
+			PumpFor(200);
+			HWND settingsMenu = ThemeMenu_Hwnd();
+			const bool settingsVisible = settingsMenu && ::IsWindowVisible(settingsMenu);
+			wprintf(L"GALLERY SETTINGS MENU %ls\n", settingsVisible ? L"OK" : L"FAIL");
+			galleryOk = settingsVisible && CaptureGalleryContext(app, L"settings", settingsMenu, L"menu") && galleryOk;
+			ThemeMenu_Dismiss();
+			PumpFor(150);
+
+			// The on-slide custom context menu, not the retired ribbon menu.
+			Overlay_SelectForTest("TASK", "wireframes");
+			SelectChartRootNatively(slide);
+			PumpFor(350);
+			POINT taskCenter{};
+			bool contextMenuVisible = false;
+			if (overlay && FindTaskBodyCenter(app, "wireframes", &taskCenter)) {
+				POINT clientPt = taskCenter;
+				::ScreenToClient(overlay, &clientPt);
+				Overlay_ShowContextMenuAtClientForTest(clientPt.x, clientPt.y);
+				PumpFor(200);
+				HWND menu = ThemeMenu_Hwnd();
+				contextMenuVisible = menu && ::IsWindowVisible(menu);
+				galleryOk = contextMenuVisible && CaptureGalleryContext(app, L"context-menu", menu, L"menu") && galleryOk;
+			}
+			wprintf(L"GALLERY CONTEXT MENU %ls\n", contextMenuVisible ? L"OK" : L"FAIL");
+			if (!contextMenuVisible) galleryOk = false;
+			ThemeMenu_Dismiss();
+			PumpFor(150);
+
+			Overlay_SelectForTest("TASK", "visual");
+			SelectChartRootNatively(slide);
+			PumpFor(350);
+			Overlay_PerformAppBarCommandForTest(HtCmd_Edit);
+			PumpFor(350);
+			HWND card = ::FindWindowW(PP_CARD_EDITOR_CLASS, nullptr);
+			const bool cardVisible = card && ::IsWindowVisible(card);
+			wprintf(L"GALLERY CARD %ls\n", cardVisible ? L"OK" : L"FAIL");
+			galleryOk = cardVisible && CaptureGalleryContext(app, L"card", card, L"card") && galleryOk;
+			if (cardVisible) ::PostMessageW(card, WM_KEYDOWN, VK_ESCAPE, 0);
+			PumpFor(150);
+
+			wprintf(galleryOk ? L"GALLERY COMPLETE OK\n" : L"GALLERY COMPLETE FAIL\n");
+			OverlayStop();
+			if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
+			::CoUninitialize();
+			return galleryOk ? 0 : 1;
+		}
 
 		// --matrix: capture the app bar in each selection context so the visuals
 		// can be reviewed (None / task / row / milestone). Uses Overlay_SelectForTest

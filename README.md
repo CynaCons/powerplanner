@@ -20,25 +20,25 @@ It ships as a **single-file portable HTML app** — no install, no account, no s
 
 A native C++ COM add-in (think-cell style) that emits the chart as **real, editable PowerPoint shapes** — not an image — and turns the slide itself into the editor: an input-capturing overlay with its own selection model, drag gestures, scoped keyboard shortcuts, context menus, and a docked contextual **app bar**.
 
-The V4 look — rail label column, hierarchical two-band date header, Material bars with blended tracks, milestones, brackets, dependency elbows, today/deadline markers:
+The on-slide view — rail label column, hierarchical two-band date header, Material bars with blended tracks, milestones, dependency elbows, and today/deadline markers:
 
-![Native on-slide Gantt, V4 look](docs/media/native-v4-chart.png)
+![Native on-slide Gantt with creation guidance](docs/media/native-v5-chart.png)
 
 The app bar follows your selection. Select a **task** and you get color swatches, ±1d nudges, label placement, linking, and notes (shown here over the live slide):
 
-![App bar — task selected, over the live slide](docs/media/native-v4-task-context.png)
+![App bar — task selected, over the live slide](docs/media/native-v5-taskbar.png)
 
 Select a **row** by clicking its name in the rail — add above/below, reorder, indent/outdent, rename, delete (with full cascade):
 
-![App bar — row selected](docs/media/native-v4-appbar-row.png)
+![App bar — row selected](docs/media/native-v5-rowbar.png)
 
 Select a **milestone** — nudge its date, rename, note, delete:
 
-![App bar — milestone selected](docs/media/native-v4-appbar-milestone.png)
+![App bar — milestone selected](docs/media/native-v5-milestonebar.png)
 
-With **nothing selected**, the bar offers inserts (task / milestone / marker / note), the time scale, labels, and grid density:
+With **nothing selected**, the bar offers inserts (task / milestone / marker / note), the time scale, and display settings:
 
-![App bar — no selection](docs/media/native-v4-appbar-none.png)
+![App bar — document settings](docs/media/native-v5-settings.png)
 
 Every gesture and command is one undo entry, every command also lives in the right-click menus (derived from the same command registry as the app bar), and dragging a bar reflows dates with dependencies and the embedded data kept in sync:
 

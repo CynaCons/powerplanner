@@ -1,0 +1,9 @@
+{
+  "name": "gallery_matrix",
+  "description": "U8 cohesion gallery: capture document, task, row, milestone, marker, multi-row, dependency, settings, menu, and card contexts. Primary gallery-<context>.png frames are full chart contexts; companion appbar/menu/card PNGs require PrintWindow success.",
+  "exe": "ppappbarshot",
+  "args": ["--gallery"],
+  "timeout": 120,
+  "retries": 1,
+  "expected_markers": ["GALLERY COMPLETE OK"]
+}

@@ -295,6 +295,11 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - **M6:** Alt+click/grip escape-hatch is undiscoverable AND opens a 150ms suppression race where native Delete can desync shapes from PP_DOC.
 - **N1:** dates are free-text with no format hint or picker (red wash only). **N2:** creation entry points offer inconsistent element sets/placement. **N3:** "Pull from slide"/"Reflow" jargon at equal prominence with Insert. **N4:** no keyboard access path (no focus, no Tab). **N5:** only interactivity cue is a hover chip naming the add-in, not an action.
 
+## New findings from the v2.6.8 closing review (2026-07-12)
+- **UF-13:** dependency labels/tooltips render 'Discovery ? Wireframes' — the arrow glyph dies in a code-page conversion (C4566); use a plain '->' or write the glyph via wide-char APIs end-to-end.
+- **UF-14:** link-mode captures can show native PowerPoint grips overlapping our chrome after slow-path reconciles (the reconcile re-select) — revisit whether the slow path still needs the native child re-select now that the suppression sink exists.
+- **Harness-only:** full-chart screen captures in multi-overlay harness runs can composite one frame of the standing-down add-in's bar (PrintWindow strips are authoritative; fail-closed stand-down shipped, artifact may still appear in the first frame).
+
 ## User feedback register — round 2 (UF, 2026-07-11)
 - **UF-01:** dragging a task in its row is THE way to change dates; while dragging, show a live indicator (pill) of the start/end dates being dropped to.
 - **UF-02:** defect — task drag leaves a stale leftover shape behind (likely the progress fill).
@@ -382,12 +387,12 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] E2E: trace_scale_settings PASS (popover capture, gridDensity=week, axisNumbering=cw with 'CW 23' axis label verified, rail toggle, persistence round-trip)
 
 ### v2.6.8 - Iteration U8: Cohesion, Architecture & Spec Migration (absorbs v2.5.5 arch items + #5 remainder)
-- [ ] M2: remove dead ContextMenuShape ribbon-XML items (or scope them to actual chart selection)
-- [ ] N3: demote/relabel "Pull from slide"/"Reflow" (plain-language tooltips; secondary placement)
-- [ ] N5: interactivity affordance — hover cue suggests the action (e.g. "double-click to edit") instead of naming the add-in
+- [x] M2: dead ContextMenuShape ribbon-XML removed (overlay owns chart context menus); ribbon tab kept
+- [x] N3: 'Pull from slide' -> 'Import from slide', 'Reflow' -> 'Repair layout' + plain-language supertips, secondary placement
+- [x] N5: idle chip now reads 'PowerPlanner — click a bar to edit'; empty-cell cue teaches drag/double-click/Alt+double-click/right-click
 - [ ] Spec migration remainder: convert 6 docs/SRS_*.md prose files → spec/srs-native tables (fold SRS_ProgressEditing into selection/task SRS); reformat SRS_InteractionSmoothness.md to tables + rename to hyphen convention; move/alias spec/srs/SRS-powerpoint.md under srs-native; archive docs/on-slide-ux-plan.md (repoint onslide-coordinator skill) + docs/powerpoint-addin.md; bulk ref sweep
 - [ ] Overlay.cpp Tier-B split (OverlayState.h + .inc.h extractions) — from v2.5.5
-- [ ] Full screenshot matrix (contexts × 100/150% DPI) + README/site gallery refresh + web↔native parity pass — from v2.5.5
+- [x] Screenshot matrix (gallery_matrix scenario, 10 contexts, PrintWindow-true bar/menu/card strips) + README refreshed to native-v5-* captures (bar strips are PrintWindow-true; display was 200% DPI — 100/150% sweep not available headlessly). Web<->native parity pass still open below
 - [ ] Close the program: full user-journey walkthrough (insert → build plan → present) + summary report
 
 ### v2.4.4 - Installer + Packaging (deferred)

@@ -311,7 +311,7 @@ struct DragCommitEcho {
 };
 DragCommitEcho g_dragCommitEcho;
 
-std::wstring g_badge = L"PowerPlanner";
+std::wstring g_badge = L"PowerPlanner \x2014 click a bar to edit";
 RECT g_buttonRects[BUTTON_COUNT] = {};
 RECT g_frameRect = {};
 RECT g_chartScreenRect = {};
@@ -4734,7 +4734,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		PaintPositionedHintPill(g, emptyCellHint);
 	}
 
-	// Hover-only "PowerPlanner" chip (SR-CHR-02): top-edge band, no selection active.
+	// Hover-only action cue (SR-CHR-02): top-edge band, no selection active.
 	if (g_ownSelKind.empty() && !g_hasSelectionChrome && !::IsRectEmpty(&g_chartScreenRect)) {
 		POINT pt = {};
 		if (OverlayGetCursorPos(&pt)) {
@@ -7253,7 +7253,11 @@ void Tick() {
 				return ::_wcsicmp(base, L"POWERPNT.EXE") == 0;
 			}();
 			static int s_harnessCheckTick = 0;
-			static bool s_harnessPresentation = false;
+			// FAIL CLOSED: until a tag read SUCCEEDS and proves this is a real
+			// user presentation, show nothing. A startup-flake throw used to
+			// fail open, and the add-in's bar photobombed one frame of every
+			// harness capture; a real user merely sees chrome one tick later.
+			static bool s_harnessPresentation = true;
 			if (s_isPowerPntProcess) {
 				if ((s_harnessCheckTick & 63) == 0) {
 					try {
@@ -7262,9 +7266,7 @@ void Tick() {
 						s_harnessPresentation = tag.length() && ::wcscmp((const wchar_t*)tag, L"1") == 0;
 						++s_harnessCheckTick; // cache only after a SUCCESSFUL read
 					} catch (...) {
-						// Startup COM flake: retry next tick instead of caching
-						// "not harness" for ~10s (the bar would photobomb runs).
-						s_harnessPresentation = false;
+						s_harnessPresentation = true; // unknown = stand down; retry next tick
 					}
 				} else {
 					++s_harnessCheckTick;
