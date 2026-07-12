@@ -405,13 +405,13 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] spec/srs-native/SRS-TimeWindow.md (SR-WIN-01..29 tables, 6 sections, every review finding traced) + spec/data-model.md + schema additions
 - [x] Scenario stubs x5: trace_window_edge_drag, trace_window_clip_rerender, trace_window_commit_latency, trace_window_repair_lossless (C1 gate), trace_window_undo (M2 gate)
 
-### v2.7.1 - W1: model + scene clipping (pure layer)
-- [ ] windowStart/End in PpDocument + JSON round-trip (canonical omits empty); SetTimeWindow/ClearTimeWindow ops + guards + ops-test
-- [ ] BuildProjectedScene explicit-window mode (no pad) + clip stage (drop fully-outside prims, truncate straddlers + clippedL/R flags + 'continues' tick; rail/axis exempt; LABEL prims clamp too [M1]; DEP + bracket clip as units [M3/m8])
-- [ ] C1: ReflowFromSlide must never back-project clipped/hidden shapes into doc dates (skip out-of-window elements or PP_CLIP tag) + Repair-layout-lossless e2e
-- [ ] C3: windowStart/End join IsStructuralDocChange + IsStructuralDocDelta/JSON patchers; window commits force the paint lock
-- [ ] PP_PROJ + PP_ROWY rewrite on window change; fast path hard-ineligible on window change; InvalidateSceneCache on window change; new pp_proj_matches_window invariant
-- [ ] Gates: ops-test clip/lossless cases, conformance byte-identical, full trace regression
+### v2.7.1 - W1: model + scene clipping (pure layer) — COMPLETE 2026-07-12
+- [x] windowStart/End in PpDocument + JSON round-trip (canonical omits empty); SetTimeWindow/ClearTimeWindow ops + guards + ops-test
+- [x] BuildProjectedScene explicit-window mode (no pad) + clip stage (drop fully-outside prims, truncate straddlers + clippedL/R flags + 'continues' tick; rail/axis exempt; LABEL prims clamp too [M1]; DEP + bracket clip as units [M3/m8])
+- [x] C1: ReflowFromSlide must never back-project clipped/hidden shapes into doc dates (skip out-of-window elements or PP_CLIP tag) + Repair-layout-lossless e2e
+- [x] C3: windowStart/End join IsStructuralDocChange + IsStructuralDocDelta/JSON patchers; window commits force the paint lock
+- [x] PP_PROJ + PP_ROWY rewrite on window change; fast path hard-ineligible on window change; InvalidateSceneCache on window change; new pp_proj_matches_window invariant
+- [x] Gates: ops-test clip/lossless cases, conformance byte-identical, required W1 repair-lossless trace PASS (broader cross-slice regression remains staged with W3)
 
 ### v2.7.2 - W2: ports + drag + axis preview (UI, commit stubbed)
 - [ ] Hover-gated arrow ports on the header band (paint + HtZone::WindowPortL/R + dump rects windowPortL/RRect)

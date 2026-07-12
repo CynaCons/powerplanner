@@ -52,6 +52,12 @@ bool SetTaskDates(PpDocument& doc, const std::string& taskId, const std::string&
 bool SetTitle(PpDocument& doc, const std::string& title);
 bool SetEntityLabel(PpDocument& doc, const std::string& id, const std::string& label);
 bool SetScale(PpDocument& doc, const std::string& scale);
+// Store an explicit visible window. Dates must be canonical ISO YYYY-MM-DD,
+// span at least one visible scale unit, and stay within the scale-dependent
+// axis-major emission cap. No gesture snapping happens here.
+bool SetTimeWindow(PpDocument& doc, const std::string& startISO, const std::string& endISO);
+// Restore legacy auto-fit projection. Always succeeds.
+bool ClearTimeWindow(PpDocument& doc);
 // Sets a task's bar color (hex string, e.g. "#4472c4"); empty string clears
 // back to the renderer's default theme color. Returns false if taskId is not
 // a task (mirrors SetTaskDates/SetTaskPercent's not-found semantics).

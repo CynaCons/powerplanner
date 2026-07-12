@@ -54,6 +54,9 @@ struct PpDocument {
 	// Bottom axis label numbering: "day" (the backward-compatible default) |
 	// "cw" (ISO calendar-week numbers). The canonical JSON omits "day".
 	std::string axisNumbering = "day";
+	// Explicit visible time window. Empty fields preserve the legacy auto-fit
+	// projection. Canonical JSON omits either empty field.
+	std::string windowStart, windowEnd;
 	// Bottom-tier tick style: "" = solid | solid | dotted.
 	std::string gridStyle;
 	std::vector<PpRow> rows;

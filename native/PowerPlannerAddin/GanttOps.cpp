@@ -2,6 +2,7 @@
 #include "GanttLayout.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <string>
 
 namespace {
@@ -296,6 +297,58 @@ bool SetGridDensity(PpDocument& doc, const std::string& density) {
 	return true;
 }
 
+bool IsLeapYear(int year) {
+	return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+int DaysInMonth(int year, int month) {
+	static const int kDays[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+	if (month < 1 || month > 12) return 0;
+	return month == 2 && IsLeapYear(year) ? 29 : kDays[month - 1];
+}
+
+bool ParseIsoDate(const std::string& iso, int* year, int* month, int* day) {
+	if (iso.size() != 10 || iso[4] != '-' || iso[7] != '-') return false;
+	for (size_t i = 0; i < iso.size(); ++i) {
+		if (i == 4 || i == 7) continue;
+		if (iso[i] < '0' || iso[i] > '9') return false;
+	}
+	int y = 0, m = 0, d = 0;
+	if (::sscanf_s(iso.c_str(), "%4d-%2d-%2d", &y, &m, &d) != 3) return false;
+	if (m < 1 || m > 12 || d < 1 || d > DaysInMonth(y, m)) return false;
+	if (year) *year = y;
+	if (month) *month = m;
+	if (day) *day = d;
+	return true;
+}
+
+std::string AddCalendarMonths(const std::string& iso, int months) {
+	int year = 0, month = 0, day = 0;
+	if (!ParseIsoDate(iso, &year, &month, &day)) return "";
+	const int absoluteMonth = year * 12 + (month - 1) + months;
+	year = absoluteMonth / 12;
+	month = absoluteMonth % 12 + 1;
+	day = std::min(day, DaysInMonth(year, month));
+	char out[16];
+	::sprintf_s(out, "%04d-%02d-%02d", year, month, day);
+	return out;
+}
+
+long MinimumWindowSpanDays(const std::string& startISO, const std::string& scale) {
+	if (scale == "week") return 7;
+	if (scale == "month") return DateToDays(AddCalendarMonths(startISO, 1)) - DateToDays(startISO);
+	if (scale == "quarter") return DateToDays(AddCalendarMonths(startISO, 3)) - DateToDays(startISO);
+	if (scale == "year") return DateToDays(AddCalendarMonths(startISO, 12)) - DateToDays(startISO);
+	return 1; // day, and the defensive fallback for legacy/unknown docs
+}
+
+long MaximumWindowEndDay(const std::string& startISO, const std::string& scale) {
+	// AXIS_MAJOR is monthly at day/week scale and yearly at month/quarter/year
+	// scale. Keep the generated major-boundary count at roughly 130.
+	const int maxMonths = (scale == "day" || scale == "week") ? 130 : 130 * 12;
+	return DateToDays(AddCalendarMonths(startISO, maxMonths));
+}
+
 bool SetAxisNumbering(PpDocument& doc, const std::string& numbering) {
 	std::string v = numbering.empty() ? "day" : numbering;
 	if (v != "day" && v != "cw") return false;
@@ -475,6 +528,30 @@ bool SetScale(PpDocument& doc, const std::string& scale) {
 	return true;
 }
 
+bool SetTimeWindow(PpDocument& doc, const std::string& startISO, const std::string& endISO) {
+	if (!ParseIsoDate(startISO, nullptr, nullptr, nullptr) || !ParseIsoDate(endISO, nullptr, nullptr, nullptr)) return false;
+	const long startDay = DateToDays(startISO);
+	const long endDay = DateToDays(endISO);
+	const long minSpan = MinimumWindowSpanDays(startISO, doc.scale);
+	if (endDay - startDay < minSpan) return false;
+	if (endDay > MaximumWindowEndDay(startISO, doc.scale)) return false;
+	doc.windowStart = startISO;
+	doc.windowEnd = endISO;
+	return true;
+}
+
+bool ClearTimeWindow(PpDocument& doc) {
+	doc.windowStart.clear();
+	doc.windowEnd.clear();
+	return true;
+}
+
 int OpsSelfTest() {
+	PpDocument doc;
+	doc.scale = "day";
+	if (!SetTimeWindow(doc, "2026-01-01", "2026-01-02")) return 1;
+	if (doc.windowStart != "2026-01-01" || doc.windowEnd != "2026-01-02") return 2;
+	if (SetTimeWindow(doc, "2026-02-30", "2026-03-02")) return 3;
+	if (!ClearTimeWindow(doc) || !doc.windowStart.empty() || !doc.windowEnd.empty()) return 4;
 	return 0;
 }

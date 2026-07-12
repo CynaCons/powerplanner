@@ -37,6 +37,8 @@ std::string DocumentToJson(const PpDocument& d) {
 	if (d.railLabels) j["railLabels"] = true;
 	if (!d.gridDensity.empty()) j["gridDensity"] = d.gridDensity;
 	if (d.axisNumbering == "cw") j["axisNumbering"] = "cw";
+	if (!d.windowStart.empty()) j["windowStart"] = d.windowStart;
+	if (!d.windowEnd.empty()) j["windowEnd"] = d.windowEnd;
 	if (!d.gridStyle.empty()) j["gridStyle"] = d.gridStyle;
 
 	j["rows"] = json::array();
@@ -100,6 +102,7 @@ static bool IsStructuralDocDelta(const PpDocument& before, const PpDocument& aft
 	if (before.scale != after.scale) return true;
 	if (before.gridDensity != after.gridDensity) return true;
 	if (before.axisNumbering != after.axisNumbering) return true;
+	if (before.windowStart != after.windowStart || before.windowEnd != after.windowEnd) return true;
 	if (before.title != after.title) return true;
 	if (before.railLabels != after.railLabels) return true;
 	if (before.gridStyle != after.gridStyle) return true;
@@ -243,6 +246,8 @@ PpDocument DocumentFromJson(const std::string& jsonStr) {
 	doc.gridDensity = getStr(d, "gridDensity");
 	doc.axisNumbering = getStr(d, "axisNumbering");
 	if (doc.axisNumbering != "cw") doc.axisNumbering = "day";
+	doc.windowStart = getStr(d, "windowStart");
+	doc.windowEnd = getStr(d, "windowEnd");
 	doc.gridStyle = getStr(d, "gridStyle");
 	for (const auto& r : d.value("rows", json::array())) {
 		PpRow row;

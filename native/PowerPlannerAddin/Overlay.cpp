@@ -6248,6 +6248,7 @@ static bool IsStructuralDocChange(const PpDocument& before, const PpDocument& af
 	if (before.scale != after.scale) return true;
 	if (before.gridDensity != after.gridDensity) return true;
 	if (before.axisNumbering != after.axisNumbering) return true;
+	if (before.windowStart != after.windowStart || before.windowEnd != after.windowEnd) return true;
 	if (before.railLabels != after.railLabels) return true;
 	return false;
 }
@@ -7843,6 +7844,15 @@ const char* Overlay_DumpChromeStateForTest() {
 	const std::string axisNumbering = haveSettingsDoc && settingsDoc.axisNumbering == "cw"
 		? "cw" : "day";
 	const bool railLabels = haveSettingsDoc && settingsDoc.railLabels;
+	std::string docDatesSignature;
+	if (haveSettingsDoc) {
+		for (const auto& task : settingsDoc.tasks)
+			docDatesSignature += task.id + ":" + task.start + ":" + task.end + ";";
+		for (const auto& milestone : settingsDoc.milestones)
+			docDatesSignature += milestone.id + ":" + milestone.date + ";";
+	}
+	PpProj dumpProj;
+	const bool haveDumpProj = ParseProj(g_chartProj, &dumpProj);
 	std::string firstAxisLabel;
 	if (axisNumbering == "cw" && (g_lastScale == "week" || g_lastScale == "day")) {
 		PpProj proj;
@@ -7862,6 +7872,19 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"gridDensity\":\"" + gridDensity + "\",";
 	s += "\"axisNumbering\":\"" + axisNumbering + "\",";
 	s += "\"railLabels\":" + std::string(railLabels ? "true" : "false") + ",";
+	s += "\"windowStart\":\"" + (haveSettingsDoc ? settingsDoc.windowStart : "") + "\",";
+	s += "\"windowEnd\":\"" + (haveSettingsDoc ? settingsDoc.windowEnd : "") + "\",";
+	s += "\"docDatesSignature\":\"" + docDatesSignature + "\",";
+	if (haveDumpProj) {
+		s += "\"ppProj\":{\"minDay\":" + std::to_string(dumpProj.minDay)
+			+ ",\"pad\":" + std::to_string(dumpProj.pad)
+			+ ",\"ptPerDay\":" + std::to_string(dumpProj.ptPerDay)
+			+ ",\"originX\":" + std::to_string(dumpProj.originX)
+			+ ",\"chartLeftPt\":" + std::to_string(g_chartLeftPt)
+			+ ",\"chartWidthPt\":" + std::to_string(g_chartWidthPt) + "},";
+	} else {
+		s += "\"ppProj\":{},";
+	}
 	s += "\"firstAxisLabel\":\"" + firstAxisLabel + "\",";
 	s += "\"chartRect\":{\"left\":" + std::to_string(g_chartScreenRect.left) + ",\"top\":" + std::to_string(g_chartScreenRect.top) + ",\"right\":" + std::to_string(g_chartScreenRect.right) + ",\"bottom\":" + std::to_string(g_chartScreenRect.bottom) + "},";
 	s += "\"selScreenRect\":{\"left\":" + std::to_string(g_selScreenRect.left) + ",\"top\":" + std::to_string(g_selScreenRect.top) + ",\"right\":" + std::to_string(g_selScreenRect.right) + ",\"bottom\":" + std::to_string(g_selScreenRect.bottom) + "},";

@@ -12,6 +12,7 @@
 #include "../PowerPlannerAddin/GanttBuilder.h"
 #include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttModel.h"
+#include "../PowerPlannerAddin/GanttOps.h"
 #include "../PowerPlannerAddin/Overlay.h"
 #include "../PowerPlannerAddin/ThemeMenu.h"
 #include "../PowerPlannerAddin/GanttHitTest.h"
@@ -1865,6 +1866,67 @@ int wmain(int argc, wchar_t** argv) {
 					::CoUninitialize();
 					return 1;
 				}
+			} else if (traceProfile && wcscmp(traceProfile, L"window-repair-lossless") == 0) {
+				// W1 / SR-WIN-21 proof: apply a narrow explicit window directly through
+				// the pure op, then exercise BOTH Repair layout and FitChartRootToFrame
+				// (which defensively calls ReflowFromSlide). The fields dumped at every
+				// step let harness_driver verify PP_DOC dates byte-for-byte and PP_PROJ.
+				auto datesSignature = [](const PpDocument& doc) {
+					std::string out;
+					for (const auto& task : doc.tasks) out += task.id + ":" + task.start + ":" + task.end + ";";
+					for (const auto& milestone : doc.milestones) out += milestone.id + ":" + milestone.date + ";";
+					return out;
+				};
+				auto findChartRoot = [&]() -> PowerPoint::ShapePtr {
+					try {
+						PowerPoint::ShapesPtr shapes = slide->GetShapes();
+						for (long i = 1; i <= shapes->GetCount(); ++i) {
+							PowerPoint::ShapePtr candidate = shapes->Item(_variant_t(i));
+							_bstr_t kind = candidate->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							if (kind.length() && std::string((const char*)_bstr_t(kind)) == "CHART_ROOT") return candidate;
+						}
+					} catch (...) {}
+					return nullptr;
+				};
+
+				PpDocument before = DocumentFromJson(ReadGanttFromSlide(app));
+				const std::string datesBefore = datesSignature(before);
+				PpDocument windowed = before;
+				const bool setOk = SetTimeWindow(windowed, "2026-06-15", "2026-07-15");
+				const HRESULT setHr = setOk ? UpdateGantt(app, windowed) : E_FAIL;
+				PumpFor(350);
+				captureStep("window", traceProfile);
+
+				bool repairChanged = true;
+				const HRESULT repairHr = SUCCEEDED(setHr) ? ReflowFromSlide(app, &repairChanged) : E_FAIL;
+				const bool repairDatesOk = SUCCEEDED(repairHr)
+					&& datesSignature(DocumentFromJson(ReadGanttFromSlide(app))) == datesBefore;
+				PumpFor(250);
+				captureStep("repair", traceProfile);
+
+				HRESULT resizeHr = E_FAIL;
+				if (PowerPoint::ShapePtr root = findChartRoot()) {
+					resizeHr = FitChartRootToFrame(app, root->GetLeft() + 12.0f, root->GetTop() + 8.0f,
+						root->GetWidth() * 0.94f, root->GetHeight() * 0.94f);
+				}
+				const bool resizeDatesOk = SUCCEEDED(resizeHr)
+					&& datesSignature(DocumentFromJson(ReadGanttFromSlide(app))) == datesBefore;
+				PumpFor(300);
+				captureStep("resize", traceProfile);
+
+				PpDocument cleared = DocumentFromJson(ReadGanttFromSlide(app));
+				const bool clearOk = ClearTimeWindow(cleared);
+				const HRESULT clearHr = clearOk ? UpdateGantt(app, cleared) : E_FAIL;
+				const bool clearDatesOk = SUCCEEDED(clearHr)
+					&& datesSignature(DocumentFromJson(ReadGanttFromSlide(app))) == datesBefore;
+				PumpFor(300);
+				captureStep("cleared", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+				wprintf(setOk && SUCCEEDED(setHr) && repairDatesOk && resizeDatesOk && clearDatesOk
+					? L"WINDOW REPAIR LOSSLESS OK\n" : L"WINDOW REPAIR LOSSLESS FAIL\n");
 			} else if (traceProfile && wcscmp(traceProfile, L"task-nudge-latency") == 0) {
 				// i4b-latency-traces (v2.5.3, SR-SMO-02) §2: select TASK t1 (showcase
 				// doc has no literal t1; same "discovery" substitution as

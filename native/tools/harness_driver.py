@@ -37,7 +37,7 @@ import sys
 import time
 from ctypes import wintypes
 from dataclasses import dataclass, asdict, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -914,6 +914,77 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             ),
         })
 
+    if profile == "window-repair-lossless":
+        # W1 / SR-WIN-21: setting a window, Repair layout, and a fitted resize
+        # must not mutate any document date. The trace emits one exact signature
+        # over every task/milestone date and keeps it observable after Clear.
+        by_step = {s.step: s.state for s in steps}
+        pre_signature = str(by_step.get("pre", {}).get("docDatesSignature", ""))
+        repair_steps = ("pre", "window", "repair")
+        resize_steps = ("pre", "window", "repair", "resize", "cleared", "+1", "+3")
+
+        def _dates_match(names: tuple[str, ...]) -> bool:
+            return bool(pre_signature) and all(
+                str(by_step.get(name, {}).get("docDatesSignature", "")) == pre_signature
+                for name in names
+            )
+
+        repair_ok = _dates_match(repair_steps)
+        resize_ok = _dates_match(resize_steps)
+        results.append({
+            "rule": "window_repair_doc_byte_identical",
+            "passed": repair_ok,
+            "detail": f"steps={repair_steps}; baseline={pre_signature!r}",
+        })
+        results.append({
+            "rule": "window_resize_doc_byte_identical",
+            "passed": resize_ok,
+            "detail": f"steps={resize_steps}; baseline={pre_signature!r}",
+        })
+
+        proj_details: List[str] = []
+        proj_ok = True
+        projection_steps = ("window", "repair", "resize")
+        if not all(name in by_step for name in projection_steps):
+            proj_ok = False
+            proj_details.append("missing explicit-window trace step")
+        for name in projection_steps:
+            state = by_step.get(name, {})
+            start = state.get("windowStart")
+            end = state.get("windowEnd")
+            proj = state.get("ppProj") or {}
+            try:
+                start_day = (date.fromisoformat(str(start)) - date(1970, 1, 1)).days
+                end_day = (date.fromisoformat(str(end)) - date(1970, 1, 1)).days
+                span_days = end_day - start_day + 1
+                min_day = int(proj.get("minDay"))
+                pad = int(proj.get("pad"))
+                pt_per_day = float(proj.get("ptPerDay"))
+                origin_x = float(proj.get("originX"))
+                chart_right = float(proj.get("chartLeftPt")) + float(proj.get("chartWidthPt"))
+                expected_pt_per_day = (chart_right - origin_x) / span_days
+                tolerance = max(0.02, abs(expected_pt_per_day) * 0.002)
+                step_ok = (
+                    bool(start and end)
+                    and min_day == start_day
+                    and pad == 0
+                    and span_days > 0
+                    and abs(pt_per_day - expected_pt_per_day) <= tolerance
+                )
+                proj_ok = proj_ok and step_ok
+                proj_details.append(
+                    f"{name}: min={min_day}/{start_day} pad={pad} "
+                    f"ppd={pt_per_day:.4f}/{expected_pt_per_day:.4f}"
+                )
+            except (TypeError, ValueError, OverflowError):
+                proj_ok = False
+                proj_details.append(f"{name}: malformed window/projection state")
+        results.append({
+            "rule": "pp_proj_matches_window",
+            "passed": proj_ok,
+            "detail": "; ".join(proj_details),
+        })
+
     if profile in ("task-nudge-latency", "task-color-latency"):
         # i4b-latency-traces (v2.5.3, SR-SMO-02) §3: selection must stay TASK
         # across the whole flow -- nudge/color are single-element ops that
@@ -1642,7 +1713,10 @@ if __name__ == "__main__":
     p_g.add_argument("--update", action="store_true")
 
     p_tr = sub.add_parser("trace", help="Run operation trace for continuity monitoring (v2.4.0)")
-    p_tr.add_argument("profile", help="e.g. row-add-below, row-rename, row-scale, task-nudge-latency, task-color-latency")
+    p_tr.add_argument("profile", nargs="?", help="e.g. row-add-below, row-rename, row-scale, task-nudge-latency, task-color-latency")
+    # Keep the established positional form and accept the explicit spelling
+    # used by profile-gated commands in SRS/PLAN instructions.
+    p_tr.add_argument("--profile", dest="profile_opt")
     p_tr.add_argument("--retries", type=int, default=1)
     p_tr.add_argument("--check-invariants", action="store_true")
 
@@ -1674,10 +1748,15 @@ if __name__ == "__main__":
         print(json.dumps(res, indent=2))
         sys.exit(0 if res.get("match") else 1)
     elif args.cmd == "trace":
-        tr = run_operation_trace(args.profile, retries=args.retries)
+        profile = args.profile_opt or args.profile
+        if not profile:
+            p_tr.error("trace requires a profile (positional or --profile NAME)")
+        tr = run_operation_trace(profile, retries=args.retries)
         invs = []
-        if args.check_invariants:
-            invs = check_trace_invariants(tr, args.profile)
+        # The W1 C1 trace is itself a required invariant proof, not an optional
+        # continuity diagnostic; run its profile rules for the prescribed CLI.
+        if args.check_invariants or profile == "window-repair-lossless":
+            invs = check_trace_invariants(tr, profile)
             tr.invariants = invs
         print(tr.to_json())
         # exit non-zero on any failing invariant or bad status

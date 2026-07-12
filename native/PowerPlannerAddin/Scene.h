@@ -32,6 +32,10 @@ struct Prim {
 	std::wstring text;
 	Style style;
 	std::string tagKind, tagId;        // PP_KIND / PP_ID (empty = untagged)
+	// Set by the explicit time-window scene filter when this primitive touches a
+	// window boundary. The renderer keeps these as scene metadata; continuation
+	// glyphs are separate, non-interactive prims.
+	bool clippedL = false, clippedR = false;
 };
 
 struct Scene { std::vector<Prim> prims; };

@@ -11,5 +11,5 @@
     "window_resize_doc_byte_identical",
     "pp_proj_matches_window"
   ],
-  "expected_trace_steps": ["pre", "repair", "resize", "+1", "+3"]
+  "expected_trace_steps": ["pre", "window", "repair", "resize", "cleared", "+1", "+3"]
 }

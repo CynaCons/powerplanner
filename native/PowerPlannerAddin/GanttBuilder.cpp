@@ -233,6 +233,9 @@ static std::string g_cacheDocJson;
 // copy this out via Gantt_TryGetCachedDoc to skip a PP_DOC tag read + parse.
 static PpDocument g_cacheDoc;
 static std::string g_cacheMinD, g_cacheMaxD;
+// Window equality is part of projection/cache identity. A window delta changes
+// minDay/ptPerDay even when every item id and scene key remains stable.
+static std::string g_cacheWinStart, g_cacheWinEnd;
 static long g_cachePad = 0;
 static float g_cachePtPerDay = 0.0f;
 // Slide width in points, cached per Application (constant unless page setup
@@ -297,6 +300,8 @@ static void InvalidateSceneCache() {
 	g_cacheDoc = PpDocument{};
 	g_cacheMinD.clear();
 	g_cacheMaxD.clear();
+	g_cacheWinStart.clear();
+	g_cacheWinEnd.clear();
 	g_cachePad = 0;
 	g_cachePtPerDay = 0.0f;
 	g_cacheSlideWApp = nullptr;
@@ -357,6 +362,7 @@ static bool PrimKeysFastPathEqual(const Scene& a, const Scene& b) {
 static bool PrimVisualFieldsEqual(const Prim& a, const Prim& b) {
 	if (a.kind != b.kind) return false;
 	if (a.x != b.x || a.y != b.y || a.w != b.w || a.h != b.h || a.x2 != b.x2 || a.y2 != b.y2) return false;
+	if (a.clippedL != b.clippedL || a.clippedR != b.clippedR) return false;
 	if (a.text != b.text) return false;
 	const Style& sa = a.style, sb = b.style;
 	return sa.fill == sb.fill && sa.fillBgr == sb.fillBgr
@@ -474,6 +480,8 @@ static void CommitSceneCache(PowerPoint::ShapePtr group, const Scene& sc, const 
 	g_cacheGroup = group;
 	g_cacheMinD = minD;
 	g_cacheMaxD = maxD;
+	g_cacheWinStart = doc.windowStart;
+	g_cacheWinEnd = doc.windowEnd;
 	g_cachePad = pad;
 	g_cachePtPerDay = ptPerDay;
 	try {
@@ -492,7 +500,23 @@ static void CommitSceneCache(PowerPoint::ShapePtr group, const Scene& sc, const 
 
 static bool BuildSceneForUpdate(const PpDocument& doc, float slideW, Scene* outScene,
 	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
+	// SetTimeWindow/ClearTimeWindow are pure model ops. This is their builder
+	// invalidation point: both deltas must discard the old projection before any
+	// cache/frozen-window shortcut can observe it.
+	if (g_sceneCacheValid && (doc.windowStart != g_cacheWinStart || doc.windowEnd != g_cacheWinEnd))
+		InvalidateSceneCache();
 	if (g_sceneCacheValid && !g_cacheMinD.empty() && !g_cacheMaxD.empty()
+		&& HasExplicitTimeWindow(doc)
+		&& doc.windowStart == g_cacheWinStart && doc.windowEnd == g_cacheWinEnd) {
+		*outMinD = g_cacheMinD;
+		*outMaxD = g_cacheMaxD;
+		*outPad = g_cachePad;
+		*outPtPerDay = g_cachePtPerDay;
+		return BuildSceneWithProjection(doc, slideW, outScene, *outMinD, *outMaxD, *outPad, *outPtPerDay);
+	}
+	if (g_sceneCacheValid && !g_cacheMinD.empty() && !g_cacheMaxD.empty()
+		&& !HasExplicitTimeWindow(doc)
+		&& g_cacheWinStart.empty() && g_cacheWinEnd.empty()
 		&& DocDatesFitPaddedWindow(doc, g_cacheMinD, g_cacheMaxD, g_cachePad)) {
 		*outMinD = g_cacheMinD;
 		*outMaxD = g_cacheMaxD;
@@ -543,6 +567,9 @@ static bool TryApplySceneDiffFast(PowerPoint::ShapePtr group, const PpDocument& 
 	const std::string& minD, const std::string& maxD, long pad, float ptPerDay,
 	const std::string& selectId, float slideW) {
 	try {
+		// A window commit changes PP_PROJ + PP_ROWY; this fast path only writes
+		// PP_DOC. Refuse before any scene/key work even if all item keys match.
+		if (doc.windowStart != g_cacheWinStart || doc.windowEnd != g_cacheWinEnd) return false;
 		// Scene-union bounds (pure C++). When the new scene's natural bounds
 		// differ from the old (e.g. a drag ends a lane overlap and rows
 		// re-pack), the child Y-writes below would move/resize the CHART_ROOT
@@ -1446,6 +1473,12 @@ HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 		std::string changedId;
 
 		for (auto& t : doc.tasks) {
+			// Under an explicit window, a clipped or hidden bar is not a geometry
+			// source of truth. Back-projecting it would rewrite the task to the
+			// visible span when Repair layout/FitChartRootToFrame calls this path.
+			if (HasExplicitTimeWindow(doc)
+				&& (DateToDays(t.start) < DateToDays(doc.windowStart) || DateToDays(t.end) > DateToDays(doc.windowEnd)))
+				continue;
 			auto it = pos.find(t.id);
 			if (it == pos.end()) continue;
 			const float left = it->second.first, width = it->second.second;
@@ -1462,6 +1495,9 @@ HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged) {
 		}
 
 		for (auto& ms : doc.milestones) {
+			if (HasExplicitTimeWindow(doc)
+				&& (DateToDays(ms.date) < DateToDays(doc.windowStart) || DateToDays(ms.date) > DateToDays(doc.windowEnd)))
+				continue;
 			auto it = posMilestone.find(ms.id);
 			if (it == posMilestone.end()) continue;
 			const float left = it->second;

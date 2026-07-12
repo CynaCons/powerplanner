@@ -628,10 +628,202 @@ inline void ComputeProjectionParams(const std::string& minD, const std::string& 
 	*outPtPerDay = chartContentW / (float)(totalDays + (*outPad) * 2);
 }
 
+inline bool HasExplicitTimeWindow(const PpDocument& doc) {
+	return !doc.windowStart.empty() && !doc.windowEnd.empty();
+}
+
+inline bool TimeWindowDateRangeIntersects(const std::string& start, const std::string& end,
+	long windowStartDay, long windowEndDay) {
+	return !start.empty() && !end.empty()
+		&& DateToDays(start) <= windowEndDay && DateToDays(end) >= windowStartDay;
+}
+
+inline bool IsTimeWindowExemptPrim(const Prim& p) {
+	const std::string& k = p.tagKind;
+	return k == "HEADER_BAND" || k == "TITLE" || k == "RAIL_FILL" || k == "RAIL_DIVIDER"
+		|| k == "ROW_DIVIDER" || k == "ROW_LABEL" || k == "RAIL_DOT" || k == "RAIL_TASKLBL"
+		|| k.compare(0, 5, "AXIS_") == 0;
+}
+
+inline bool IsTimeWindowTaskPrim(const Prim& p) {
+	return p.tagKind == "TASK" || p.tagKind == "TASK_PROGRESS"
+		|| p.tagKind == "TASK_LABEL" || p.tagKind == "TASK_PCT";
+}
+
+inline bool IsTimeWindowMilestonePrim(const Prim& p) {
+	return p.tagKind == "MILESTONE" || p.tagKind == "MILESTONE_LABEL";
+}
+
+inline bool IsTimeWindowMarkerPrim(const Prim& p) {
+	return p.tagKind == "TODAY_LINE" || p.tagKind == "DEADLINE" || p.tagKind == "CUSTOM_MARKER"
+		|| p.tagKind == "TODAY_LABEL" || p.tagKind == "DEADLINE_LABEL" || p.tagKind == "CUSTOM_MARKER_LABEL";
+}
+
+inline bool IsTimeWindowBracketPrim(const Prim& p) {
+	return p.tagKind == "BRACKET" || p.tagKind == "BRACKET_TICK"
+		|| p.tagKind == "BRACKET_BOTTOM" || p.tagKind == "BRACKET_LABEL";
+}
+
+inline bool ClipPrimBoxToTimeWindow(Prim* p, float clipLeft, float clipRight) {
+	const float originalLeft = p->x;
+	const float originalRight = p->x + p->w;
+	if (originalRight <= clipLeft || originalLeft >= clipRight) return false;
+	if (originalLeft < clipLeft) { p->x = clipLeft; p->w = originalRight - clipLeft; p->clippedL = true; }
+	if (originalRight > clipRight) { p->w = clipRight - p->x; p->clippedR = true; }
+	return p->w > 0.01f;
+}
+
+inline bool ClipPrimLineToTimeWindow(Prim* p, float clipLeft, float clipRight) {
+	const float originalX = p->x, originalX2 = p->x2;
+	if ((originalX < clipLeft && originalX2 < clipLeft) || (originalX > clipRight && originalX2 > clipRight)) return false;
+	if (originalX == originalX2) return originalX >= clipLeft && originalX <= clipRight;
+	auto clipEndpoint = [&](bool first, float edge) {
+		float& x = first ? p->x : p->x2;
+		float& y = first ? p->y : p->y2;
+		const float ox = first ? p->x2 : p->x;
+		const float oy = first ? p->y2 : p->y;
+		y = oy + (y - oy) * (edge - ox) / (x - ox);
+		x = edge;
+	};
+	if (p->x < clipLeft) { clipEndpoint(true, clipLeft); p->clippedL = true; }
+	if (p->x > clipRight) { clipEndpoint(true, clipRight); p->clippedR = true; }
+	if (p->x2 < clipLeft) { clipEndpoint(false, clipLeft); p->clippedL = true; }
+	if (p->x2 > clipRight) { clipEndpoint(false, clipRight); p->clippedR = true; }
+	return true;
+}
+
+// Explicit-window filter. It runs after normal prim emission, so it cannot
+// alter the document or layout. Composite DEP/bracket elements are handled
+// before generic clipping to avoid dangling segments/fragments.
+inline void ClipSceneToExplicitTimeWindow(const PpDocument& doc, Scene* scene,
+	float clipLeft, float clipRight) {
+	if (!scene || !HasExplicitTimeWindow(doc)) return;
+	const long windowStartDay = DateToDays(doc.windowStart);
+	const long windowEndDay = DateToDays(doc.windowEnd);
+
+	std::map<std::string, bool> ownerVisible;
+	for (const auto& t : doc.tasks)
+		ownerVisible[t.id] = TimeWindowDateRangeIntersects(t.start, t.end, windowStartDay, windowEndDay);
+	for (const auto& m : doc.milestones)
+		ownerVisible[m.id] = !m.date.empty() && DateToDays(m.date) >= windowStartDay && DateToDays(m.date) <= windowEndDay;
+	std::map<std::string, bool> markerVisible;
+	for (const auto& m : doc.markers)
+		markerVisible[m.id] = !m.date.empty() && DateToDays(m.date) >= windowStartDay && DateToDays(m.date) <= windowEndDay;
+
+	// Snapshot original anchor geometry before clipping. Anchored notes use this
+	// to move from a truncated task's true right edge to its visible right edge.
+	std::map<std::string, float> anchorRight;
+	for (const auto& p : scene->prims) {
+		if (p.tagKind == "TASK" || p.tagKind == "MILESTONE") anchorRight[p.tagId] = p.x + p.w;
+	}
+
+	std::map<std::string, bool> bracketVisible;
+	std::map<std::string, std::pair<float, float>> bracketBounds;
+	for (const auto& b : doc.brackets) {
+		bracketVisible[b.id] = TimeWindowDateRangeIntersects(b.start, b.end, windowStartDay, windowEndDay);
+	}
+	for (const auto& p : scene->prims) {
+		if (p.tagKind == "BRACKET") bracketBounds[p.tagId] = { std::min(p.x, p.x2), std::max(p.x, p.x2) };
+	}
+
+	std::map<std::string, bool> depVisible;
+	for (const auto& d : doc.deps) {
+		const auto from = ownerVisible.find(d.from), to = ownerVisible.find(d.to);
+		depVisible[d.id] = from != ownerVisible.end() && to != ownerVisible.end() && from->second && to->second;
+	}
+	// A visible dependency still drops as a unit if its elbow leaves the window.
+	for (const auto& p : scene->prims) {
+		if (p.tagKind != "DEP" || !depVisible[p.tagId]) continue;
+		const float lo = std::min(p.x, p.x2), hi = std::max(p.x, p.x2);
+		if (lo < clipLeft || hi > clipRight) depVisible[p.tagId] = false;
+	}
+
+	std::map<std::string, const PpText*> textById;
+	for (const auto& text : doc.texts) textById[text.id] = &text;
+
+	std::vector<Prim> clipped;
+	std::vector<Prim> continuations;
+	clipped.reserve(scene->prims.size());
+	for (Prim p : scene->prims) {
+		if (IsTimeWindowExemptPrim(p)) { clipped.push_back(p); continue; }
+		if (p.tagKind == "DEP") {
+			if (depVisible[p.tagId]) clipped.push_back(p);
+			continue;
+		}
+		if (IsTimeWindowBracketPrim(p)) {
+			if (!bracketVisible[p.tagId]) continue;
+			auto b = bracketBounds.find(p.tagId);
+			if (b == bracketBounds.end()) continue;
+			const float originalLeft = b->second.first, originalRight = b->second.second;
+			const float left = std::max(originalLeft, clipLeft), right = std::min(originalRight, clipRight);
+			if (right <= left) continue;
+			if (originalLeft < clipLeft) p.clippedL = true;
+			if (originalRight > clipRight) p.clippedR = true;
+			if (p.tagKind == "BRACKET" || p.tagKind == "BRACKET_BOTTOM") {
+				p.x = left; p.x2 = right;
+			} else if (p.tagKind == "BRACKET_TICK") {
+				const bool isLeftTick = p.x <= (originalLeft + originalRight) / 2.0f;
+				p.x = p.x2 = isLeftTick ? left : right;
+			} else { // BRACKET_LABEL
+				p.x = left; p.w = right - left;
+			}
+			clipped.push_back(p);
+			continue;
+		}
+		if (IsTimeWindowTaskPrim(p)) {
+			auto it = ownerVisible.find(p.tagId);
+			if (it == ownerVisible.end() || !it->second) continue;
+		} else if (IsTimeWindowMilestonePrim(p)) {
+			auto it = ownerVisible.find(p.tagId);
+			if (it == ownerVisible.end() || !it->second) continue;
+		} else if (IsTimeWindowMarkerPrim(p)) {
+			auto it = markerVisible.find(p.tagId);
+			if (it == markerVisible.end() || !it->second) continue;
+		} else if (p.tagKind == "TEXT") {
+			auto text = textById.find(p.tagId);
+			if (text != textById.end() && !text->second->anchorId.empty()) {
+				auto owner = ownerVisible.find(text->second->anchorId);
+				if (owner != ownerVisible.end() && !owner->second) continue;
+				auto right = anchorRight.find(text->second->anchorId);
+				if (right != anchorRight.end()) p.x += std::max(clipLeft, std::min(clipRight, right->second)) - right->second;
+			}
+		}
+
+		bool keep = true;
+		if (p.kind == PrimKind::Line || p.kind == PrimKind::Connector)
+			keep = ClipPrimLineToTimeWindow(&p, clipLeft, clipRight);
+		else
+			keep = ClipPrimBoxToTimeWindow(&p, clipLeft, clipRight);
+		if (!keep) continue;
+		if (p.tagKind == "TASK" && (p.clippedL || p.clippedR)) {
+			Style cue; cue.line = true; cue.lineBgr = p.style.fillBgr; cue.lineWeight = 1.5f; cue.arrowEnd = true;
+			const float cy = p.y + p.h / 2.0f;
+			if (p.clippedL) {
+				Prim leftCue = scene::connector(clipLeft + 5.0f, cy, clipLeft, cy, cue);
+				leftCue.tagKind = "WINDOW_CONTINUATION"; leftCue.tagId = p.tagId + "-L";
+				continuations.push_back(leftCue);
+			}
+			if (p.clippedR) {
+				Prim rightCue = scene::connector(clipRight - 5.0f, cy, clipRight, cy, cue);
+				rightCue.tagKind = "WINDOW_CONTINUATION"; rightCue.tagId = p.tagId + "-R";
+				continuations.push_back(rightCue);
+			}
+		}
+		clipped.push_back(p);
+	}
+	clipped.insert(clipped.end(), continuations.begin(), continuations.end());
+	scene->prims.swap(clipped);
+}
+
 inline bool BuildSceneWithProjection(const PpDocument& doc, float slideW, Scene* outScene,
 	const std::string& minD, const std::string& maxD, long pad, float ptPerDay) {
 	GanttLayoutResult L = LayoutGantt(doc, minD);
 	*outScene = BuildGanttScene(doc, L, minD, maxD, pad, ptPerDay, slideW, MaterialLight());
+	if (HasExplicitTimeWindow(doc)) {
+		const float clipLeft = MARGIN + ROW_GUTTER;
+		const float clipRight = slideW - MARGIN;
+		ClipSceneToExplicitTimeWindow(doc, outScene, clipLeft, clipRight);
+	}
 	return true;
 }
 
@@ -647,9 +839,18 @@ inline bool BuildSceneWithProjection(const PpDocument& doc, float slideW, Scene*
 inline bool BuildProjectedScene(const PpDocument& doc, float slideW, Scene* outScene,
 	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
 	std::string minD, maxD;
-	ComputeDocDateExtents(doc, &minD, &maxD);
 	long pad = 0; float ptPerDay = 0.0f;
-	ComputeProjectionParams(minD, maxD, slideW, &pad, &ptPerDay);
+	if (HasExplicitTimeWindow(doc)) {
+		minD = doc.windowStart;
+		maxD = doc.windowEnd;
+		const long totalDays = std::max(1L, DateToDays(maxD) - DateToDays(minD) + 1);
+		const float chartContentW = (slideW - MARGIN * 2.0f) - ROW_GUTTER;
+		pad = 0;
+		ptPerDay = chartContentW / (float)totalDays;
+	} else {
+		ComputeDocDateExtents(doc, &minD, &maxD);
+		ComputeProjectionParams(minD, maxD, slideW, &pad, &ptPerDay);
+	}
 	BuildSceneWithProjection(doc, slideW, outScene, minD, maxD, pad, ptPerDay);
 	*outMinD = minD; *outMaxD = maxD; *outPad = pad; *outPtPerDay = ptPerDay;
 	return true;

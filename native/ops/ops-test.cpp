@@ -897,6 +897,50 @@ static bool RunLabelOpsChecks() {
 static int CountKind(const Scene& sc, const char* kind) {
 	int c = 0; for (const auto& p : sc.prims) if (p.tagKind == kind) ++c; return c;
 }
+
+static int CountPrim(const Scene& sc, const char* kind, const char* id) {
+	int n = 0;
+	for (const auto& p : sc.prims) {
+		if (p.tagKind == kind && (!id || p.tagId == id)) ++n;
+	}
+	return n;
+}
+
+static bool SceneGeometryEqual(const Scene& a, const Scene& b) {
+	if (a.prims.size() != b.prims.size()) return false;
+	for (size_t i = 0; i < a.prims.size(); ++i) {
+		const Prim& x = a.prims[i];
+		const Prim& y = b.prims[i];
+		if (x.kind != y.kind || x.x != y.x || x.y != y.y || x.w != y.w || x.h != y.h
+			|| x.x2 != y.x2 || x.y2 != y.y2 || x.text != y.text || x.tagKind != y.tagKind
+			|| x.tagId != y.tagId || x.clippedL != y.clippedL || x.clippedR != y.clippedR)
+			return false;
+	}
+	return true;
+}
+
+static bool TimelineLabelsStayInside(const Scene& sc, float left, float right) {
+	for (const auto& p : sc.prims) {
+		if (p.tagKind != "TASK_LABEL" && p.tagKind != "MILESTONE_LABEL" && p.tagKind != "TODAY_LABEL"
+			&& p.tagKind != "DEADLINE_LABEL" && p.tagKind != "CUSTOM_MARKER_LABEL" && p.tagKind != "TEXT"
+			&& p.tagKind != "BRACKET_LABEL") continue;
+		if (p.x < left - 0.01f || p.x + p.w > right + 0.01f) return false;
+	}
+	return true;
+}
+
+static void SceneUnionBounds(const Scene& sc, float* left, float* top, float* right, float* bottom) {
+	*left = *top = 1e9f;
+	*right = *bottom = -1e9f;
+	for (const auto& p : sc.prims) {
+		const float l = (p.kind == PrimKind::Line || p.kind == PrimKind::Connector) ? std::min(p.x, p.x2) : p.x;
+		const float r = (p.kind == PrimKind::Line || p.kind == PrimKind::Connector) ? std::max(p.x, p.x2) : p.x + p.w;
+		const float t = (p.kind == PrimKind::Line || p.kind == PrimKind::Connector) ? std::min(p.y, p.y2) : p.y;
+		const float b = (p.kind == PrimKind::Line || p.kind == PrimKind::Connector) ? std::max(p.y, p.y2) : p.y + p.h;
+		*left = std::min(*left, l); *top = std::min(*top, t);
+		*right = std::max(*right, r); *bottom = std::max(*bottom, b);
+	}
+}
 static bool AnyIdPrefix(const Scene& sc, const char* kind, char pfx) {
 	for (const auto& p : sc.prims) if (p.tagKind == kind && !p.tagId.empty() && p.tagId[0] == pfx) return true;
 	return false;
@@ -911,6 +955,129 @@ static PpDocument GridDoc(const std::string& start, const std::string& end, cons
 	d.rows.push_back(PpRow{"r1", "Row 1", "", false});
 	d.tasks.push_back(PpTask{"t1", "T", start, end, "r1", "", 0});
 	return d;
+}
+
+static bool RunTimeWindowChecks() {
+	bool ok = true;
+
+	// Pure ops: strict ISO validation, visible-unit minimum, scale-aware cap,
+	// exact (unsnapped) storage, clear, canonical JSON, and patch refusal.
+	PpDocument model = GridDoc("2026-01-01", "2026-02-01", "week");
+	ok = Check(!SetTimeWindow(model, "2026-01-xx", "2026-01-20"), "window: rejects malformed ISO") && ok;
+	ok = Check(!SetTimeWindow(model, "2026-01-20", "2026-01-19"), "window: rejects inverted range") && ok;
+	ok = Check(!SetTimeWindow(model, "2026-01-10", "2026-01-16"), "window: rejects span below one week") && ok;
+	ok = Check(!SetTimeWindow(model, "2026-01-01", "2040-01-01"), "window: rejects span above week major-tick cap") && ok;
+	ok = Check(SetTimeWindow(model, "2026-01-10", "2026-01-20")
+		&& model.windowStart == "2026-01-10" && model.windowEnd == "2026-01-20",
+		"window: stores exact unsnapped dates") && ok;
+	const std::string windowJson = DocumentToJson(model);
+	PpDocument modelRt = DocumentFromJson(windowJson);
+	ok = Check(modelRt.windowStart == model.windowStart && modelRt.windowEnd == model.windowEnd,
+		"window: JSON round-trip preserves explicit fields") && ok;
+	ok = Check(TryPatchDocJson(GridDoc("2026-01-01", "2026-02-01", "week"), model, DocumentToJson(GridDoc("2026-01-01", "2026-02-01", "week"))).empty(),
+		"window: JSON patcher refuses window structural delta") && ok;
+	ok = Check(ClearTimeWindow(model) && model.windowStart.empty() && model.windowEnd.empty(), "window: clear restores auto-fit") && ok;
+	const std::string clearedJson = DocumentToJson(model);
+	ok = Check(clearedJson.find("windowStart") == std::string::npos && clearedJson.find("windowEnd") == std::string::npos,
+		"window: canonical JSON omits cleared fields") && ok;
+
+	// Explicit projection is verbatim and unpadded.
+	PpDocument projection = GridDoc("2026-01-01", "2026-02-01", "week");
+	ok = Check(SetTimeWindow(projection, "2026-01-10", "2026-01-20"), "window: projection setup") && ok;
+	Scene projectionScene; std::string mn, mx; long pad = -1; float ppd = 0.0f;
+	ok = Check(BuildProjectedScene(projection, 960.0f, &projectionScene, &mn, &mx, &pad, &ppd), "window: explicit projection builds") && ok;
+	ok = Check(mn == "2026-01-10" && mx == "2026-01-20" && pad == 0,
+		"window: explicit projection uses verbatim dates without pad") && ok;
+	ok = Check(std::fabs(ppd - ((960.0f - MARGIN * 2.0f - ROW_GUTTER) / 11.0f)) < 0.001f,
+		"window: explicit projection ptPerDay matches window span") && ok;
+
+	// Clip semantics: hidden owners disappear; straddlers carry flags and a
+	// non-interactive continuation prim; rail remains the complete inventory.
+	PpDocument unclipped;
+	unclipped.scale = "week";
+	unclipped.rows = { { "r1", "Research", "" }, { "r2", "Build", "" } };
+	unclipped.tasks = {
+		{ "hidden", "Hidden task", "2026-01-01", "2026-01-03", "r1", "", 0 },
+		{ "left", "Left straddler", "2026-01-01", "2026-01-12", "r1", "", 50 },
+		{ "inside", "Inside", "2026-01-12", "2026-01-14", "r2", "", 0 },
+		{ "right", "Right straddler", "2026-01-16", "2026-01-30", "r2", "", 25 },
+	};
+	unclipped.milestones = {
+		{ "ms-hidden", "Hidden milestone", "2026-01-04", "r1", "" },
+		{ "ms-in", "Inside milestone", "2026-01-13", "r2", "" },
+	};
+	unclipped.markers = {
+		{ "mk-hidden", "deadline", "Hidden marker", "2026-01-05", "" },
+		{ "mk-in", "deadline", "Visible marker", "2026-01-15", "" },
+	};
+	unclipped.brackets = {
+		{ "br-hidden", "Hidden bracket", "2026-01-01", "2026-01-05", "", { "r1" } },
+		{ "br-straddle", "Straddling bracket", "2026-01-01", "2026-01-18", "", { "r1", "r2" } },
+	};
+	unclipped.deps = {
+		{ "dep-hidden", "hidden", "inside", "finish-to-start" },
+		{ "dep-clipped", "right", "inside", "finish-to-start" },
+	};
+	unclipped.texts = {
+		{ "note-hidden", "Hidden note", "hidden", "", "", "", 2.0f, 0.0f },
+		{ "note-left", "Clipped anchor note", "left", "", "", "", 2.0f, 0.0f },
+	};
+	Scene neverWindowed; std::string autoMin, autoMax; long autoPad = 0; float autoPpd = 0.0f;
+	ok = Check(BuildProjectedScene(unclipped, 960.0f, &neverWindowed, &autoMin, &autoMax, &autoPad, &autoPpd),
+		"window: baseline scene builds") && ok;
+	PpDocument windowed = unclipped;
+	ok = Check(SetTimeWindow(windowed, "2026-01-10", "2026-01-20"), "window: clip setup") && ok;
+	Scene clipped; std::string clipMin, clipMax; long clipPad = 0; float clipPpd = 0.0f;
+	ok = Check(BuildProjectedScene(windowed, 960.0f, &clipped, &clipMin, &clipMax, &clipPad, &clipPpd),
+		"window: clipped scene builds") && ok;
+	const float plotLeft = MARGIN + ROW_GUTTER, plotRight = 960.0f - MARGIN;
+	const Prim* leftTask = FindPrim(clipped, "TASK", "left");
+	const Prim* rightTask = FindPrim(clipped, "TASK", "right");
+	ok = Check(FindPrim(clipped, "TASK", "hidden") == nullptr && FindPrim(clipped, "TASK_LABEL", "hidden") == nullptr,
+		"window: fully hidden task and label are not emitted") && ok;
+	ok = Check(leftTask && leftTask->clippedL && !leftTask->clippedR && rightTask && rightTask->clippedR && !rightTask->clippedL,
+		"window: straddling task bars are truncated and flagged") && ok;
+	ok = Check(CountKind(clipped, "WINDOW_CONTINUATION") == 2
+		&& CountPrim(clipped, "WINDOW_CONTINUATION", "left-L") == 1
+		&& CountPrim(clipped, "WINDOW_CONTINUATION", "right-R") == 1,
+		"window: clipped task edges emit non-interactive continuation glyphs") && ok;
+	ok = Check(FindPrim(clipped, "MILESTONE", "ms-hidden") == nullptr
+		&& FindPrim(clipped, "DEADLINE", "mk-hidden") == nullptr,
+		"window: hidden milestones and markers are not emitted") && ok;
+	ok = Check(TimelineLabelsStayInside(clipped, plotLeft, plotRight), "window: labels cannot overhang the window") && ok;
+	ok = Check(CountPrim(clipped, "ROW_LABEL", "r1") == 1 && CountPrim(clipped, "ROW_LABEL", "r2") == 1,
+		"window: rail rows remain emitted when their bars are hidden") && ok;
+	ok = Check(CountPrim(clipped, "DEP", "dep-hidden") == 0 && CountPrim(clipped, "DEP", "dep-clipped") == 0,
+		"window: hidden or clipped dependency elbows are removed as complete units") && ok;
+	ok = Check(CountPrim(clipped, "BRACKET", "br-hidden") == 0 && CountPrim(clipped, "BRACKET_LABEL", "br-hidden") == 0,
+		"window: hidden bracket is removed as a complete unit") && ok;
+	ok = Check(CountPrim(clipped, "BRACKET", "br-straddle") == 1 && CountPrim(clipped, "BRACKET_TICK", "br-straddle") == 2
+		&& CountPrim(clipped, "BRACKET_BOTTOM", "br-straddle") == 1 && CountPrim(clipped, "BRACKET_LABEL", "br-straddle") == 1,
+		"window: straddling bracket keeps its five clipped primitives together") && ok;
+	ok = Check(FindPrim(clipped, "TEXT", "note-hidden") == nullptr && FindPrim(clipped, "TEXT", "note-left") != nullptr,
+		"window: anchored notes follow their hidden or clipped anchor") && ok;
+	PpDocument narrower = unclipped;
+	ok = Check(SetTimeWindow(narrower, "2026-01-10", "2026-01-18"), "window: bounds-invariance setup") && ok;
+	Scene narrowerScene; std::string narrowerMin, narrowerMax; long narrowerPad = 0; float narrowerPpd = 0.0f;
+	ok = Check(BuildProjectedScene(narrower, 960.0f, &narrowerScene, &narrowerMin, &narrowerMax, &narrowerPad, &narrowerPpd),
+		"window: narrower scene builds") && ok;
+	float cl = 0, ct = 0, cr = 0, cb = 0, nl = 0, nt = 0, nr = 0, nb = 0;
+	SceneUnionBounds(clipped, &cl, &ct, &cr, &cb);
+	SceneUnionBounds(narrowerScene, &nl, &nt, &nr, &nb);
+	ok = Check(std::fabs(cl - nl) < 0.01f && std::fabs(ct - nt) < 0.01f
+		&& std::fabs(cr - nr) < 0.01f && std::fabs(cb - nb) < 0.01f,
+		"window: clipped labels keep scene union bounds invariant") && ok;
+
+	// Scene clipping is lossless: clear returns exactly to the never-windowed
+	// scene, including geometry and primitive ordering.
+	ok = Check(ClearTimeWindow(windowed), "window: lossless clear setup") && ok;
+	Scene cleared; std::string clearMin, clearMax; long clearPad = 0; float clearPpd = 0.0f;
+	ok = Check(BuildProjectedScene(windowed, 960.0f, &cleared, &clearMin, &clearMax, &clearPad, &clearPpd),
+		"window: cleared scene builds") && ok;
+	ok = Check(SceneGeometryEqual(neverWindowed, cleared), "window: clear re-emits byte-identical scene geometry") && ok;
+
+	if (ok) std::printf("TIME WINDOW OK\n");
+	return ok;
 }
 
 // v2.5.1 i2b scene emission contract (SR-VIZ-01/02/03): TASK_LABEL prim after
@@ -1931,6 +2098,9 @@ int main() {
 
 	bool gridOpsOk = RunGridOpsChecks();
 	ok = gridOpsOk && ok;
+
+	bool timeWindowOk = RunTimeWindowChecks();
+	ok = timeWindowOk && ok;
 
 	bool appBarOk = RunAppBarModelChecks();
 	ok = appBarOk && ok;
