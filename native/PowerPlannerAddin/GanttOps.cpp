@@ -546,6 +546,66 @@ bool ClearTimeWindow(PpDocument& doc) {
 	return true;
 }
 
+bool TimeWindowEmitsItem(const PpDocument& doc, const std::string& kind, const std::string& id) {
+	if (doc.windowStart.empty() || doc.windowEnd.empty()) return true; // auto-fit: everything emits
+	if (kind.empty() || id.empty()) return true;
+	if (kind == "ROW") return true; // SR-WIN-14: the rail is never filtered
+	const long lo = DateToDays(doc.windowStart);
+	const long hi = DateToDays(doc.windowEnd);
+	auto spanVisible = [&](const std::string& start, const std::string& end) {
+		return !start.empty() && !end.empty() && DateToDays(start) <= hi && DateToDays(end) >= lo;
+	};
+	auto dateVisible = [&](const std::string& d) {
+		if (d.empty()) return false;
+		const long day = DateToDays(d);
+		return day >= lo && day <= hi;
+	};
+	// Owner (task/milestone) visibility by id, shared by TEXT and DEP below.
+	auto ownerVisible = [&](const std::string& ownerId, bool* found) -> bool {
+		for (const auto& t : doc.tasks) {
+			if (t.id == ownerId) { *found = true; return spanVisible(t.start, t.end); }
+		}
+		for (const auto& m : doc.milestones) {
+			if (m.id == ownerId) { *found = true; return dateVisible(m.date); }
+		}
+		*found = false;
+		return true;
+	};
+	if (kind == "TASK" || kind == "MILESTONE") {
+		bool found = false;
+		const bool vis = ownerVisible(id, &found);
+		return found ? vis : true; // missing id: fail open
+	}
+	if (kind == "MARKER") {
+		for (const auto& mk : doc.markers) {
+			if (mk.id == id) return dateVisible(mk.date);
+		}
+		return true;
+	}
+	if (kind == "TEXT") {
+		for (const auto& t : doc.texts) {
+			if (t.id != id) continue;
+			if (t.anchorId.empty()) return true; // free notes are never window-hidden
+			bool found = false;
+			const bool vis = ownerVisible(t.anchorId, &found);
+			return found ? vis : true;
+		}
+		return true;
+	}
+	if (kind == "DEP") {
+		for (const auto& d : doc.deps) {
+			if (d.id != id) continue;
+			bool foundFrom = false, foundTo = false;
+			const bool fromVis = ownerVisible(d.from, &foundFrom);
+			const bool toVis = ownerVisible(d.to, &foundTo);
+			if (!foundFrom || !foundTo) return true;
+			return fromVis && toVis;
+		}
+		return true;
+	}
+	return true; // unknown kind: fail open
+}
+
 int OpsSelfTest() {
 	PpDocument doc;
 	doc.scale = "day";

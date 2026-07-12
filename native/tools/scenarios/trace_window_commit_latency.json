@@ -1,6 +1,6 @@
 {
   "name": "trace_window_commit_latency",
-  "description": "v2.7.3 W3 stub (profile lands in W3): commit a window change on the 6-task fixture and measure OPLATENCY around the commit dispatch -> window_commit_budget <= 2000ms (1s p50 target, SR-WIN-28/D3); the op-phase dump asserts fastPath=false (window commits are hard-ineligible for the scene-diff fast path) and PP_PROJ/PP_ROWY rewritten to match the new window (SR-WIN-24); BOTH the in-place reconcile and delete+re-emit commit paths are measured and recorded before any optimization (latency-truth rule); no content flash during the structural commit (paint lock engaged per SR-WIN-25).",
+  "description": "v2.7.3 W3: BOTH real commit shapes are measured through the commit dispatch (D3, latency-truth rule: measure before optimizing): shape 1 = in-place reconcile (covering window [2026-05-28..2026-08-13] keeping the auto-fit tick set, nothing enters/leaves), shape 2 = structural (shrink to [2026-06-15..2026-07-27] hides items -> delete/create of the entering/leaving prims). The driver owns window_commit_budget <= 2000ms per shape (1s target; p50 recorded, m6/SR-WIN-28); OPPHASES asserts fastPath=false for every commit (window commits are hard-ineligible for the scene-diff fast path, SR-WIN-24) and PP_PROJ is rewritten to the final window (pad 0, minDay==windowStart); taskCount never dips to 0 mid-trace (paint-lock/no-flash proxy, SR-WIN-25).",
   "exe": "ppappbarshot",
   "trace_profile": "window-commit-latency",
   "timeout": 120,
@@ -10,7 +10,7 @@
     "window_commit_budget",
     "window_commit_fastpath_ineligible",
     "pp_proj_matches_window",
-    "no_content_flash_in_trace"
+    "window_commit_no_flash"
   ],
-  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+  "expected_trace_steps": ["pre", "immed", "structural", "+1", "+3"]
 }

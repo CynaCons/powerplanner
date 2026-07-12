@@ -17,6 +17,7 @@
 #include "../PowerPlannerAddin/ThemeMenu.h"
 #include "../PowerPlannerAddin/GanttHitTest.h"
 #include "../PowerPlannerAddin/GanttAppBar.h"
+#include "../PowerPlannerAddin/GanttLayout.h"
 // GDI+ headers use unqualified min/max; provide them if a prior include pulled
 // in NOMINMAX (matches how the addin's own GDI+ TU gets them from windows.h).
 #ifndef min
@@ -26,6 +27,7 @@
 #define max(a,b) (((a) > (b)) ? (a) : (b))
 #endif
 #include <gdiplus.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -323,6 +325,216 @@ static void PostTaskBodyDrag(HWND ov, POINT screenCenter, int dragPx) {
 
 static bool FindTaskBodyRect(PowerPoint::_ApplicationPtr& app, const char* taskId, RECT* out);
 static bool ParseNamedRectFromDump(const char* json, const char* key, RECT* out);
+
+// ---- W3 time-window trace helpers ------------------------------------------
+
+// Late-bound Invoke (idiom from native/render/undo-probe.cpp's InvokeName,
+// trimmed: no exception-detail capture needed for the trace profiles).
+static HRESULT InvokeNameW3(IDispatch* disp, LPCWSTR name, WORD flags,
+	VARIANT* args, UINT cArgs, VARIANT* result) {
+	DISPID dispid = 0;
+	LPOLESTR nameOle = const_cast<LPOLESTR>(name);
+	HRESULT hr = disp->GetIDsOfNames(IID_NULL, &nameOle, 1, LOCALE_USER_DEFAULT, &dispid);
+	if (FAILED(hr)) return hr;
+	DISPPARAMS dp = {};
+	dp.rgvarg = args;
+	dp.cArgs = cArgs;
+	EXCEPINFO ei = {};
+	UINT argErr = 0;
+	hr = disp->Invoke(dispid, IID_NULL, LOCALE_USER_DEFAULT, flags, &dp, result, &ei, &argErr);
+	if (ei.bstrDescription) ::SysFreeString(ei.bstrDescription);
+	if (ei.bstrSource) ::SysFreeString(ei.bstrSource);
+	if (ei.bstrHelpFile) ::SysFreeString(ei.bstrHelpFile);
+	return hr;
+}
+
+// Execute exactly ONE PowerPoint Undo (CommandBars.ExecuteMso("Undo"), with the
+// FindControl(Id=128).Execute fallback — undo-probe.cpp's proven mechanisms).
+static bool ExecuteUndoOnceW3(IDispatch* appDisp) {
+	if (!appDisp) return false;
+	_variant_t cbVar;
+	if (FAILED(InvokeNameW3(appDisp, L"CommandBars", DISPATCH_PROPERTYGET, NULL, 0, &cbVar))
+		|| cbVar.vt != VT_DISPATCH || !cbVar.pdispVal) return false;
+	IDispatchPtr cb = cbVar.pdispVal;
+	{
+		VARIANT arg;
+		::VariantInit(&arg);
+		arg.vt = VT_BSTR;
+		arg.bstrVal = ::SysAllocString(L"Undo");
+		HRESULT hr = InvokeNameW3(cb, L"ExecuteMso", DISPATCH_METHOD, &arg, 1, NULL);
+		::VariantClear(&arg);
+		if (SUCCEEDED(hr)) return true;
+	}
+	{
+		VARIANT fcArgs[2];
+		::VariantInit(&fcArgs[0]);
+		::VariantInit(&fcArgs[1]);
+		fcArgs[0].vt = VT_I4; fcArgs[0].lVal = 128; // Id: standard Undo control
+		fcArgs[1].vt = VT_I4; fcArgs[1].lVal = 1;   // Type: msoControlButton
+		_variant_t ctrlVar;
+		HRESULT hr = InvokeNameW3(cb, L"FindControl", DISPATCH_METHOD, fcArgs, 2, &ctrlVar);
+		if (SUCCEEDED(hr) && ctrlVar.vt == VT_DISPATCH && ctrlVar.pdispVal) {
+			IDispatchPtr ctrl = ctrlVar.pdispVal;
+			if (SUCCEEDED(InvokeNameW3(ctrl, L"Execute", DISPATCH_METHOD, NULL, 0, NULL))) return true;
+		}
+	}
+	return false;
+}
+
+// Identity + geometry snapshot over every CHART_ROOT child, compared as a SET
+// (a lossless re-emission recreates previously hidden shapes at the END of the
+// group's item order). Text-bearing kinds are compared by horizontal CENTER
+// only: PowerPoint autosize owns their box, so a re-created label legitimately
+// reads back a different (autosized vs scene-sized) rect around the same
+// anchor. Everything else must match within EMU float noise (0.1pt).
+struct ChartChildGeom {
+	std::string key; // "KIND:ID"
+	bool textKind = false;
+	float l = 0, t = 0, w = 0, h = 0;
+};
+
+static bool IsTextBearingChartKind(const std::string& k) {
+	return k == "TITLE" || k == "ROW_LABEL" || k == "RAIL_TASKLBL" || k == "TASK_LABEL"
+		|| k == "TASK_PCT" || k == "MILESTONE_LABEL" || k == "AXIS_TOP" || k == "AXIS_BOT"
+		|| k == "TODAY_LABEL" || k == "DEADLINE_LABEL" || k == "CUSTOM_MARKER_LABEL"
+		|| k == "BRACKET_LABEL" || k == "TEXT";
+}
+
+static bool CollectChartChildGeoms(PowerPoint::_ApplicationPtr& app, std::vector<ChartChildGeom>* out) {
+	if (!out) return false;
+	out->clear();
+	try {
+		PowerPoint::_SlidePtr sl = app->GetActiveWindow()->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shs = sl->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			PowerPoint::ShapePtr root = shs->Item(_variant_t(ii));
+			_bstr_t rk = root->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!rk.length() || std::string((const char*)_bstr_t(rk)) != "CHART_ROOT") continue;
+			PowerPoint::GroupShapesPtr items = root->GetGroupItems();
+			long n = items->GetCount();
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				ChartChildGeom g;
+				const std::string kind = k.length() ? (const char*)_bstr_t(k) : "";
+				g.key = kind + ":" + (id.length() ? (const char*)_bstr_t(id) : "");
+				g.textKind = IsTextBearingChartKind(kind);
+				g.l = ch->GetLeft(); g.t = ch->GetTop(); g.w = ch->GetWidth(); g.h = ch->GetHeight();
+				out->push_back(g);
+			}
+			return true;
+		}
+	} catch (...) {}
+	return false;
+}
+
+static bool ChartChildGeomsEqual(std::vector<ChartChildGeom> a, std::vector<ChartChildGeom> b,
+	std::string* mismatchDetail) {
+	if (mismatchDetail) mismatchDetail->clear();
+	auto byKeyThenGeom = [](const ChartChildGeom& x, const ChartChildGeom& y) {
+		if (x.key != y.key) return x.key < y.key;
+		if (x.l != y.l) return x.l < y.l;
+		if (x.t != y.t) return x.t < y.t;
+		if (x.w != y.w) return x.w < y.w;
+		return x.h < y.h;
+	};
+	std::sort(a.begin(), a.end(), byKeyThenGeom);
+	std::sort(b.begin(), b.end(), byKeyThenGeom);
+	if (a.size() != b.size()) {
+		if (mismatchDetail) *mismatchDetail = "child count " + std::to_string(a.size()) + " vs " + std::to_string(b.size());
+		return false;
+	}
+	const float tol = 0.1f;
+	for (size_t i = 0; i < a.size(); ++i) {
+		const ChartChildGeom& x = a[i];
+		const ChartChildGeom& y = b[i];
+		bool same = x.key == y.key;
+		if (same) {
+			if (x.textKind) {
+				// Autosize shrinks the box toward the text's ALIGNMENT anchor:
+				// left edge for left-aligned labels (AXIS_TOP, ROW_LABEL, ...),
+				// center for centered ones (TASK_LABEL, AXIS_BOT), right edge
+				// for right-aligned. The anchor edge is the render invariant.
+				same = std::fabs(x.l - y.l) <= 0.5f
+					|| std::fabs((x.l + x.w / 2.0f) - (y.l + y.w / 2.0f)) <= 0.5f
+					|| std::fabs((x.l + x.w) - (y.l + y.w)) <= 0.5f;
+			} else {
+				same = std::fabs(x.l - y.l) <= tol && std::fabs(x.t - y.t) <= tol
+					&& std::fabs(x.w - y.w) <= tol && std::fabs(x.h - y.h) <= tol;
+			}
+		}
+		if (!same) {
+			if (mismatchDetail) {
+				char buf[256];
+				::snprintf(buf, sizeof(buf), "%s(%.2f,%.2f,%.2f,%.2f) vs %s(%.2f,%.2f,%.2f,%.2f)",
+					x.key.c_str(), x.l, x.t, x.w, x.h, y.key.c_str(), y.l, y.t, y.w, y.h);
+				*mismatchDetail = buf;
+			}
+			return false;
+		}
+	}
+	return true;
+}
+
+// Does the live chart currently contain a child with this PP_KIND/PP_ID?
+static bool ChartChildExists(PowerPoint::_ApplicationPtr& app, const char* kind, const char* id) {
+	try {
+		PowerPoint::_SlidePtr sl = app->GetActiveWindow()->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shs = sl->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			PowerPoint::ShapePtr root = shs->Item(_variant_t(ii));
+			_bstr_t rk = root->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!rk.length() || std::string((const char*)_bstr_t(rk)) != "CHART_ROOT") continue;
+			PowerPoint::GroupShapesPtr items = root->GetGroupItems();
+			long n = items->GetCount();
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (!k.length() || std::string((const char*)_bstr_t(k)) != kind) continue;
+				if (!id || !*id) return true;
+				_bstr_t chId = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				if (chId.length() && std::string((const char*)_bstr_t(chId)) == id) return true;
+			}
+			return false;
+		}
+	} catch (...) {}
+	return false;
+}
+
+// Screen-pixel px<->day projection derived from the overlay dump's ppProj +
+// chartRect fields (the same math as Overlay.cpp's ProjectionPx, but computed
+// from the dump so profiles share the overlay's exact ground truth).
+struct DumpProjPx {
+	bool ok = false;
+	double pxPerDay = 0.0;
+	double originXpx = 0.0;
+	long originDay = 0;
+	long minDay = 0;
+	long pad = 0;
+};
+static bool ParseDumpProjectionPx(const char* dump, DumpProjPx* out) {
+	if (!dump || !out) return false;
+	const char* p = ::strstr(dump, "\"ppProj\":{");
+	if (!p) return false;
+	long minDay = 0, pad = 0;
+	double ptPerDay = 0.0, originX = 0.0, chartLeftPt = 0.0, chartWidthPt = 0.0;
+	if (::sscanf_s(p, "\"ppProj\":{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%lf,\"originX\":%lf,\"chartLeftPt\":%lf,\"chartWidthPt\":%lf",
+		&minDay, &pad, &ptPerDay, &originX, &chartLeftPt, &chartWidthPt) != 6) return false;
+	if (ptPerDay <= 0.0 || chartWidthPt <= 0.0) return false;
+	RECT chart{};
+	if (!ParseNamedRectFromDump(dump, "chartRect", &chart) || chart.right <= chart.left) return false;
+	const double scale = (double)(chart.right - chart.left) / chartWidthPt;
+	out->pxPerDay = ptPerDay * scale;
+	out->originXpx = (double)chart.left + (originX - chartLeftPt) * scale;
+	out->originDay = minDay - pad;
+	out->minDay = minDay;
+	out->pad = pad;
+	out->ok = out->pxPerDay > 0.0;
+	return out->ok;
+}
 
 static bool FindTaskProgressEdge(PowerPoint::_ApplicationPtr& app, const char* taskId, int percent, POINT* outScreen) {
 	RECT r{};
@@ -1560,6 +1772,11 @@ int wmain(int argc, wchar_t** argv) {
 			} catch (...) {}
 
 			long windowIdlePaintDeltaForTrace = -1;
+			// W3: profile-scoped extra JSON fields injected into every TRACE state
+			// line while non-empty (same mechanism as windowIdlePaintDelta below,
+			// generalized). Each entry must be a complete "key":value pair with a
+			// trailing comma.
+			std::string extraTraceFieldsForTrace;
 			auto captureStep = [&](const char* step, const wchar_t* profile) -> std::wstring {
 				Overlay_SyncAppBarForTest();
 				const char* state = Overlay_DumpChromeStateForTest();
@@ -1581,6 +1798,10 @@ int wmain(int argc, wchar_t** argv) {
 					::snprintf(idleBuf, sizeof(idleBuf), "\"windowIdlePaintDelta\":%ld,", windowIdlePaintDeltaForTrace);
 					size_t bracePos = stateWithTMs.find('{');
 					if (bracePos != std::string::npos) stateWithTMs.insert(bracePos + 1, idleBuf);
+				}
+				if (!extraTraceFieldsForTrace.empty()) {
+					size_t bracePos = stateWithTMs.find('{');
+					if (bracePos != std::string::npos) stateWithTMs.insert(bracePos + 1, extraTraceFieldsForTrace);
 				}
 				wchar_t appPng[256], ctxPng[256];
 				swprintf_s(appPng, 256, L"native\\build\\trace_%ls_%hs_appbar.png", profile ? profile : L"op", step);
@@ -2289,6 +2510,333 @@ int wmain(int argc, wchar_t** argv) {
 					wprintf(L"WINDOWEDGE: windowHeaderBandRect not published\n");
 				}
 				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+
+				// W3 m9: zero-delta release. Re-hover to reveal the ports on the
+				// now-explicit window, press the RIGHT port, cross the drag
+				// threshold, return to the origin, release. The real commit must
+				// treat candidate == baseline as a pure no-op (no doc write, no
+				// rebuild, no undo entry) — asserted by the driver comparing the
+				// zerodelta step's doc fields against +3.
+				if (ov) {
+					const char* postDump = Overlay_DumpChromeStateForTest();
+					RECT header2{}, rightPort2{};
+					if (ParseNamedRectFromDump(postDump, "windowHeaderBandRect", &header2)
+						&& header2.right > header2.left && header2.bottom > header2.top) {
+						POINT hover2 = { (header2.left + header2.right) / 2, (header2.top + header2.bottom) / 2 };
+						POINT hover2Client = hover2;
+						::ScreenToClient(ov, &hover2Client);
+						Overlay_SetCursorPosOverrideForTest(true, hover2);
+						::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)hover2Client.x, (short)hover2Client.y));
+						PumpFor(160);
+						if (ParseNamedRectFromDump(Overlay_DumpChromeStateForTest(), "windowPortRRect", &rightPort2)
+							&& rightPort2.right > rightPort2.left && rightPort2.bottom > rightPort2.top) {
+							POINT port2 = { (rightPort2.left + rightPort2.right) / 2, (rightPort2.top + rightPort2.bottom) / 2 };
+							POINT port2Client = port2;
+							::ScreenToClient(ov, &port2Client);
+							Overlay_SetCursorPosOverrideForTest(true, port2);
+							::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((short)port2Client.x, (short)port2Client.y));
+							PumpFor(60);
+							static const int kZeroDeltaPath[] = { 20, 40, 60, 40, 20, 0 };
+							for (int dx : kZeroDeltaPath) {
+								POINT sp = { port2.x + dx, port2.y };
+								Overlay_SetCursorPosOverrideForTest(true, sp);
+								::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)(port2Client.x + dx), (short)port2Client.y));
+								PumpFor(40);
+							}
+							::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)port2Client.x, (short)port2Client.y));
+							PumpFor(400);
+						} else {
+							wprintf(L"WINDOWEDGE: zero-delta port not published after re-hover\n");
+						}
+					} else {
+						wprintf(L"WINDOWEDGE: zero-delta header band not published\n");
+					}
+				}
+				captureStep("zerodelta", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"window-clip-rerender") == 0) {
+				// W3: lossless clip/hide + M4 hidden-selection reset + C2 clipped-
+				// chart anchor math, all e2e over the REAL commit dispatch.
+				// Window [2026-06-15 .. 2026-07-27] on the showcase doc hides
+				// 'discovery' (06-01..06-12), clips 'interviews' (06-08..06-19) at
+				// the left edge and 'qa_t' (07-27..08-07) at the right edge.
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				std::vector<ChartChildGeom> geomsPre;
+				const bool geomsPreOk = CollectChartChildGeoms(app, &geomsPre);
+				captureStep("pre", traceProfile);
+
+				Overlay_CommitWindowGestureForTest("2026-06-15", "2026-07-27");
+				PumpFor(400);
+				{
+					const bool hiddenBarAbsent = !ChartChildExists(app, "TASK", "discovery")
+						&& !ChartChildExists(app, "TASK_LABEL", "discovery");
+					const bool continuationPresent = ChartChildExists(app, "WINDOW_CONTINUATION", "interviews-L")
+						&& ChartChildExists(app, "WINDOW_CONTINUATION", "qa_t-R");
+					const bool clippedBarStillEmitted = ChartChildExists(app, "TASK", "interviews")
+						&& ChartChildExists(app, "TASK", "qa_t");
+					char clipBuf[192];
+					::snprintf(clipBuf, sizeof(clipBuf),
+						"\"windowClipHiddenBarAbsent\":%s,\"windowClipContinuationPresent\":%s,\"windowClipStraddlersEmitted\":%s,",
+						hiddenBarAbsent ? "true" : "false",
+						continuationPresent ? "true" : "false",
+						clippedBarStillEmitted ? "true" : "false");
+					extraTraceFieldsForTrace = clipBuf;
+				}
+				captureStep("shrink", traceProfile);
+				// M4 proof: 'discovery' was selected when the commit hid it; the
+				// dump at this step must show the selection reset to document
+				// context (ownSelKind/ownSelId empty).
+				captureStep("sel-reset", traceProfile);
+
+				// SR-WIN-20 lossless: clearing the window must restore geometry +
+				// doc EXACTLY to the pre state (same model-op route as the W1
+				// window-repair-lossless profile; the Fit-to-tasks UI lands in W4).
+				try {
+					PpDocument clearedDoc = DocumentFromJson(ReadGanttFromSlide(app));
+					if (ClearTimeWindow(clearedDoc)) UpdateGantt(app, clearedDoc);
+				} catch (...) {}
+				PumpFor(400);
+				{
+					std::vector<ChartChildGeom> geomsExpanded;
+					std::string mismatch;
+					const bool lossless = geomsPreOk
+						&& CollectChartChildGeoms(app, &geomsExpanded)
+						&& ChartChildGeomsEqual(geomsPre, geomsExpanded, &mismatch);
+					extraTraceFieldsForTrace += std::string("\"windowLosslessGeometryRestored\":")
+						+ (lossless ? "true," : "false,");
+					if (!lossless) wprintf(L"WINDOWCLIP lossless mismatch: %hs\n", mismatch.c_str());
+				}
+				captureStep("expand", traceProfile);
+
+				// Re-apply the window through the seam for the C2 half.
+				Overlay_CommitWindowGestureForTest("2026-06-15", "2026-07-27");
+				PumpFor(400);
+				captureStep("reshrink", traceProfile);
+
+				HWND ovClip = OverlayHwnd();
+				DumpProjPx clipProj{};
+				ParseDumpProjectionPx(Overlay_DumpChromeStateForTest(), &clipProj);
+
+				// C2a: create-at-point in an empty cell of the CLIPPED chart must
+				// land on the clicked day (row 'launch', target 2026-07-06, 5-day
+				// drag-create -> 2026-07-06..2026-07-11).
+				{
+					bool createLanded = false;
+					std::string createDetail = "(setup failed)";
+					RECT launchBand{};
+					if (ovClip && clipProj.ok
+						&& ParseRowBandFromDump(Overlay_DumpChromeStateForTest(), "launch", &launchBand)) {
+						const long targetDay = DateToDays("2026-07-06");
+						POINT downPt = {
+							(LONG)::llround(clipProj.originXpx + (double)(targetDay - clipProj.originDay) * clipProj.pxPerDay),
+							(launchBand.top + launchBand.bottom) / 2
+						};
+						const int dragPx = (int)::llround(clipProj.pxPerDay * 5.0);
+						PostScreenDrag(ovClip, downPt, dragPx);
+						PumpFor(250);
+						try {
+							PpDocument afterCreate = DocumentFromJson(ReadGanttFromSlide(app));
+							for (const auto& t : afterCreate.tasks) {
+								if (t.rowId != "launch") continue;
+								createDetail = t.start + ".." + t.end;
+								createLanded = (t.start == "2026-07-06" && t.end == "2026-07-11");
+								break;
+							}
+						} catch (...) { createDetail = "(read failed)"; }
+					}
+					extraTraceFieldsForTrace += std::string("\"windowCreateLandedOnDate\":")
+						+ (createLanded ? "true," : "false,")
+						+ "\"windowCreateDetail\":\"" + createDetail + "\",";
+				}
+				captureStep("create-on-clipped", traceProfile);
+
+				// C2b: drag the LEFT-clipped straddler by exactly +7 days; the
+				// commit must move 06-08..06-19 to 06-15..06-26 (a clipped rect
+				// must not distort px/day).
+				{
+					bool dragLanded = false;
+					std::string dragDetail = "(setup failed)";
+					POINT center{};
+					if (ovClip && clipProj.ok && FindTaskBodyCenter(app, "interviews", &center)) {
+						const int dxPx = (int)::llround(clipProj.pxPerDay * 7.0);
+						PostTaskBodyDrag(ovClip, center, dxPx);
+						PumpFor(250);
+						try {
+							PpDocument afterDrag = DocumentFromJson(ReadGanttFromSlide(app));
+							for (const auto& t : afterDrag.tasks) {
+								if (t.id != "interviews") continue;
+								dragDetail = t.start + ".." + t.end;
+								dragLanded = (t.start == "2026-06-15" && t.end == "2026-06-26");
+								break;
+							}
+						} catch (...) { dragDetail = "(read failed)"; }
+					}
+					extraTraceFieldsForTrace += std::string("\"windowStraddlerDragLanded\":")
+						+ (dragLanded ? "true," : "false,")
+						+ "\"windowStraddlerDragDetail\":\"" + dragDetail + "\",";
+				}
+				captureStep("drag-straddler", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"window-commit-latency") == 0) {
+				// W3 m6/D3: measure BOTH commit shapes through the REAL dispatch.
+				// Shape 1 (in-place reconcile): [05-28..08-13] covers everything
+				// and keeps the auto-fit projection's axis tick set (same Mondays
+				// / month starts), so no prim enters or leaves — the group
+				// survives and geometry rewrites in place. Shape 2 (structural):
+				// [06-15..07-27] hides items, so the reconcile deletes/creates
+				// the entering/leaving prims.
+				auto commitWindowWithLatency = [&](const char* s, const char* e) -> unsigned long long {
+					const ULONGLONG t0 = ::GetTickCount64();
+					Overlay_CommitWindowGestureForTest(s, e);
+					const ULONGLONG elapsed = ::GetTickCount64() - t0;
+					wprintf(L"TRACE OPLATENCY: {\"ms\":%llu}\n", (unsigned long long)elapsed);
+					char phaseBuf[512];
+					const int phaseLen = Gantt_GetLastOpPhasesForTest(phaseBuf, (int)sizeof(phaseBuf));
+					if (phaseLen > 0) wprintf(L"TRACE OPPHASES: %hs\n", phaseBuf);
+					return (unsigned long long)elapsed;
+				};
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				emitOpDispatch();
+				const unsigned long long inplaceMs = commitWindowWithLatency("2026-05-28", "2026-08-13");
+				{
+					char latBuf[96];
+					::snprintf(latBuf, sizeof(latBuf), "\"windowCommitInplaceMs\":%llu,", inplaceMs);
+					extraTraceFieldsForTrace = latBuf;
+				}
+				captureStep("immed", traceProfile);
+				const unsigned long long structuralMs = commitWindowWithLatency("2026-06-15", "2026-07-27");
+				{
+					char latBuf[96];
+					::snprintf(latBuf, sizeof(latBuf), "\"windowCommitStructuralMs\":%llu,", structuralMs);
+					extraTraceFieldsForTrace += latBuf;
+				}
+				captureStep("structural", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+				wprintf(L"WINDOWLATENCY inplaceMs=%llu structuralMs=%llu\n", inplaceMs, structuralMs);
+			} else if (traceProfile && wcscmp(traceProfile, L"window-undo") == 0) {
+				// W3 M2: IN-PLACE window commit ([05-28..08-13] keeps the auto-fit
+				// axis tick set, so nothing enters/leaves and the group identity
+				// survives; undoing a structural regroup would orphan the overlay's
+				// chart binding) -> ONE external undo restores the window fields AND
+				// geometry together (single undo entry, SR-WIN-27) -> a +1d nudge
+				// must NOT resurrect the undone window (the PP_DOC drift probe
+				// re-syncs the scene cache at read-back).
+				// Frame + PP_PROJ + PP_DOC are the restore witnesses: an external
+				// undo can leave GroupItems temporarily broken on the restored
+				// group (observed 0x800A01A8), so child-level geometry is not
+				// OM-readable at this point — but the group FRAME, the projection
+				// tag and the document tag are, and the window commit changes all
+				// three (frame width shrinks when the clamped note re-enters the
+				// body, PP_PROJ gets pad=0/minDay=windowStart, PP_DOC gains the
+				// window fields). One undo restoring all three together IS the
+				// single-entry proof.
+				auto chartFrameAndProj = [&](float* l, float* t, float* w, float* h, std::string* proj) -> bool {
+					try {
+						PowerPoint::_SlidePtr slNow = app->GetActiveWindow()->GetView()->GetSlide();
+						PowerPoint::ShapesPtr shsNow = slNow->GetShapes();
+						long nNow = shsNow->GetCount();
+						for (long i = 1; i <= nNow; ++i) {
+							PowerPoint::ShapePtr sh = shsNow->Item(_variant_t(i));
+							_bstr_t k = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							if (k.length() && std::string((const char*)_bstr_t(k)) == "CHART_ROOT") {
+								*l = sh->GetLeft(); *t = sh->GetTop();
+								*w = sh->GetWidth(); *h = sh->GetHeight();
+								_bstr_t pj = sh->GetTags()->Item(_bstr_t(L"PP_PROJ"));
+								*proj = pj.length() ? (const char*)_bstr_t(pj) : "";
+								return true;
+							}
+						}
+					} catch (...) {}
+					return false;
+				};
+
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				float preL = 0, preT = 0, preW = 0, preH = 0;
+				std::string preProj;
+				const bool preFrameOk = chartFrameAndProj(&preL, &preT, &preW, &preH, &preProj);
+				std::string docJsonPre;
+				try { docJsonPre = ReadGanttFromSlide(app); } catch (...) {}
+				captureStep("pre", traceProfile);
+
+				Overlay_CommitWindowGestureForTest("2026-05-28", "2026-08-13");
+				PumpFor(400);
+				{
+					std::string docJsonCommit;
+					try { docJsonCommit = ReadGanttFromSlide(app); } catch (...) {}
+					float cL = 0, cT = 0, cW = 0, cH = 0;
+					std::string cProj;
+					const bool commitFrameOk = chartFrameAndProj(&cL, &cT, &cW, &cH, &cProj);
+					const bool commitChangedDoc = !docJsonPre.empty() && docJsonCommit != docJsonPre;
+					const bool commitChangedGeom = preFrameOk && commitFrameOk
+						&& (std::fabs(cW - preW) > 0.25f || cProj != preProj);
+					extraTraceFieldsForTrace = std::string("\"windowCommitChangedDoc\":")
+						+ (commitChangedDoc ? "true," : "false,")
+						+ "\"windowCommitChangedGeometry\":" + (commitChangedGeom ? "true," : "false,");
+				}
+				captureStep("commit", traceProfile);
+
+				const bool undoDispatched = ExecuteUndoOnceW3(app);
+				PumpFor(700);
+				{
+					std::string docJsonUndo;
+					try { docJsonUndo = ReadGanttFromSlide(app); } catch (...) {}
+					float uL = 0, uT = 0, uW = 0, uH = 0;
+					std::string uProj;
+					const bool undoFrameOk = chartFrameAndProj(&uL, &uT, &uW, &uH, &uProj);
+					const bool docRestored = undoDispatched && !docJsonPre.empty() && docJsonUndo == docJsonPre;
+					const bool geomRestored = undoDispatched && preFrameOk && undoFrameOk
+						&& std::fabs(uL - preL) <= 0.25f && std::fabs(uT - preT) <= 0.25f
+						&& std::fabs(uW - preW) <= 0.25f && std::fabs(uH - preH) <= 0.25f
+						&& uProj == preProj;
+					char undoBuf[192];
+					::snprintf(undoBuf, sizeof(undoBuf),
+						"\"windowUndoDispatched\":%s,\"windowUndoDocRestored\":%s,\"windowUndoGeometryRestored\":%s,",
+						undoDispatched ? "true" : "false",
+						docRestored ? "true" : "false",
+						geomRestored ? "true" : "false");
+					extraTraceFieldsForTrace += undoBuf;
+					wprintf(L"WINDOWUNDO dispatched=%d docRestored=%d geomRestored=%d frame=(%.2f,%.2f,%.2f,%.2f)->(%.2f,%.2f,%.2f,%.2f)\n",
+						undoDispatched ? 1 : 0, docRestored ? 1 : 0, geomRestored ? 1 : 0,
+						preL, preT, preW, preH, uL, uT, uW, uH);
+				}
+				captureStep("undo", traceProfile);
+
+				// The external undo leaves the restored group's GroupItems
+				// dispatch broken (0x800A01A8), so the overlay hides itself —
+				// and clears selection — on every tick until the chart is
+				// re-emitted. Select + dispatch back-to-back WITHOUT pumping in
+				// between (the seam is synchronous; ticks only run while
+				// messages pump): the nudge is the first op-path doc read after
+				// the undo (the drift-probe/cache-poisoning trap), and its
+				// reconcile fails over to the InsertGantt re-emit, which heals
+				// the chart — the product story for "first edit after Ctrl+Z".
+				Overlay_SelectForTest("TASK", "discovery");
+				emitOpDispatch();
+				performOpWithLatency(HtCmd_NudgePlus1);
+				{
+					std::string docAfterNudge;
+					try { docAfterNudge = ReadGanttFromSlide(app); } catch (...) {}
+					const bool nudged = docAfterNudge.find("2026-06-02") != std::string::npos;
+					const bool windowGone = docAfterNudge.find("windowStart") == std::string::npos;
+					wprintf(L"WINDOWUNDO-DIAG post-nudge docNudged=%d docWindowGone=%d docLen=%zu\n",
+						nudged ? 1 : 0, windowGone ? 1 : 0, docAfterNudge.size());
+				}
+				captureStep("nudge", traceProfile);
 				PumpFor(150);
 				captureStep("+1", traceProfile);
 				PumpFor(300);

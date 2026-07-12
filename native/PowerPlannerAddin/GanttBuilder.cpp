@@ -260,6 +260,13 @@ struct OpPhaseTimings {
 	uint64_t docTagWriteMs = 0;
 	uint64_t framePreserveMs = 0;
 	uint64_t reselectMs = 0;
+	// W3 structural-reconcile phase split (window commits are always
+	// structural): pre-ungroup child snapshot walk, ungroup + post-ungroup
+	// identity re-derive, survivor sync + delete/create churn, regroup+retag.
+	uint64_t childWalkMs = 0;
+	uint64_t ungroupMs = 0;
+	uint64_t churnMs = 0;
+	uint64_t regroupMs = 0;
 	bool fastPathHit = false;
 	bool rowYRewritten = false;
 	// Cost of obtaining the document(s) for the op in Overlay.cpp's dispatch
@@ -500,11 +507,15 @@ static void CommitSceneCache(PowerPoint::ShapePtr group, const Scene& sc, const 
 
 static bool BuildSceneForUpdate(const PpDocument& doc, float slideW, Scene* outScene,
 	std::string* outMinD, std::string* outMaxD, long* outPad, float* outPtPerDay) {
-	// SetTimeWindow/ClearTimeWindow are pure model ops. This is their builder
-	// invalidation point: both deltas must discard the old projection before any
-	// cache/frozen-window shortcut can observe it.
-	if (g_sceneCacheValid && (doc.windowStart != g_cacheWinStart || doc.windowEnd != g_cacheWinEnd))
-		InvalidateSceneCache();
+	// SetTimeWindow/ClearTimeWindow are pure model ops. A window delta must
+	// never reuse the cached projection — BOTH frozen-window branches below
+	// gate on exact windowStart/End equality with the cache (and the scene-diff
+	// fast path refuses window deltas up front), so a changed window always
+	// falls through to a fresh BuildProjectedScene. The cache itself is KEPT
+	// (not invalidated): ReconcileChartRoot needs g_lastScene/g_shapeMap to
+	// sync the window commit with write-only per-field deltas
+	// (window_commit_budget, SR-WIN-28); CommitSceneCache overwrites it with
+	// the new projection when the update lands.
 	if (g_sceneCacheValid && !g_cacheMinD.empty() && !g_cacheMaxD.empty()
 		&& HasExplicitTimeWindow(doc)
 		&& doc.windowStart == g_cacheWinStart && doc.windowEnd == g_cacheWinEnd) {
@@ -758,19 +769,61 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 	Scene sc; std::string minD, maxD; long pad = 0; float ptPerDay = 0.0f;
 	if (!BuildProjectedScene(doc, slideW, &sc, &minD, &maxD, &pad, &ptPerDay)) return E_FAIL;
 
-	PowerPoint::GroupShapesPtr items = group->GetGroupItems();
-	long childCount = items->GetCount();
+	PowerPoint::GroupShapesPtr items;
+	long childCount = 0;
+	try {
+		items = group->GetGroupItems();
+		childCount = items->GetCount();
+	} catch (const _com_error&) {
+		// W3/M2 recovery: a CHART_ROOT restored by an EXTERNAL undo can come
+		// back with a broken GroupItems dispatch (observed 0x800A01A8 after
+		// undoing a window commit). Fail the reconcile cleanly — UpdateGantt's
+		// InsertGantt fallback then rebuilds the chart from the restored
+		// PP_DOC instead of the exception escaping past the fallback.
+		GbLog(L"ReconcileChartRoot: GroupItems unavailable (external undo?) - deferring to re-emit");
+		return E_FAIL;
+	}
 
-	// Snapshot existing children + their match keys (COM: one pass, cheap).
+	// Snapshot existing children + their match keys. When the scene cache
+	// still owns this group AND accounts for every child, the identity walk is
+	// answered from the cache (pure C++ + the already-held ShapePtrs) instead
+	// of ~3 COM calls per child — the walk was the single largest COM block of
+	// a window commit (W3 window_commit_budget). Any count mismatch (external
+	// paste into the group, partial cache) falls back to the real walk.
+	const ULONGLONG tChildWalk0 = ::GetTickCount64();
 	std::vector<PowerPoint::ShapePtr> children(childCount ? childCount : 0);
 	std::vector<std::pair<std::string, std::string>> childKindIds(childCount ? childCount : 0);
-	for (long i = 1; i <= childCount; ++i) {
-		PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
-		children[i - 1] = ch;
-		_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
-		_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
-		childKindIds[i - 1] = { k.length() ? Narrow((const wchar_t*)k) : "", id.length() ? Narrow((const wchar_t*)id) : "" };
+	bool childSnapshotFromCache = false;
+	if (g_sceneCacheValid && g_chartRootShapeId != 0
+		&& (long)g_shapeMap.size() == childCount && childCount > 0) {
+		bool groupIdMatches = false;
+		try { groupIdMatches = group->GetId() == g_chartRootShapeId; } catch (...) {}
+		if (groupIdMatches) {
+			long idx = 0;
+			for (const auto& kv : g_shapeMap) {
+				children[idx] = kv.second;
+				childKindIds[idx] = { std::get<0>(kv.first), std::get<1>(kv.first) };
+				++idx;
+			}
+			childSnapshotFromCache = true;
+		}
 	}
+	if (!childSnapshotFromCache) {
+		try {
+			for (long i = 1; i <= childCount; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				children[i - 1] = ch;
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				childKindIds[i - 1] = { k.length() ? Narrow((const wchar_t*)k) : "", id.length() ? Narrow((const wchar_t*)id) : "" };
+			}
+		} catch (const _com_error&) {
+			// Same recovery rule as the GroupItems guard above.
+			GbLog(L"ReconcileChartRoot: child walk failed - deferring to re-emit");
+			return E_FAIL;
+		}
+	}
+	g_lastOpPhases.childWalkMs = ElapsedMs(tChildWalk0);
 	std::vector<MatchKey> childKeys = BuildMatchKeys(childKindIds);
 	std::map<MatchKey, long> childIndexByKey; // 0-based into children/childKeys
 	for (long i = 0; i < (long)childKeys.size(); ++i) {
@@ -792,6 +845,125 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 	primKindIds.reserve(sc.prims.size());
 	for (const auto& p : sc.prims) primKindIds.push_back({ p.tagKind, p.tagId });
 	std::vector<MatchKey> primKeys = BuildMatchKeys(primKindIds);
+
+	// W3 window_commit_budget (SR-WIN-28): when the scene cache still owns this
+	// group, the cached g_lastScene IS the shapes' current visual truth (same
+	// trust boundary as TryApplySceneDiffFast; the PP_DOC drift probe drops the
+	// cache on external edits). Reuse it to sync surviving shapes with the fast
+	// path's WRITE-ONLY per-field deltas (ApplyPrimWriteDelta) instead of the
+	// full read+rewrite SyncShapeGeometryAndText: a window commit rescales
+	// x/width on content prims but leaves rail/row geometry, all text and all
+	// style untouched, so the delta form cuts ~10-15 COM calls per child to
+	// 0-4 (measured 3.9s -> the 2s budget on the showcase doc). Cache miss or
+	// unknown key falls back to the full sync — never a correctness trade.
+	//
+	// IN-FRAME reconcile (plan §2.4 "the chart KEEPS its slide footprint"): a
+	// fitted/user-resized chart's shapes sit at an AFFINE TRANSFORM T of the
+	// scene's natural coordinates (T maps the old scene union onto the group's
+	// current frame). All geometry below is therefore written through T —
+	// survivors, created shapes and PP_PROJ alike — so the reconciled chart
+	// lands exactly on its previous footprint with NO post-hoc group refit
+	// (the old natural-write + FitChartRootToFrame re-pin rescaled every child
+	// per commit, which both blew the ≤2s budget and made re-emitted geometry
+	// path-dependent, breaking SR-WIN-20 losslessness). When the cache is not
+	// trusted, T degrades to identity: natural writes + UpdateGantt's frame
+	// re-pin, the pre-W3 behavior.
+	const bool reconcileCacheTrusted = g_sceneCacheValid && g_chartRootShapeId != 0
+		&& [&]() { try { return group->GetId() == g_chartRootShapeId; } catch (...) { return false; } }();
+	std::map<ShapeMapKey, const Prim*> oldPrimByKey;
+	float tSx = 1.0f, tSy = 1.0f, tDx = 0.0f, tDy = 0.0f; // x' = x*tSx + tDx
+	bool frameTransformValid = false;
+	if (reconcileCacheTrusted) {
+		std::vector<MatchKey> oldKeys = BuildScenePrimKeys(g_lastScene);
+		for (size_t i = 0; i < g_lastScene.prims.size(); ++i)
+			oldPrimByKey[ToShapeMapKey(oldKeys[i])] = &g_lastScene.prims[i];
+		try {
+			float ol = 1e9f, ot = 1e9f, orr = -1e9f, ob = -1e9f;
+			for (const auto& p : g_lastScene.prims) {
+				const bool isLine = (p.kind == PrimKind::Line || p.kind == PrimKind::Connector);
+				ol = std::min(ol, isLine ? std::min(p.x, p.x2) : p.x);
+				orr = std::max(orr, isLine ? std::max(p.x, p.x2) : p.x + p.w);
+				ot = std::min(ot, isLine ? std::min(p.y, p.y2) : p.y);
+				ob = std::max(ob, isLine ? std::max(p.y, p.y2) : p.y + p.h);
+			}
+			const float unionW = orr - ol, unionH = ob - ot;
+			const float capL = group->GetLeft(), capT = group->GetTop();
+			const float capW = group->GetWidth(), capH = group->GetHeight();
+			if (unionW > 1.0f && unionH > 1.0f && capW > 1.0f && capH > 1.0f) {
+				tSx = capW / unionW;
+				tSy = capH / unionH;
+				tDx = capL - ol * tSx;
+				tDy = capT - ot * tSy;
+				frameTransformValid = true;
+			}
+			// The union-derived X mapping is only as accurate as the scene's
+			// NOMINAL prim rects — autosized TEXT overhangs make the group's
+			// real bounding box wider than the nominal union, so capW/unionW
+			// drifts off the true fitted scale (observed: empty-cell creates
+			// landing 2 days off on a fit-to-slide chart, overlay_lifecycle
+			// CREATEEMPTY). The group's live PP_PROJ was rewritten by the
+			// exact fit that scaled the shapes, so ptPerDayOld/ptPerDayNatural
+			// IS the true X scale and originXOld the true fitted origin —
+			// prefer them whenever parseable. Y keeps the union estimate: no
+			// Y projection tag exists, and vertical noise cannot move dates.
+			if (frameTransformValid) {
+				_bstr_t projTag = group->GetTags()->Item(_bstr_t(L"PP_PROJ"));
+				PpProj projOld;
+				if (projTag.length()
+					&& ParseProj(Narrow((const wchar_t*)projTag), &projOld)
+					&& projOld.ptPerDay > 0.0f && g_cachePtPerDay > 0.0f) {
+					tSx = projOld.ptPerDay / g_cachePtPerDay;
+					tDx = projOld.originX - (MARGIN + ROW_GUTTER) * tSx;
+				}
+			}
+		} catch (...) {
+			frameTransformValid = false;
+			tSx = tSy = 1.0f; tDx = tDy = 0.0f;
+		}
+	}
+	auto transformPrim = [&](const Prim& p) {
+		if (!frameTransformValid) return p;
+		Prim out = p;
+		out.x = p.x * tSx + tDx;
+		out.w = p.w * tSx;
+		out.x2 = p.x2 * tSx + tDx;
+		out.y = p.y * tSy + tDy;
+		out.h = p.h * tSy;
+		out.y2 = p.y2 * tSy + tDy;
+		return out;
+	};
+	auto syncSurvivorShape = [&](PowerPoint::ShapePtr ch, size_t primIdx) {
+		const Prim& newP = sc.prims[primIdx];
+		if (reconcileCacheTrusted) {
+			auto oldIt = oldPrimByKey.find(ToShapeMapKey(primKeys[primIdx]));
+			if (oldIt != oldPrimByKey.end()) {
+				if (!PrimVisualFieldsEqual(*oldIt->second, newP)) {
+					ApplyPrimWriteDelta(ch, transformPrim(*oldIt->second), transformPrim(newP));
+					++g_lastOpPhases.primWriteCount;
+				}
+				return;
+			}
+			// Trusted cache but unknown key: full sync IN FRAME SPACE so the
+			// shape stays coherent with its delta-written siblings.
+			SyncShapeGeometryAndText(ch, transformPrim(newP));
+			++g_lastOpPhases.primWriteCount;
+			return;
+		}
+		SyncShapeGeometryAndText(ch, newP);
+		++g_lastOpPhases.primWriteCount;
+	};
+	// PP_PROJ must describe the same space the shapes were written in. The
+	// natural-space tag write (WriteChartRootTags) is corrected through T for
+	// the in-frame reconcile; PP_ROWY needs no correction (WriteChartRootTags
+	// rebases it onto the group's LIVE frame after the writes).
+	auto correctProjTagForFrame = [&](PowerPoint::ShapePtr tagGroup) {
+		if (!frameTransformValid) return;
+		if (std::fabs(tSx - 1.0f) < 0.0005f && std::fabs(tDx) < 0.01f) return;
+		char proj[192];
+		::sprintf_s(proj, "{\"minDay\":%ld,\"pad\":%ld,\"ptPerDay\":%.6f,\"originX\":%.4f}",
+			DateToDays(minD), pad, ptPerDay * tSx, (MARGIN + ROW_GUTTER) * tSx + tDx);
+		tagGroup->GetTags()->Add(_bstr_t(L"PP_PROJ"), _bstr_t(Widen(proj).c_str()));
+	};
 
 	// Classify: which new prims match an existing child (update-in-place) vs.
 	// are brand new (must be added); which existing children have no matching
@@ -820,10 +992,13 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 	if (!anyAdded && !anyRemoved) {
 		// Pure move/resize/retext: mutate matched children in place, no
 		// ungroup/regroup, no delete/recreate. Group identity is untouched.
+		const ULONGLONG tPrim0 = ::GetTickCount64();
 		for (size_t p = 0; p < sc.prims.size(); ++p) {
-			SyncShapeGeometryAndText(children[primMatchChildIdx[p]], sc.prims[p]);
+			syncSurvivorShape(children[primMatchChildIdx[p]], p);
 		}
+		g_lastOpPhases.primWritesMs = ElapsedMs(tPrim0);
 		WriteChartRootTags(group, doc, minD, pad, ptPerDay, slideW);
+		correctProjTagForFrame(group);
 
 		{
 			std::vector<PowerPoint::ShapePtr> byPrim(sc.prims.size());
@@ -852,6 +1027,7 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 	// re-reading its PP_KIND/PP_ID tags (tags belong to the shape, not the
 	// group, so they survive Ungroup intact) and re-keying with the SAME
 	// MatchKey scheme used for the pre-ungroup snapshot.
+	const ULONGLONG tUngroup0 = ::GetTickCount64();
 	PowerPoint::ShapeRangePtr ungrouped = group->Ungroup();
 	long ungroupedCount = ungrouped->GetCount();
 	std::vector<PowerPoint::ShapePtr> postUngroupShapes(ungroupedCount ? ungroupedCount : 0);
@@ -890,7 +1066,10 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		}
 	};
 
+	g_lastOpPhases.ungroupMs = ElapsedMs(tUngroup0);
+
 	try {
+		const ULONGLONG tChurn0 = ::GetTickCount64();
 		std::vector<MatchKey> postUngroupKeys = BuildMatchKeys(postUngroupKindIds);
 		std::map<MatchKey, long> postUngroupIndexByKey;
 		for (long i = 0; i < (long)postUngroupKeys.size(); ++i) postUngroupIndexByKey[postUngroupKeys[i]] = i;
@@ -942,19 +1121,23 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 			auto survIt = (primMatchChildIdx[p] >= 0) ? survivorByOldIdx.find(primMatchChildIdx[p]) : survivorByOldIdx.end();
 			if (survIt != survivorByOldIdx.end()) {
 				PowerPoint::ShapePtr ch = survIt->second;
-				SyncShapeGeometryAndText(ch, prim);
+				syncSurvivorShape(ch, p);
 				finalOrder.push_back(ch);
 			} else {
-				Scene one; one.prims.push_back(prim);
+				// Created shapes render IN FRAME SPACE (see transformPrim) so
+				// they land coherently among the delta-written survivors.
+				Scene one; one.prims.push_back(transformPrim(prim));
 				std::vector<PowerPoint::ShapePtr> emitted = RenderScene(shapes, one);
 				for (auto& e : emitted) renderedThisAttempt.push_back(e);
 				if (!emitted.empty()) finalOrder.push_back(emitted[0]);
 			}
 		}
 		for (auto& ch : untaggedSurvivors) finalOrder.push_back(ch);
+		g_lastOpPhases.churnMs = ElapsedMs(tChurn0);
 
 		if (finalOrder.size() < 2) { cleanupLoose(); return E_FAIL; } // nothing sane to regroup
 
+		const ULONGLONG tRegroup0 = ::GetTickCount64();
 		SAFEARRAY* saf = ::SafeArrayCreateVector(VT_BSTR, 0, (ULONG)finalOrder.size());
 		for (LONG i = 0; i < (LONG)finalOrder.size(); ++i) {
 			_bstr_t nm = finalOrder[i]->GetName();
@@ -966,6 +1149,8 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 		newGroup->GetTags()->Add(_bstr_t(L"PP_KIND"), _bstr_t(L"CHART_ROOT"));
 		newGroup->GetTags()->Add(_bstr_t(L"PP_VERSION"), _bstr_t(L"1"));
 		WriteChartRootTags(newGroup, doc, minD, pad, ptPerDay, slideW);
+		correctProjTagForFrame(newGroup);
+		g_lastOpPhases.regroupMs = ElapsedMs(tRegroup0);
 
 		{
 			std::vector<PowerPoint::ShapePtr> byPrim(sc.prims.size());
@@ -1006,14 +1191,34 @@ static void PreserveChartRootFrame(IDispatch* pApp, PowerPoint::_SlidePtr slide,
 		}
 		if (!group) return;
 
-		const float kTol = 0.25f;
-		bool driftedFrame = (std::fabs(group->GetLeft() - capLeft) > kTol)
-			|| (std::fabs(group->GetTop() - capTop) > kTol)
-			|| (std::fabs(group->GetWidth() - capWidth) > kTol)
-			|| (std::fabs(group->GetHeight() - capHeight) > kTol);
+		// W3: re-created TEXT children autosize to their content, so a lossless
+		// re-emission can grow the group's union a few points past the exact
+		// in-frame target (e.g. an anchored note re-appearing at a fitted
+		// scale). Re-pinning for that noise would uniformly rescale EVERY
+		// child (breaking SR-WIN-20's exact restore); only a REAL footprint
+		// drift (untrusted-cache natural rebuild, user-visible movement) may
+		// refit. Tolerance: 1.5% of the frame dimension, floored at 4pt.
+		const float kTolX = std::max(4.0f, capWidth * 0.015f);
+		const float kTolY = std::max(4.0f, capHeight * 0.015f);
+		bool driftedFrame = (std::fabs(group->GetLeft() - capLeft) > kTolX)
+			|| (std::fabs(group->GetTop() - capTop) > kTolY)
+			|| (std::fabs(group->GetWidth() - capWidth) > kTolX)
+			|| (std::fabs(group->GetHeight() - capHeight) > kTolY);
+		{
+			wchar_t dbg[192];
+			::swprintf_s(dbg, 192, L"frame-preserve: actual=(%.2f,%.2f,%.2f,%.2f) target=(%.2f,%.2f,%.2f,%.2f) refit=%d",
+				group->GetLeft(), group->GetTop(), group->GetWidth(), group->GetHeight(),
+				capLeft, capTop, capWidth, capHeight, driftedFrame ? 1 : 0);
+			GbLog(dbg);
+		}
 		if (!driftedFrame) return;
 
-		FitChartRootToFrame(pApp, capLeft, capTop, capWidth, capHeight);
+		// No defensive reflow here: the reconcile that just ran wrote coherent
+		// PP_DOC/PP_PROJ/PP_ROWY for these shapes, and FitChartRootToFrame
+		// itself rescales PP_PROJ/PP_ROWY for the refit — the read-back could
+		// only re-derive identical dates at full child-walk cost (and under an
+		// explicit window, fewer ReflowFromSlide passes = less C1 surface).
+		FitChartRootToFrame(pApp, capLeft, capTop, capWidth, capHeight, /*defensiveReflow=*/false);
 	} catch (const _com_error&) {
 	} catch (...) {}
 }
@@ -1112,6 +1317,25 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		// rare path (structural edits / fast-path misses).
 		if (!shapes) shapes = slide->GetShapes();
 
+		// SR-WIN-20 losslessness on window CLEAR: clearing a window re-spans the
+		// full-width derived prims (AXIS_BANDDIV and the grid) from the windowed
+		// projection back to the full auto-fit extent. Under the trusted-cache
+		// reconcile those re-spanned prims land via the PP_PROJ-derived transform
+		// T, whose rounding diverges from the FIT path (FitChartRootToFrame) that
+		// built the pre-window state — the divergence is invisible on date-anchored
+		// bars (T pins date->x exactly) but accumulates at the axis divider's far
+		// end (observed: AXIS_BANDDIV ~1pt origin / ~5.5pt width drift, breaking
+		// window-clip-rerender's window_lossless_reemission at 0.1pt tol). A window
+		// clear is a cold, rare op, so drop the scene cache for this one reconcile:
+		// that degrades T to identity (natural writes) + PreserveChartRootFrame's
+		// FitChartRootToFrame re-pin — byte-identical math to the fresh InsertGantt
+		// build that produced the pre state — so the cleared chart is lossless.
+		// The window COMMIT path keeps the cache (SR-WIN-28 delta budget); only the
+		// windowed->unwindowed transition takes this clean-rebuild route.
+		if (!HasExplicitTimeWindow(doc) && !g_cacheWinStart.empty()) {
+			InvalidateSceneCache();
+		}
+
 		// Capture the CHART_ROOT's frame BEFORE reconciling — this is whatever
 		// frame the chart currently has (fitted, user-resized, or natural), and
 		// is what must survive the rebuild below (review finding #1).
@@ -1120,10 +1344,26 @@ HRESULT UpdateGantt(IDispatch* pApp, const PpDocument& doc, const std::string& s
 		const float capWidth = group->GetWidth();
 		const float capHeight = group->GetHeight();
 
+		// W3 (SR-WIN-20/28) post-mortem: an earlier revision transformed this
+		// target by the old-scene->new-scene PRIM-UNION delta so a union change
+		// (window commit hiding an overhanging element, row add) would move the
+		// frame with it. That trusted the union as the chart's footprint — but
+		// out-of-window MARKERS/notes are a legitimate scene state under the
+		// auto-fit projection (ComputeDocDateExtents spans tasks+milestones
+		// only), and their overhang made the frame WALK (observed: rows-only
+		// chart at Left=-475pt, width 2x, overlay_lifecycle CREATEEMPTY). The
+		// captured frame verbatim is the correct target: the natural chart-body
+		// X extent is invariant by construction (a window/doc delta rescales
+		// ptPerDay into the SAME content width), and a refit that squeezes new
+		// overhang back into the footprint stays fully consistent because
+		// FitChartRootToFrame rescales PP_PROJ with the shapes and the
+		// reconcile's T is derived from PP_PROJ (not from union estimates).
+		const float targetLeft = capLeft, targetTop = capTop, targetWidth = capWidth, targetHeight = capHeight;
+
 		HRESULT hr = ReconcileChartRoot(app, slide, group, doc, selectId);
 		if (SUCCEEDED(hr)) {
 			const ULONGLONG tFrame0 = ::GetTickCount64();
-			PreserveChartRootFrame(pApp, slide, capLeft, capTop, capWidth, capHeight);
+			PreserveChartRootFrame(pApp, slide, targetLeft, targetTop, targetWidth, targetHeight);
 			g_lastOpPhases.framePreserveMs = ElapsedMs(tFrame0);
 			g_cacheSlideId = activeSlideId; // ReconcileChartRoot re-committed the cache on this slide
 			if (!selectId.empty()) g_lastAppliedSelectId = selectId;
@@ -1251,7 +1491,32 @@ bool ReadGanttDocFromSlide(IDispatch* pApp, PpDocument* out, bool accumulate) {
 				if (activeSlideId != 0 && activeSlideId == g_cacheSlideId) {
 					g_opHandoffSlideId = activeSlideId;
 					g_opHandoffSlide = slide;
-					if (Gantt_TryGetCachedDoc(g_chartRootShapeId, out)) {
+					// M2 / SR-WIN-27 PP_DOC drift probe: an EXTERNAL undo/redo or
+					// manual tag edit rewrites PP_DOC without passing through
+					// CommitSceneCache, so serving g_cacheDoc here would resurrect
+					// the undone document (e.g. re-apply an undone time window on
+					// the next nudge). One cheap tag read on the cached group ptr
+					// (no shape walk) confirms the cache still owns the slide's
+					// truth; any mismatch OR COM failure (dangling group after a
+					// structural undo) drops the whole scene cache and falls
+					// through to the full read below. Probed once per op: the
+					// accumulate read (RebuildChart's second read inside the SAME
+					// synchronous dispatch) cannot observe a world the op-start
+					// read did not — skipping it keeps the nudge fast path inside
+					// its 200ms budget.
+					bool docTagMatches = accumulate;
+					if (!docTagMatches) {
+						try {
+							_bstr_t docTag = g_cacheGroup->GetTags()->Item(_bstr_t(L"PP_DOC"));
+							docTagMatches = docTag.length()
+								&& Narrow((const wchar_t*)docTag) == g_cacheDocJson;
+						} catch (...) {
+							docTagMatches = false;
+						}
+					}
+					if (!docTagMatches) {
+						InvalidateSceneCache();
+					} else if (Gantt_TryGetCachedDoc(g_chartRootShapeId, out)) {
 						ok = true;
 						cached = true;
 					}
@@ -1275,17 +1540,25 @@ bool ReadGanttDocFromSlide(IDispatch* pApp, PpDocument* out, bool accumulate) {
 					_bstr_t kind = sh->GetTags()->Item(_bstr_t(L"PP_KIND"));
 					if (kind.length() && Narrow((const wchar_t*)kind) == "CHART_ROOT") {
 						const long id = sh->GetId();
+						// M2 drift probe (same rule as the fast branch above): only
+						// serve the cached doc when the slide's PP_DOC still equals
+						// the JSON the cache was committed with; otherwise the tag
+						// was rewritten externally (undo/redo) — drop the cache and
+						// parse the tag truth.
+						std::string json;
+						try {
+							json = Narrow((const wchar_t*)sh->GetTags()->Item(_bstr_t(L"PP_DOC")));
+						} catch (...) {}
+						if (g_sceneCacheValid && id == g_chartRootShapeId && json != g_cacheDocJson)
+							InvalidateSceneCache();
 						if (Gantt_TryGetCachedDoc(id, out)) {
 							ok = true;
 							cached = true;
-						} else {
-							// Cache miss (invalid, or a different group id after an
-							// external undo/edit): full read + parse fallback.
-							std::string json = Narrow((const wchar_t*)sh->GetTags()->Item(_bstr_t(L"PP_DOC")));
-							if (!json.empty()) {
-								*out = DocumentFromJson(json);
-								ok = true;
-							}
+						} else if (!json.empty()) {
+							// Cache miss (invalid, drifted, or a different group id
+							// after an external undo/edit): full parse fallback.
+							*out = DocumentFromJson(json);
+							ok = true;
 						}
 						break;
 					}
@@ -1544,7 +1817,8 @@ static const float kFitTitleZoneFrac = 0.15f;
 // scale/no-distortion/letterbox policy is NOT this function's job — it lives
 // in FitChartRootToSlide, which computes an already-uniform-scaled target
 // rect and passes THAT (not the raw slide content area) here.
-HRESULT FitChartRootToFrame(IDispatch* pApp, float left, float top, float width, float height) {
+HRESULT FitChartRootToFrame(IDispatch* pApp, float left, float top, float width, float height,
+	bool defensiveReflow) {
 	if (!pApp) return E_POINTER;
 	try {
 		PowerPoint::_ApplicationPtr app(pApp);
@@ -1613,8 +1887,10 @@ HRESULT FitChartRootToFrame(IDispatch* pApp, float left, float top, float width,
 		// (unscaled, full-slide-width) size, so this path intentionally does
 		// not re-fit; callers that need the fit to survive a drifting reflow
 		// should re-invoke FitChartRootToFrame/FitChartRootToSlide afterward.
-		bool changed = false;
-		ReflowFromSlide(pApp, &changed);
+		if (defensiveReflow) {
+			bool changed = false;
+			ReflowFromSlide(pApp, &changed);
+		}
 		return S_OK;
 	}
 	catch (const _com_error&) { return E_FAIL; }
@@ -1683,7 +1959,8 @@ int Gantt_GetLastOpPhasesForTest(char* buf, int len) {
 	char tmp[512];
 	::sprintf_s(tmp, sizeof(tmp),
 		"{\"sceneBuild\":%llu,\"keyCompare\":%llu,\"primWrites\":%llu,\"primWriteCount\":%d,"
-		"\"docTagWrite\":%llu,\"framePreserve\":%llu,\"reselect\":%llu,\"fastPath\":%s,"
+		"\"docTagWrite\":%llu,\"framePreserve\":%llu,\"reselect\":%llu,"
+		"\"childWalk\":%llu,\"ungroup\":%llu,\"churn\":%llu,\"regroup\":%llu,\"fastPath\":%s,"
 		"\"rowYRewritten\":%s,"
 		"\"docRead\":%llu,\"docReadCached\":%s,\"dispatchTotal\":%llu}",
 		(unsigned long long)p.sceneBuildMs,
@@ -1693,6 +1970,10 @@ int Gantt_GetLastOpPhasesForTest(char* buf, int len) {
 		(unsigned long long)p.docTagWriteMs,
 		(unsigned long long)p.framePreserveMs,
 		(unsigned long long)p.reselectMs,
+		(unsigned long long)p.childWalkMs,
+		(unsigned long long)p.ungroupMs,
+		(unsigned long long)p.churnMs,
+		(unsigned long long)p.regroupMs,
 		p.fastPathHit ? "true" : "false",
 		p.rowYRewritten ? "true" : "false",
 		(unsigned long long)p.docReadMs,

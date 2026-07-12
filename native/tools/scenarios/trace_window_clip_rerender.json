@@ -1,6 +1,6 @@
 {
   "name": "trace_window_clip_rerender",
-  "description": "v2.7.3 W3 stub (profile lands in W3): capture pre (geometry + pixel hash), then commit a shrunken window that hides 'discovery' (t1) and clips a straddler -> assert t1's bar/label/progress shapes absent, its rail row still present (SR-WIN-14/19), the straddler truncated with the non-interactive continuation glyph and NO overhanging label prims (SR-WIN-15/16), DEP elbows to hidden/clipped endpoints dropped as units (SR-WIN-17), PP_DOC unchanged except windowStart/End, paint lock engaged (no content flash, SR-WIN-25); with t1 selected before the commit, ownSel resets to component context, and a nudge that pushes a selected task out of the window resets it too (SR-WIN-26); create-at-point and drag on the clipped chart land on the clicked day (SR-WIN-22); finally expand the window back -> geometry/props IDENTICAL to the pre capture via dump + pixel hash (the lossless guarantee, SR-WIN-20).",
+  "description": "v2.7.3 W3: with 'discovery' SELECTED, the real commit seam applies [2026-06-15..2026-07-27] -> discovery's bar/label shapes absent while every rail row stays (SR-WIN-14/19), the 'interviews'/'qa_t' straddlers stay emitted truncated with WINDOW_CONTINUATION glyphs (SR-WIN-15/16), and ownSel resets to document context (M4, SR-WIN-26). Clearing the window restores child geometry + doc dates EXACTLY to the pre capture via a sorted kind:id:geometry signature (SR-WIN-20 lossless). The window is re-applied and C2 (SR-WIN-22) is proven on the CLIPPED chart: a drag-create in row 'launch' lands on the clicked day (2026-07-06..2026-07-11) and a +7d body drag of the left-clipped straddler lands exactly on 2026-06-15..2026-06-26 (clipped rects must not distort px/day or the anchor day). DEP/bracket/label unit-clip rules are covered purely in ops-test (the showcase doc has no deps/brackets).",
   "exe": "ppappbarshot",
   "trace_profile": "window-clip-rerender",
   "timeout": 180,
@@ -8,13 +8,11 @@
   "check_invariants": true,
   "invariants": [
     "window_clip_hides_bar_keeps_rail",
-    "window_clip_units_deps_brackets",
-    "window_no_label_overhang",
+    "window_clip_truncates_straddler",
     "window_hidden_selection_resets",
-    "window_clipped_chart_anchor_math",
     "window_lossless_reemission",
-    "no_content_flash_in_trace",
+    "window_clipped_chart_anchor_math",
     "pp_proj_matches_window"
   ],
-  "expected_trace_steps": ["pre", "shrink", "sel-reset", "create-on-clipped", "expand", "+1", "+3"]
+  "expected_trace_steps": ["pre", "shrink", "sel-reset", "expand", "reshrink", "create-on-clipped", "drag-straddler", "+1", "+3"]
 }

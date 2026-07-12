@@ -1,6 +1,6 @@
 {
   "name": "trace_window_edge_drag",
-  "description": "v2.7.2 W2: idle header stays paint-free, then real hover reveals dump-ground-truth ports. The profile presses the RIGHT port and drags left by about two visible week units, captures the live candidate pill and header-only preview pixel diff, then releases. W2's CommitWindowGesture seam must clear the preview without mutating PP_DOC or rebuilding shapes.",
+  "description": "v2.7.3 W3: idle header stays paint-free, real hover reveals dump-ground-truth ports, the RIGHT port drags left ~2 week units with live pill + header preview pixel-diff, and the release now REALLY commits: doc windowStart/End equal the pill's dates, PP_PROJ is rewritten (minDay==windowStart, pad 0), and the header repaints once the commit lands (m9). A second threshold-crossing drag that returns to its origin proves the zero-delta release no-op (no doc write, no rebuild, no undo entry).",
   "exe": "ppappbarshot",
   "trace_profile": "window-edge-drag",
   "timeout": 120,
@@ -12,7 +12,9 @@
     "window_drag_snaps_and_clamps",
     "window_preview_header_pixel_diff",
     "window_zero_delta_on_materialize",
-    "window_release_clears_preview_stub"
+    "window_commit_applies_candidate",
+    "window_commit_header_repaint",
+    "window_zero_delta_release_noop"
   ],
-  "expected_trace_steps": ["pre", "hover", "mid", "immed", "+1", "+3"]
+  "expected_trace_steps": ["pre", "hover", "mid", "immed", "+1", "+3", "zerodelta"]
 }

@@ -1524,6 +1524,9 @@ int wmain(int argc, wchar_t** argv) {
 										failReason = "drag-create row mismatch";
 									} else if (gotStart < expectStartDay - 1 || gotStart > expectStartDay + 1) {
 										failReason = "drag-create date mismatch";
+										wprintf(L"CREATEEMPTY diag: expectStartDay=%ld gotStart=%ld (%hs) anchorX=%ld proj{minDay=%ld pad=%ld ptPerDay=%.4f originX=%.4f}\n",
+											expectStartDay, gotStart, nt.start.c_str(), (long)dragAnchor.x,
+											proj.minDay, proj.pad, proj.ptPerDay, proj.originX);
 									} else if (spanDays < kCreateDays - 1 || spanDays > kCreateDays + 1) {
 										failReason = "drag-create span mismatch";
 									} else if (!postEmptyCellDoubleClick(dblRowId, 0.55f)) {

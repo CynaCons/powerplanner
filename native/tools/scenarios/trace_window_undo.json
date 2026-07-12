@@ -1,6 +1,6 @@
 {
   "name": "trace_window_undo",
-  "description": "v2.7.3 W3 stub (profile lands in W3): commit a window change that takes the IN-PLACE reconcile branch (nothing enters/leaves, group identity survives), then Ctrl+Z -> exactly ONE undo step restores the previous window AND geometry together (tags + shapes in one entry, SR-WIN-27/SR-SMO-08); then perform a +1d nudge -> the scene cache must NOT re-apply the undone window (PP_DOC drift probe re-syncs the cache after the external undo; review M2): dump asserts windowStart/End still the restored values and the nudged bar's geometry is coherent with the restored projection.",
+  "description": "v2.7.3 W3 (M2 gate): the real commit seam applies a covering window [2026-05-28..2026-08-13] (keeps the auto-fit axis tick set) that takes the IN-PLACE reconcile branch (nothing enters/leaves, group identity survives), then ONE external CommandBars.ExecuteMso Undo restores the pre PP_DOC (window fields gone) AND every child shape's geometry together (single undo entry, SR-WIN-27/SR-SMO-08). A +1d nudge of the still-selected task is the cache-poisoning trap: the PP_DOC drift probe must re-sync the scene cache at read-back so the undone window is NOT resurrected -> post-nudge dump shows empty windowStart/End, the nudged dates (discovery 2026-06-02..2026-06-13) and an auto-fit PP_PROJ (pad>=1).",
   "exe": "ppappbarshot",
   "trace_profile": "window-undo",
   "timeout": 120,

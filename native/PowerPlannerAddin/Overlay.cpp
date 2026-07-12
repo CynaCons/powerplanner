@@ -319,6 +319,12 @@ struct DragCommitEcho {
 	float candidateDx = 0.0f;
 	float candidateDy = 0.0f;
 	float pxPerPt = 0.0f;
+	// m7 (SR-WIN-25): under an explicit window the echo must never paint
+	// pixels outside the window (the committed bar will re-render CLIPPED, or
+	// not at all). Screen-px horizontal clip range, valid only when set.
+	bool windowClipValid = false;
+	long windowClipLeftPx = 0;
+	long windowClipRightPx = 0;
 };
 DragCommitEcho g_dragCommitEcho;
 
@@ -564,7 +570,8 @@ HtHit HitTestClientPoint(POINT pt);
 void CommitLinkPortDrop(const std::string& fromIdIn, const std::string& fromKindIn, const std::string& targetId);
 static void StartLinkPortDrag(const std::string& id, const std::string& kind, bool fromRight, POINT downPt);
 static void StartWindowEdgeDrag(HtZone zone, POINT downPt);
-static void CommitWindowGesture(const std::string& startISO, const std::string& endISO);
+static void CommitWindowGesture(const std::string& startISO, const std::string& endISO,
+	const std::string& baselineStartISO, const std::string& baselineEndISO);
 void HandleHoverQuickAddRow(bool insertAbove);
 
 const PpTask* FindTask(const PpDocument& doc, const std::string& id) {
@@ -747,6 +754,21 @@ static void SetOwnSelectionPrimary(const std::string& kind, const std::string& i
 		ClearOwnSelection();
 		ClearLinkMode();
 		return;
+	}
+	// M4 / SR-WIN-26: never install a selection the current scene does not
+	// emit. Post-commit re-selects (drag/nudge/create) land here AFTER
+	// RebuildChart recommitted the scene cache, so the cached doc IS the new
+	// truth: a nudge that pushed the item outside an explicit window resets to
+	// document context (UF-07) instead of leaving invisible live hotkeys.
+	// Cache miss fails open (selection kept) — same trust model as the dump.
+	{
+		PpDocument cachedDoc;
+		if (Gantt_TryPeekCachedDoc(&cachedDoc) && !TimeWindowEmitsItem(cachedDoc, kind, id)) {
+			OvLog(L"M4: selection target hidden by time window - reset to document context");
+			ClearOwnSelection();
+			ClearLinkMode();
+			return;
+		}
 	}
 	if (g_linkMode && (kind != g_linkFromKind || id != g_linkFromId)) {
 		ClearLinkMode();
@@ -1798,6 +1820,25 @@ void ArmDragCommitEcho(DragKind kind, const RECT& anchorScreen, long deltaDays, 
 	g_dragCommitEcho.candidateDx = candidateDx;
 	g_dragCommitEcho.candidateDy = candidateDy;
 	g_dragCommitEcho.pxPerPt = pxPerPt;
+	// m7: freeze the explicit window's screen-px extent with the echo so the
+	// paint pass can clip the ghost to it (and skip it entirely when the
+	// committed result lands fully outside — i.e. becomes hidden).
+	g_dragCommitEcho.windowClipValid = false;
+	PpDocument cachedDoc;
+	if (Gantt_TryPeekCachedDoc(&cachedDoc)
+		&& !cachedDoc.windowStart.empty() && !cachedDoc.windowEnd.empty()) {
+		ProjPx proj = ProjectionPx();
+		if (proj.ok && proj.pxPerDay > 0.0) {
+			const long ws = DateToDays(cachedDoc.windowStart);
+			const long we = DateToDays(cachedDoc.windowEnd);
+			g_dragCommitEcho.windowClipLeftPx =
+				(long)::lround(proj.originXpx + (double)(ws - proj.originDay) * proj.pxPerDay);
+			g_dragCommitEcho.windowClipRightPx =
+				(long)::lround(proj.originXpx + (double)(we - proj.originDay + 1) * proj.pxPerDay);
+			g_dragCommitEcho.windowClipValid =
+				g_dragCommitEcho.windowClipRightPx > g_dragCommitEcho.windowClipLeftPx;
+		}
+	}
 }
 
 void FocusPowerPoint() {
@@ -2824,11 +2865,27 @@ static ProjPx ProjectionPx() {
 static constexpr float kRowBarHeightFrac = (36.0f - 8.0f * 2.0f) / 36.0f;
 
 static long ChartWindowLoDay() {
+	// m4/UF-08: an explicit window is the exact clamp boundary (windowStart is
+	// also PP_PROJ's minDay with pad=0, but the doc field is the declared truth).
+	{
+		PpDocument cachedDoc;
+		if (Gantt_TryPeekCachedDoc(&cachedDoc) && !cachedDoc.windowStart.empty())
+			return DateToDays(cachedDoc.windowStart);
+	}
 	ProjPx p = ProjectionPx();
 	return p.ok ? p.originDay : 0;
 }
 
 static long ChartWindowHiDay() {
+	// m4: clamp exactly to the explicit window's last day. The pixel-derived
+	// bound below spans the whole chart rect, which includes the left rail
+	// (ROW_GUTTER) — under an explicit window it overshoots windowEnd by
+	// ~ROW_GUTTER/ptPerDay days.
+	{
+		PpDocument cachedDoc;
+		if (Gantt_TryPeekCachedDoc(&cachedDoc) && !cachedDoc.windowEnd.empty())
+			return DateToDays(cachedDoc.windowEnd);
+	}
 	ProjPx p = ProjectionPx();
 	if (!p.ok) return LONG_MAX / 2;
 	return p.originDay + (long)::lround((double)(g_chartScreenRect.right - g_chartScreenRect.left) / p.pxPerDay);
@@ -2998,13 +3055,63 @@ static void StartWindowEdgeDrag(HtZone zone, POINT downPt) {
 	g_gestureActive = true;
 }
 
-// W2 COMMIT SEAM STUB — W3 will dispatch SetTimeWindow + RebuildChart from
-// these snapshot parameters. Do not mutate document/tags/shapes in this slice.
-static void CommitWindowGesture(const std::string& startISO, const std::string& endISO) {
-	wchar_t msg[160];
-	::swprintf_s(msg, 160, L"W2 CommitWindowGesture STUB: %hs -> %hs (no document mutation)",
-		startISO.c_str(), endISO.c_str());
-	OvLog(msg);
+// W3 real commit (SR-WIN-23/27/28). Reads ONLY its snapshot parameters — the
+// WM_LBUTTONUP call site captures candidate + gesture baseline into locals
+// BEFORE ReleaseCapture/ResetDragGestureState, so no g_drag*/g_window* global
+// is consulted here (snapshot-locals rule). Standard commit shape (see
+// CommitProgressGesture): read PP_DOC -> pure GanttOps mutation ->
+// RebuildChart, which runs StartNewUndoEntryIfPossible BEFORE any COM write so
+// the tag write + every shape write collapse into ONE undo entry.
+// m9: a zero-delta release (candidate == gesture baseline, which covers the D2
+// first-drag materialization where the doc window is still empty) is a pure
+// no-op: no document write, no rebuild, no undo entry. Esc-cancel never gets
+// here (W2 behavior kept: CancelDragGesture just clears preview + repaints).
+static void CommitWindowGesture(const std::string& startISO, const std::string& endISO,
+	const std::string& baselineStartISO, const std::string& baselineEndISO) {
+	if (startISO.empty() || endISO.empty()) {
+		RequestOverlayRepaint(); // preview state was already cleared — repaint it away
+		return;
+	}
+	if (startISO == baselineStartISO && endISO == baselineEndISO) {
+		OvLog(L"window commit: zero-delta release - no-op (m9)");
+		RequestOverlayRepaint();
+		return;
+	}
+	if (!g_app || g_mutating) {
+		RequestOverlayRepaint();
+		return;
+	}
+	g_mutating = true;
+	try {
+		PpDocument doc;
+		if (ReadGanttDocFromSlide(g_app, &doc)) {
+			// Belt-and-braces zero-delta vs the document itself (a stale
+			// baseline must never force a no-change rebuild into undo).
+			if (doc.windowStart == startISO && doc.windowEnd == endISO) {
+				OvLog(L"window commit: candidate equals document window - no-op (m9)");
+			} else if (SetTimeWindow(doc, startISO, endISO)) {
+				wchar_t msg[160];
+				::swprintf_s(msg, 160, L"window commit: %hs -> %hs", startISO.c_str(), endISO.c_str());
+				OvLog(msg);
+				// View-only op: selection is not re-targeted (selectId empty).
+				// W1's cache-key/fast-path refusal makes this a full reconcile;
+				// RebuildChart's M4 choke point resets a now-hidden selection.
+				RebuildChart(doc, "");
+			} else {
+				OvLog(L"window commit: SetTimeWindow rejected candidate");
+			}
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error committing window gesture");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error committing window gesture");
+	}
+	catch (...) {
+		OvLog(L"unknown error committing window gesture");
+	}
+	g_mutating = false;
 	RequestOverlayRepaint();
 }
 
@@ -3066,16 +3173,36 @@ static long ClampGestureDeltaDays(DragKind kind, const std::string& origStart, c
 }
 
 static long AnchorDayFromScreenX(long screenX) {
+	// C2 (SR-WIN-22): under an explicit window a bar's shape rect can be
+	// CLIPPED, so "task rect.left == task start date" is false and the
+	// reference-task calibration below misplaces the anchor by the clipped-off
+	// span. PP_PROJ is rewritten on every window commit (pad=0, minDay ==
+	// windowStart), so it is the authoritative px<->day map — use it outright.
+	{
+		PpDocument cachedDoc;
+		if (Gantt_TryPeekCachedDoc(&cachedDoc)
+			&& !cachedDoc.windowStart.empty() && !cachedDoc.windowEnd.empty()) {
+			ProjPx winProj = ProjectionPx();
+			if (winProj.ok) {
+				return winProj.originDay + (long)::lround((screenX - winProj.originXpx) / winProj.pxPerDay);
+			}
+		}
+	}
 	float pxPerDay = ComputeEmptyCellPxPerDay();
 	if (pxPerDay > 0.0f && g_app) {
 		try {
 			std::string json = ReadGanttFromSlide(g_app);
 			if (!json.empty()) {
 				PpDocument doc = DocumentFromJson(json);
+				const bool docWindowed = !doc.windowStart.empty() && !doc.windowEnd.empty();
 				for (const auto& item : g_hitSnapshot.items) {
 					if (item.kind != HtItemKind::Task) continue;
 					const PpTask* task = FindTask(doc, item.id);
 					if (!task) continue;
+					// C2 fallback guard (cache miss): a clipped shape is not a
+					// calibration source — its rect no longer spans true dates.
+					if (docWindowed && (DateToDays(task->start) < DateToDays(doc.windowStart)
+						|| DateToDays(task->end) > DateToDays(doc.windowEnd))) continue;
 					const long refDay = DateToDays(task->start);
 					const long refScreenX = item.rect.left;
 					return refDay + (long)::lround((double)(screenX - refScreenX) / (double)pxPerDay);
@@ -3110,6 +3237,20 @@ static long DayAtVisibleCenter() {
 // found in the snapshot when the anchor itself isn't a task with a usable
 // span (anchorSpanDays <= 0).
 float ComputeDragPxPerDay(const RECT& anchorRect, long anchorSpanDays) {
+	// C2 (SR-WIN-22): under an explicit window ANY bar (the anchor included)
+	// can be clipped at a window edge, so rect-width / true-day-span
+	// understates px/day. PP_PROJ is rewritten on every window commit and is
+	// exact under an explicit window (pad=0), so prefer it outright; the
+	// rect-derived paths below stay the auto-fit behavior (where rects always
+	// span true dates). ProjectionPx and the cache peek are both COM-free.
+	{
+		PpDocument cachedDoc;
+		if (Gantt_TryPeekCachedDoc(&cachedDoc)
+			&& !cachedDoc.windowStart.empty() && !cachedDoc.windowEnd.empty()) {
+			ProjPx winProj = ProjectionPx();
+			if (winProj.ok && winProj.pxPerDay > 0.0) return (float)winProj.pxPerDay;
+		}
+	}
 	if (anchorSpanDays > 0) {
 		float widthPx = (float)(anchorRect.right - anchorRect.left);
 		if (widthPx > 0.0f) return widthPx / (float)anchorSpanDays;
@@ -3118,10 +3259,15 @@ float ComputeDragPxPerDay(const RECT& anchorRect, long anchorSpanDays) {
 	std::string json = ReadGanttFromSlide(g_app);
 	if (json.empty()) return 0.0f;
 	PpDocument doc = DocumentFromJson(json);
+	const bool docWindowed = !doc.windowStart.empty() && !doc.windowEnd.empty();
 	for (const auto& item : g_hitSnapshot.items) {
 		if (item.kind != HtItemKind::Task) continue;
 		const PpTask* task = FindTask(doc, item.id);
 		if (!task) continue;
+		// C2 fallback guard (cache miss under a window): skip clipped shapes
+		// as calibration sources — their rects no longer span true dates.
+		if (docWindowed && (DateToDays(task->start) < DateToDays(doc.windowStart)
+			|| DateToDays(task->end) > DateToDays(doc.windowEnd))) continue;
 		long span = DateToDays(task->end) - DateToDays(task->start) + 1;
 		if (span <= 0) continue;
 		float widthPx = (float)(item.rect.right - item.rect.left);
@@ -4017,8 +4163,16 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		if (wasCaptureActive) {
 			if (wasGestureActive && wasDragActive && IsWindowEdgeDragKind(dragKind)) {
 				// Snapshot locals above are the sole source after Reset/release.
+				// dragOrigStart/End carry the gesture BASELINE (StartWindowEdgeDrag
+				// set them to the doc window, or the D2 in-memory auto-fit
+				// baseline) so the commit can detect a zero-delta release (m9).
 				ResetDragGestureState();
-				CommitWindowGesture(windowCandidateStart, windowCandidateEnd);
+				try {
+					CommitWindowGesture(windowCandidateStart, windowCandidateEnd,
+						dragOrigStart, dragOrigEnd);
+				} catch (...) {
+					OvLog(L"window gesture commit failed");
+				}
 			} else if (wasGestureActive && wasDragActive && dragKind == DragKind::Create) {
 				// Create-drag: span < 0.5 day is treated as a click (no task
 				// created) per the task spec — existing EmptyCell click
@@ -5065,7 +5219,18 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			g_dragCommitEcho.deltaDays, g_dragCommitEcho.pxPerDay, g_dragCommitEcho.targetRowScreen,
 			g_dragCommitEcho.textAnchored, g_dragCommitEcho.origDx, g_dragCommitEcho.origDy,
 			g_dragCommitEcho.candidateDx, g_dragCommitEcho.candidateDy, g_dragCommitEcho.pxPerPt);
-		PaintDragGhostShape(g, g_dragCommitEcho.kind, anchorClient, ghostClient, 0);
+		// m7 (SR-WIN-25): clip the committed-echo ghost to the explicit window;
+		// a result that ends fully outside (hidden) paints no echo at all.
+		bool ghostVisible = true;
+		if (g_dragCommitEcho.windowClipValid) {
+			const long clipL = g_dragCommitEcho.windowClipLeftPx - g_windowOriginX;
+			const long clipR = g_dragCommitEcho.windowClipRightPx - g_windowOriginX;
+			if (ghostClient.left < clipL) ghostClient.left = clipL;
+			if (ghostClient.right > clipR) ghostClient.right = clipR;
+			ghostVisible = ghostClient.right > ghostClient.left;
+		}
+		if (ghostVisible)
+			PaintDragGhostShape(g, g_dragCommitEcho.kind, anchorClient, ghostClient, 0);
 	}
 
 	if (g_linkMode && g_appBarShown && g_appBarGeomValid) {
@@ -6618,6 +6783,36 @@ static bool IsStructuralDocChange(const PpDocument& before, const PpDocument& af
 	return false;
 }
 
+// M4 / SR-WIN-26 choke point: after ANY committed op the new document is known
+// here, so a selection whose item the resulting scene no longer emits (window
+// commit hiding the selected task, a nudge pushing it outside an explicit
+// window, ...) is reset to document context in ONE place instead of per-op.
+// Commits that re-assert a selection AFTER RebuildChart (drag/create/nudge)
+// funnel through SetOwnSelectionPrimary, which applies the same pure predicate
+// against the freshly recommitted scene cache. Clearing repaints (the cleared
+// chrome must not linger) via the caller's standard RequestOverlayRepaint.
+static void ResetOwnSelectionHiddenByWindow(const PpDocument& doc) {
+	bool changed = false;
+	for (size_t i = g_ownSelExtra.size(); i > 0; --i) {
+		const OwnSelEntry& e = g_ownSelExtra[i - 1];
+		if (!TimeWindowEmitsItem(doc, e.kind, e.id)) {
+			g_ownSelExtra.erase(g_ownSelExtra.begin() + (ptrdiff_t)(i - 1));
+			changed = true;
+		}
+	}
+	if (!g_ownSelKind.empty() && !g_ownSelId.empty()
+		&& !TimeWindowEmitsItem(doc, g_ownSelKind, g_ownSelId)) {
+		OvLog(L"M4: committed op de-emitted the selected item - reset to document context");
+		ClearOwnSelection();
+		ClearLinkMode();
+		changed = true;
+	}
+	if (changed) {
+		InvalidateAppBarForSelectionChange();
+		RequestOverlayRepaint();
+	}
+}
+
 void RebuildChart(PpDocument& doc, const std::string& selectId) {
 	bool structural = false;
 	try {
@@ -6640,6 +6835,9 @@ void RebuildChart(PpDocument& doc, const std::string& selectId) {
 	InvalidateHitSnapshot();
 	HRESULT hr = UpdateGantt(g_app, doc, selectId);
 	if (FAILED(hr)) OvLog(L"UpdateGantt failed after gesture commit");
+	// M4 (SR-WIN-26): the committed doc is ground truth for what the scene
+	// emits — clear/prune any selection it just hid (see helper above).
+	ResetOwnSelectionHiddenByWindow(doc);
 }
 
 // ---- keyboard hotkey handlers ------------------------------------------------
@@ -8311,6 +8509,21 @@ void Overlay_PerformHoverQuickAddForTest(const char* rowId) {
 	} catch (...) {
 		OvLog(L"hover quick-add task failed");
 	}
+}
+
+void Overlay_CommitWindowGestureForTest(const char* startISO, const char* endISO) {
+	// Baseline = the CURRENT document window, so re-committing the same dates
+	// exercises the m9 zero-delta no-op exactly like a snap-back release.
+	std::string baselineStart, baselineEnd;
+	try {
+		PpDocument doc;
+		if (g_app && ReadGanttDocFromSlide(g_app, &doc)) {
+			baselineStart = doc.windowStart;
+			baselineEnd = doc.windowEnd;
+		}
+	} catch (...) {}
+	CommitWindowGesture(startISO ? startISO : "", endISO ? endISO : "",
+		baselineStart, baselineEnd);
 }
 
 void Overlay_GetRenderCountersForTest(long* overlayPaints, long* appBarPaints,

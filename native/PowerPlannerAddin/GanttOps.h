@@ -62,6 +62,16 @@ long MaximumWindowEndDay(const std::string& startISO, const std::string& scale);
 bool SetTimeWindow(PpDocument& doc, const std::string& startISO, const std::string& endISO);
 // Restore legacy auto-fit projection. Always succeeds.
 bool ClearTimeWindow(PpDocument& doc);
+// M4 / SR-WIN-26 (pure): would the projected scene still emit item (kind,id)
+// under doc's window? `kind` uses the overlay's ownSel vocabulary ("TASK",
+// "MILESTONE", "MARKER", "TEXT", "DEP", "ROW"). Mirrors the doc-level
+// owner-visibility rules of ClipSceneToExplicitTimeWindow: rows/rail are never
+// filtered; a task emits iff its span intersects the window; milestones/
+// markers iff their date is inside; an anchored TEXT follows its anchor; a DEP
+// requires BOTH endpoints visible. No explicit window -> always true. Unknown
+// kinds and missing ids fail OPEN (true) so callers never clear a selection on
+// stale/partial knowledge.
+bool TimeWindowEmitsItem(const PpDocument& doc, const std::string& kind, const std::string& id);
 // Sets a task's bar color (hex string, e.g. "#4472c4"); empty string clears
 // back to the renderer's default theme color. Returns false if taskId is not
 // a task (mirrors SetTaskDates/SetTaskPercent's not-found semantics).

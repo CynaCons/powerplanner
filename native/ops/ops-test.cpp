@@ -1097,6 +1097,30 @@ static bool RunTimeWindowChecks() {
 		"window: straddling bracket keeps its five clipped primitives together") && ok;
 	ok = Check(FindPrim(clipped, "TEXT", "note-hidden") == nullptr && FindPrim(clipped, "TEXT", "note-left") != nullptr,
 		"window: anchored notes follow their hidden or clipped anchor") && ok;
+
+	// W3 M4 (SR-WIN-26): the pure hidden-selection predicate agrees with the
+	// clip stage's owner-visibility rules — it is what the overlay's post-commit
+	// choke point consults to reset a selection the scene no longer emits.
+	ok = Check(!TimeWindowEmitsItem(windowed, "TASK", "hidden"), "M4: hidden task is not emitted") && ok;
+	ok = Check(TimeWindowEmitsItem(windowed, "TASK", "left") && TimeWindowEmitsItem(windowed, "TASK", "right"),
+		"M4: clipped straddlers still emit") && ok;
+	ok = Check(TimeWindowEmitsItem(windowed, "TASK", "inside"), "M4: inside task emits") && ok;
+	ok = Check(!TimeWindowEmitsItem(windowed, "MILESTONE", "ms-hidden")
+		&& TimeWindowEmitsItem(windowed, "MILESTONE", "ms-in"),
+		"M4: milestone visibility follows its date") && ok;
+	ok = Check(!TimeWindowEmitsItem(windowed, "MARKER", "mk-hidden")
+		&& TimeWindowEmitsItem(windowed, "MARKER", "mk-in"),
+		"M4: marker visibility follows its date") && ok;
+	ok = Check(!TimeWindowEmitsItem(windowed, "TEXT", "note-hidden")
+		&& TimeWindowEmitsItem(windowed, "TEXT", "note-left"),
+		"M4: anchored text follows its anchor's visibility") && ok;
+	ok = Check(!TimeWindowEmitsItem(windowed, "DEP", "dep-hidden"),
+		"M4: dep with a hidden endpoint is not emitted") && ok;
+	ok = Check(TimeWindowEmitsItem(windowed, "ROW", "r1"), "M4: rows are never window-hidden") && ok;
+	ok = Check(TimeWindowEmitsItem(unclipped, "TASK", "hidden"), "M4: no explicit window emits everything") && ok;
+	ok = Check(TimeWindowEmitsItem(windowed, "TASK", "no-such-id")
+		&& TimeWindowEmitsItem(windowed, "BOGUS", "hidden"),
+		"M4: unknown id/kind fails open (selection kept)") && ok;
 	PpDocument narrower = unclipped;
 	ok = Check(SetTimeWindow(narrower, "2026-01-10", "2026-01-18"), "window: bounds-invariance setup") && ok;
 	Scene narrowerScene; std::string narrowerMin, narrowerMax; long narrowerPad = 0; float narrowerPpd = 0.0f;

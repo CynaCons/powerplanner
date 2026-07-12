@@ -160,6 +160,13 @@ void Overlay_PerformAppBarCommandForTest(int cmd);
 // hover + click gesture. Never touches real input.
 void Overlay_PerformHoverQuickAddForTest(const char* rowId);
 
+// W3 test seam: dispatch the REAL window commit (the same CommitWindowGesture
+// the WM_LBUTTONUP port-drag release calls: SetTimeWindow -> RebuildChart with
+// one undo entry, M4 hidden-selection reset, zero-delta no-op vs the current
+// document window). Lets trace harnesses commit deterministic ISO dates
+// without deriving them from drag pixels. Touches COM (document mutation).
+void Overlay_CommitWindowGestureForTest(const char* startISO, const char* endISO);
+
 // Rich state dump for agent feedback loop: returns a JSON string (static buffer)
 // with current chrome state for reports: own selection, row bands (with rects),
 // taskCount/milestoneCount (from the hit snapshot), drag/gesture state, app bar

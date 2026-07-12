@@ -92,7 +92,13 @@ HRESULT ReflowFromSlide(IDispatch* pApp, bool* outChanged);
 // (expected to be a no-op / changed false, since PP_PROJ was already
 // corrected for the new scale). Returns S_FALSE if no CHART_ROOT is present,
 // S_OK on success, or a failure HRESULT.
-HRESULT FitChartRootToFrame(IDispatch* pApp, float left, float top, float width, float height);
+// defensiveReflow=false skips that trailing ReflowFromSlide read-back — only
+// safe when the caller has JUST written coherent PP_DOC/PP_PROJ/PP_ROWY tags
+// for the current shapes (PreserveChartRootFrame after a successful
+// reconcile: the reflow there can only re-derive the same dates, at full
+// child-walk COM cost — W3 window_commit_budget, SR-WIN-28).
+HRESULT FitChartRootToFrame(IDispatch* pApp, float left, float top, float width, float height,
+	bool defensiveReflow = true);
 
 // V3-1 fit-to-slide: computes the slide's content area (full width minus
 // ~18pt side margins, height below a reserved top title zone of ~15% of

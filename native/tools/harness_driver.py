@@ -1411,16 +1411,269 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": f"preWindow=({pre.get('windowStart')},{pre.get('windowEnd')}) midWindow=({mid.get('windowStart')},{mid.get('windowEnd')})",
         })
 
-        released = all(
-            state.get("windowDragActive") is False
-            and state.get("windowStart") == pre.get("windowStart")
-            and state.get("windowEnd") == pre.get("windowEnd")
-            for state in settled
+        # W3 (m9): the release now REALLY commits. The doc window fields must
+        # equal the live pill's candidate dates once settled, PP_PROJ must be
+        # rewritten to the explicit window (minDay == windowStart day, pad 0),
+        # and the preview/drag state must be gone.
+        final = by_step.get("+3", {})
+        released = all(state.get("windowDragActive") is False for state in settled)
+        commit_ok = bool(
+            released
+            and len(iso_dates) >= 2
+            and final.get("windowStart") == iso_dates[0]
+            and final.get("windowEnd") == iso_dates[1]
+        )
+        if commit_ok:
+            try:
+                start_day = (date.fromisoformat(iso_dates[0]) - date(1970, 1, 1)).days
+                proj = final.get("ppProj") or {}
+                commit_ok = int(proj.get("minDay")) == start_day and int(proj.get("pad")) == 0
+            except (TypeError, ValueError):
+                commit_ok = False
+        results.append({
+            "rule": "window_commit_applies_candidate",
+            "passed": commit_ok,
+            "detail": (
+                f"pill={iso_dates[:2]!r} finalWindow=({final.get('windowStart')},{final.get('windowEnd')}) "
+                f"ppProj={final.get('ppProj')} dragCleared={released}"
+            ),
+        })
+
+        # m9: the header must visibly re-render once the real commit lands
+        # (same tight header-only capture as the preview diff, pre vs +3).
+        plus3_hash = _header_hash("+3")
+        results.append({
+            "rule": "window_commit_header_repaint",
+            "passed": bool(pre_hash and plus3_hash and pre_hash != plus3_hash),
+            "detail": f"header md5 pre={pre_hash[:8] if pre_hash else '?'} +3={plus3_hash[:8] if plus3_hash else '?'}",
+        })
+
+        # m9 zero-delta release: a threshold-crossing drag that returns to its
+        # origin commits nothing — doc window, projection and dates identical
+        # to the post-commit settled state (no write, no rebuild, no undo).
+        zerod = by_step.get("zerodelta", {})
+        noop_fields = ("windowStart", "windowEnd", "ppProj", "docDatesSignature")
+        noop_ok = bool(zerod) and all(zerod.get(k) == final.get(k) for k in noop_fields)
+        results.append({
+            "rule": "window_zero_delta_release_noop",
+            "passed": noop_ok,
+            "detail": (
+                f"zerodelta window=({zerod.get('windowStart')},{zerod.get('windowEnd')}) "
+                f"vs +3=({final.get('windowStart')},{final.get('windowEnd')}); "
+                f"projEqual={zerod.get('ppProj') == final.get('ppProj')} "
+                f"datesEqual={zerod.get('docDatesSignature') == final.get('docDatesSignature')}"
+            ),
+        })
+
+    if profile == "window-clip-rerender":
+        # W3: clip/hide semantics through the REAL commit dispatch, the M4
+        # hidden-selection reset, the SR-WIN-20 lossless guarantee, and the C2
+        # clipped-chart anchor/px-day math. Ground truth comes from harness-
+        # injected shape-walk fields + the overlay dump.
+        by_step = {s.step: s.state for s in steps}
+        pre = by_step.get("pre", {})
+        shrink = by_step.get("shrink", {})
+        selreset = by_step.get("sel-reset", {})
+        expand = by_step.get("expand", {})
+        reshrink = by_step.get("reshrink", {})
+        final = by_step.get("+3", {})
+
+        results.append({
+            "rule": "window_clip_hides_bar_keeps_rail",
+            "passed": bool(
+                shrink.get("windowClipHiddenBarAbsent") is True
+                and pre.get("rowCount")
+                and shrink.get("rowCount") == pre.get("rowCount")
+            ),
+            "detail": (
+                f"hiddenBarAbsent={shrink.get('windowClipHiddenBarAbsent')} "
+                f"rowCount pre={pre.get('rowCount')} shrink={shrink.get('rowCount')}"
+            ),
+        })
+        results.append({
+            "rule": "window_clip_truncates_straddler",
+            "passed": bool(
+                shrink.get("windowClipContinuationPresent") is True
+                and shrink.get("windowClipStraddlersEmitted") is True
+            ),
+            "detail": (
+                f"continuationGlyphs={shrink.get('windowClipContinuationPresent')} "
+                f"straddlersEmitted={shrink.get('windowClipStraddlersEmitted')}"
+            ),
+        })
+        results.append({
+            "rule": "window_hidden_selection_resets",
+            "passed": bool(
+                pre.get("ownSelKind") == "TASK" and pre.get("ownSelId") == "discovery"
+                and selreset.get("ownSelKind") == "" and selreset.get("ownSelId") == ""
+            ),
+            "detail": (
+                f"pre=({pre.get('ownSelKind')},{pre.get('ownSelId')}) "
+                f"post-commit=({selreset.get('ownSelKind')},{selreset.get('ownSelId')})"
+            ),
+        })
+        results.append({
+            "rule": "window_lossless_reemission",
+            "passed": bool(
+                expand.get("windowLosslessGeometryRestored") is True
+                and str(expand.get("windowStart", "?")) == ""
+                and str(pre.get("docDatesSignature", "")) != ""
+                and expand.get("docDatesSignature") == pre.get("docDatesSignature")
+            ),
+            "detail": (
+                f"geometryRestored={expand.get('windowLosslessGeometryRestored')} "
+                f"windowCleared={expand.get('windowStart') == ''} "
+                f"datesEqual={expand.get('docDatesSignature') == pre.get('docDatesSignature')}"
+            ),
+        })
+        results.append({
+            "rule": "window_clipped_chart_anchor_math",
+            "passed": bool(
+                final.get("windowCreateLandedOnDate") is True
+                and final.get("windowStraddlerDragLanded") is True
+            ),
+            "detail": (
+                f"create={final.get('windowCreateLandedOnDate')} ({final.get('windowCreateDetail')}); "
+                f"straddlerDrag={final.get('windowStraddlerDragLanded')} ({final.get('windowStraddlerDragDetail')})"
+            ),
+        })
+        proj_ok = False
+        try:
+            start_day = (date.fromisoformat("2026-06-15") - date(1970, 1, 1)).days
+            proj = reshrink.get("ppProj") or {}
+            proj_ok = (
+                reshrink.get("windowStart") == "2026-06-15"
+                and int(proj.get("minDay")) == start_day
+                and int(proj.get("pad")) == 0
+            )
+        except (TypeError, ValueError):
+            proj_ok = False
+        results.append({
+            "rule": "pp_proj_matches_window",
+            "passed": proj_ok,
+            "detail": f"reshrink window=({reshrink.get('windowStart')},{reshrink.get('windowEnd')}) ppProj={reshrink.get('ppProj')}",
+        })
+
+    if profile == "window-commit-latency":
+        # W3 m6/D3: driver owns the budget rule. BOTH commit shapes are
+        # measured (in-place reconcile + structural delete/re-emit) before any
+        # optimization; single-run samples, so p50 == median of the two.
+        by_step = {s.step: s.state for s in steps}
+        final = by_step.get("+3", {})
+        inplace_ms = final.get("windowCommitInplaceMs")
+        structural_ms = final.get("windowCommitStructuralMs")
+        samples = sorted(v for v in (inplace_ms, structural_ms) if isinstance(v, int))
+        p50 = (samples[0] + samples[-1]) / 2 if samples else None
+        results.append({
+            "rule": "window_commit_budget",
+            "passed": bool(
+                len(samples) == 2 and all(v <= 2000 for v in samples)
+            ),
+            "detail": (
+                f"inplaceMs={inplace_ms} structuralMs={structural_ms} p50={p50} "
+                f"(budget<=2000ms per commit shape; 1s target; single-run samples per shape)"
+            ),
+        })
+        opphases = [s.state for s in tr.steps if s.step == "OPPHASES"]
+        results.append({
+            "rule": "window_commit_fastpath_ineligible",
+            "passed": bool(opphases) and all(st.get("fastPath") is False for st in opphases),
+            "detail": f"opphases fastPath={[st.get('fastPath') for st in opphases]} (window commits must never take the scene-diff fast path)",
+        })
+        proj_ok = False
+        try:
+            start_day = (date.fromisoformat("2026-06-15") - date(1970, 1, 1)).days
+            proj = final.get("ppProj") or {}
+            proj_ok = (
+                final.get("windowStart") == "2026-06-15"
+                and final.get("windowEnd") == "2026-07-27"
+                and int(proj.get("minDay")) == start_day
+                and int(proj.get("pad")) == 0
+            )
+        except (TypeError, ValueError):
+            proj_ok = False
+        results.append({
+            "rule": "pp_proj_matches_window",
+            "passed": proj_ok,
+            "detail": f"final window=({final.get('windowStart')},{final.get('windowEnd')}) ppProj={final.get('ppProj')}",
+        })
+        # Named window_commit_no_flash (NOT the generic png-size rule, which
+        # false-fails here: a structural window commit legitimately hides
+        # content, so post-commit captures are smaller than pre).
+        flash_free = all(
+            (s.state.get("taskCount") is None or s.state.get("taskCount", 0) >= 1)
+            for s in steps
         )
         results.append({
-            "rule": "window_release_clears_preview_stub",
-            "passed": released,
-            "detail": f"settled={[{'drag': s.get('windowDragActive'), 'start': s.get('windowStart'), 'end': s.get('windowEnd')} for s in settled]}",
+            "rule": "window_commit_no_flash",
+            "passed": flash_free,
+            "detail": f"taskCount seq={[s.state.get('taskCount') for s in steps]} (a 0 mid-trace means content flashed away)",
+        })
+
+    if profile == "window-undo":
+        # W3 M2: one external undo restores window fields + geometry together,
+        # and the scene cache must NOT re-apply the undone window on the next
+        # edit (PP_DOC drift probe at cached read-back).
+        by_step = {s.step: s.state for s in steps}
+        commit = by_step.get("commit", {})
+        undo = by_step.get("undo", {})
+        nudge = by_step.get("nudge", {})
+        final = by_step.get("+3", {})
+        results.append({
+            "rule": "window_undo_restores_window",
+            "passed": bool(
+                commit.get("windowCommitChangedDoc") is True
+                and commit.get("windowStart") == "2026-05-28"
+                and undo.get("windowUndoDispatched") is True
+                and undo.get("windowUndoDocRestored") is True
+            ),
+            "detail": (
+                f"commitChangedDoc={commit.get('windowCommitChangedDoc')} "
+                f"commitWindow=({commit.get('windowStart')},{commit.get('windowEnd')}) "
+                f"undoDispatched={undo.get('windowUndoDispatched')} docRestored={undo.get('windowUndoDocRestored')}"
+            ),
+        })
+        results.append({
+            "rule": "window_undo_single_entry",
+            "passed": undo.get("windowUndoGeometryRestored") is True,
+            "detail": (
+                f"one ExecuteMso Undo restored tags AND shape geometry together: "
+                f"{undo.get('windowUndoGeometryRestored')}"
+            ),
+        })
+        nudged_sig = "discovery:2026-06-02:2026-06-13" in str(final.get("docDatesSignature", ""))
+        stale_free = bool(nudge) and all(
+            str(st.get("windowStart", "?")) == "" and str(st.get("windowEnd", "?")) == ""
+            for st in (nudge, final)
+        ) and nudged_sig
+        results.append({
+            "rule": "window_no_stale_cache_reapply",
+            "passed": stale_free,
+            "detail": (
+                f"post-nudge window=({nudge.get('windowStart')},{nudge.get('windowEnd')}) "
+                f"final window=({final.get('windowStart')},{final.get('windowEnd')}) "
+                f"nudgedDatesPresent={nudged_sig}"
+            ),
+        })
+        proj_ok = False
+        try:
+            start_day = (date.fromisoformat("2026-05-28") - date(1970, 1, 1)).days
+            commit_proj = commit.get("ppProj") or {}
+            final_proj = final.get("ppProj") or {}
+            proj_ok = (
+                int(commit_proj.get("minDay")) == start_day
+                and int(commit_proj.get("pad")) == 0
+                and int(final_proj.get("pad")) >= 1
+            )
+        except (TypeError, ValueError):
+            proj_ok = False
+        results.append({
+            "rule": "pp_proj_matches_window",
+            "passed": proj_ok,
+            "detail": (
+                f"commit ppProj={commit.get('ppProj')} (explicit: pad 0, minDay==windowStart); "
+                f"final ppProj={final.get('ppProj')} (auto-fit restored: pad>=1)"
+            ),
         })
 
     if profile == "card-commit-clickaway":
@@ -1848,17 +2101,47 @@ if __name__ == "__main__":
         invs = []
         # Required window traces are invariant proofs, not optional diagnostics;
         # keep their prescribed `trace --profile ...` CLI forms self-checking.
-        if args.check_invariants or profile in ("window-repair-lossless", "window-edge-drag"):
+        # A None rule set means "run every invariant" (window-repair-lossless);
+        # an explicit set scopes the gate to the profile's own proof rules
+        # (these profiles intentionally deselect / start clean, so the generic
+        # item-selection continuity rules would be false failures).
+        window_profile_rules = {
+            "window-repair-lossless": None,
+            "window-edge-drag": {
+                "window_ports_hover_gated",
+                "window_pill_two_iso_dates",
+                "window_drag_snaps_and_clamps",
+                "window_preview_header_pixel_diff",
+                "window_zero_delta_on_materialize",
+                "window_commit_applies_candidate",
+                "window_commit_header_repaint",
+                "window_zero_delta_release_noop",
+            },
+            "window-clip-rerender": {
+                "window_clip_hides_bar_keeps_rail",
+                "window_clip_truncates_straddler",
+                "window_hidden_selection_resets",
+                "window_lossless_reemission",
+                "window_clipped_chart_anchor_math",
+                "pp_proj_matches_window",
+            },
+            "window-commit-latency": {
+                "window_commit_budget",
+                "window_commit_fastpath_ineligible",
+                "pp_proj_matches_window",
+                "window_commit_no_flash",
+            },
+            "window-undo": {
+                "window_undo_restores_window",
+                "window_undo_single_entry",
+                "window_no_stale_cache_reapply",
+                "pp_proj_matches_window",
+            },
+        }
+        if args.check_invariants or profile in window_profile_rules:
             invs = check_trace_invariants(tr, profile)
-            if profile == "window-edge-drag":
-                allowed = {
-                    "window_ports_hover_gated",
-                    "window_pill_two_iso_dates",
-                    "window_drag_snaps_and_clamps",
-                    "window_preview_header_pixel_diff",
-                    "window_zero_delta_on_materialize",
-                    "window_release_clears_preview_stub",
-                }
+            allowed = window_profile_rules.get(profile)
+            if allowed is not None:
                 invs = [inv for inv in invs if inv.get("rule") in allowed]
             tr.invariants = invs
         print(tr.to_json())
