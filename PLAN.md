@@ -357,7 +357,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] E2E: trace_multi_row_delete PASS (shift-range=5 rows, ctrl-toggle=2, bulk delete 6->4 rows, selection cleared; profile clicks the left rail — band-center clicks hit the TODAY marker band)
 ### v2.6.5 - Iteration U5: Linking + Creation Discoverability (absorbs v2.5.4)
 **Goal:** Linking and creation are visible, guided, standard. SRS: SRS_DependencyEditing → tables.
-**Status:** In Progress (v2.6.5-linking-discoverability @ 9a55ed6)
+**Status:** COMPLETE 2026-07-12 (58c3cb8) except user milestone gate. Coordinator fix-ups: 2 stale-global traps in the link-drop path (hover target + fromId read after ResetDragGestureState); ground-truth affordance rects (ports/adder chips) published in the chrome dump so profiles click exactly where the overlay hit-tests. Note: the Blank-vs-Sample insert prompt is a Win32 MessageBox — review under SR-THEME in U6 (pragmatic exception: pre-insert, no overlay exists yet)
 - [x] UF-11: port-based linking — selected bar shows L/R ports; drag from port → ports appear on candidate bars + rubber-band preview; drop links (replaces click-click link mode as primary; keep menu entry)
 - [x] Duplicate/self-link rejection hint; per-edge delete (select dependency line → Delete); "Unlink" → "Unlink all"
 - [x] UF-06: row quick-add chips on BOTH boundaries (above/below), centered on the boundary line, x-centered on the left rail
