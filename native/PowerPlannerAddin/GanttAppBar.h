@@ -299,7 +299,9 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 				if (m.id == d.from) fromLabel = m.label;
 				if (m.id == d.to) toLabel = m.label;
 			}
-			model.name = fromLabel + " \u2192 " + toLabel;
+			// ASCII arrow: \u2192 in a NARROW literal dies in code-page conversion
+			// (C4566) and rendered as '?' (UF-13).
+			model.name = fromLabel + " -> " + toLabel;
 			break;
 		}
 		{

@@ -804,11 +804,10 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 			CommitSceneCache(group, sc, doc, byPrim, minD, maxD, pad, ptPerDay);
 		}
 
-		if (!selectId.empty()) {
-			for (size_t p = 0; p < sc.prims.size(); ++p) {
-				if (sc.prims[p].tagId == selectId) { children[primMatchChildIdx[p]]->Select(Office::msoTrue); break; }
-			}
-		}
+		// UF-14: no native child re-select — it flashed PowerPoint grips over
+		// our chrome until the suppression sink mirrored it. The overlay owns
+		// item selection (ownSel); mirror the fast path's bookkeeping only.
+		if (!selectId.empty()) g_lastAppliedSelectId = selectId;
 		return S_OK;
 	}
 
@@ -947,11 +946,9 @@ static HRESULT ReconcileChartRoot(PowerPoint::_ApplicationPtr app, PowerPoint::_
 			CommitSceneCache(newGroup, sc, doc, byPrim, minD, maxD, pad, ptPerDay);
 		}
 
-		if (!selectId.empty()) {
-			for (size_t p = 0; p < sc.prims.size(); ++p) {
-				if (sc.prims[p].tagId == selectId) { finalOrder[p]->Select(Office::msoTrue); break; }
-			}
-		}
+		// UF-14: no native child re-select on the wholesale path either (see
+		// the in-place branch above).
+		if (!selectId.empty()) g_lastAppliedSelectId = selectId;
 		return S_OK;
 	} catch (...) {
 		GbLog(L"ReconcileChartRoot: exception during post-ungroup rebuild, cleaning up loose shapes");

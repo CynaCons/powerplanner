@@ -965,3 +965,13 @@ performance is tracked here for the end-of-program comparison report.
 ### IN-FLIGHT at context handoff (2026-07-12 ~02:40)
 - v2.6.5 U5 (port linking + row adder chips + blank insert + 3 new scenarios) dispatched to cursor/composer-2.5; RPC timed out but the DETACHED process is actively editing (GanttOps.h etc.). NEXT COORDINATOR ACTION: poll native/** quiescence (>=8 min idle), then build all three targets, fix the usual 1-2 compile errors (decl order), run trace_link_drag_port + trace_dep_select_delete + trace_row_adder_boundaries + full regression (shape-protection, lifecycle, context-evolution, multi-row-delete, nudge <200ms, walkthrough all), commit as [todo: v2.6.5].
 - Then: U6 theme surfaces, U7 scale settings, U8 cohesion+close (spec migration already done). Remaining PLAN v2.5.3 exit = LIVE user feel check; U3 milestone gate = user visual pass (captures ready).
+
+### PROGRAM CLOSE (2026-07-12): v2.5.3 + v2.6.0..v2.6.8 all shipped
+28+ commits across two context windows. Every UF-01..12 user feedback point implemented and e2e-gated; UF-13/14 (found by the program's own closing review) fixed same-day. Deferred: Overlay Tier-B split (hygiene), web<->native parity pass, DPI matrix. Awaiting user: live feel check, docking visual pass, zero-instruction walkthrough.
+
+### FINAL PROVIDER VERDICT (asked by user)
+1. **codex + gpt-5.6-terra — best overall.** 4/4 units perfect (U6 fix, U7 complete, U8-A complete, plus a disciplined STOP on a dirty tree). Full self-verification loops (build+scenarios+visual review), honest caveats (DPI limits, remaining defects it found itself), zero fix-ups needed. Hit daily usage cap at the very end.
+2. **copilot + claude-opus-4.8 — best quality before quota.** Only other agent that ran its own edit->build->trace loops (U1 sink, walkthrough runner, 85-min latency session). Monthly quota exhausted mid-program.
+3. **cursor + composer-2.5 — volume workhorse, needs babysitting.** 11 units of feature throughput (latency rounds, U2, U3, U4, U5, U6 ThemeMenu) but: ~1 compile error per round, no shell ever, 2 fabricated verification claims, ~40% silent spawn deaths (worse late in the session), premature PLAN ticks. Only viable with a coordinator that gates everything.
+4. **grok-build — 1 great SRS, 50% death rate.** Fine for isolated doc authoring with generous timeouts.
+Harness lesson: the deepest bugs (group-resize scales children, echo pixels on paint-free idle, double-overlay photobombs, stale-global drop commits) were all found by coordinator forensics + walkthrough-gate PNG review — no agent caught any of them.
