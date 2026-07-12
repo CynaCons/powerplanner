@@ -37,6 +37,7 @@ IDs: `SR-<FEAT>-NNN` or `SRS-NAT-<FEAT>-NNN` (choose a stable short tag per file
 - SRS-CreationFlows.md — native on-slide creation and editing flow requirements migrated from legacy prose in v2.6.8.
 - SRS-DependencyEditing.md — native dependency creation, port/linking, selection, and deletion requirements migrated from legacy prose in v2.6.8.
 - SRS-RowAndTaskSelection.md — native row/task selection, highlighting, progress editability, and emitted-shape stability requirements migrated from legacy prose in v2.6.8.
+- SRS-TimeWindow.md — explicit time-window editing (header ports, drag + two-phase render, clip/hide losslessness, projection/caching invariants, undo, commit budget) for the v2.7.x program (SR-WIN-01..29).
 - (Future) Split files by concern aligned with v2.5.x iterations and docs/onslide-ux-inventory.md.
 
 When a native SRS generalizes to both surfaces, move the requirement to `../srs/` and update traces.

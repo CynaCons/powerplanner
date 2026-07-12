@@ -1,0 +1,15 @@
+{
+  "name": "trace_window_repair_lossless",
+  "description": "v2.7.1 W1 gate stub (profile lands with W1's C1 fix): on a chart with an explicit window and clipped + hidden elements, run Repair layout (ReflowFromSlide) and then a chart resize (FitChartRootToFrame, which triggers the defensive ReflowFromSlide re-sync) -> PP_DOC task/milestone dates stay BYTE-IDENTICAL both times: geometry back-projection must never derive dates from clipped or hidden shapes (review C1 data-corruption path, SR-WIN-21); PP_DOC window fields also round-trip unchanged (SR-WIN-02) and PP_PROJ stays consistent with the window after the refit.",
+  "exe": "ppappbarshot",
+  "trace_profile": "window-repair-lossless",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": [
+    "window_repair_doc_byte_identical",
+    "window_resize_doc_byte_identical",
+    "pp_proj_matches_window"
+  ],
+  "expected_trace_steps": ["pre", "repair", "resize", "+1", "+3"]
+}

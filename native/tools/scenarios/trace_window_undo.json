@@ -1,0 +1,16 @@
+{
+  "name": "trace_window_undo",
+  "description": "v2.7.3 W3 stub (profile lands in W3): commit a window change that takes the IN-PLACE reconcile branch (nothing enters/leaves, group identity survives), then Ctrl+Z -> exactly ONE undo step restores the previous window AND geometry together (tags + shapes in one entry, SR-WIN-27/SR-SMO-08); then perform a +1d nudge -> the scene cache must NOT re-apply the undone window (PP_DOC drift probe re-syncs the cache after the external undo; review M2): dump asserts windowStart/End still the restored values and the nudged bar's geometry is coherent with the restored projection.",
+  "exe": "ppappbarshot",
+  "trace_profile": "window-undo",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": [
+    "window_undo_restores_window",
+    "window_undo_single_entry",
+    "window_no_stale_cache_reapply",
+    "pp_proj_matches_window"
+  ],
+  "expected_trace_steps": ["pre", "commit", "undo", "nudge", "+1", "+3"]
+}

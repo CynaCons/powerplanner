@@ -20,6 +20,8 @@ The canonical document. This mirrors `src/types/document.ts` and is enforced by
 | `style`        | StyleSettings        | yes      |                                          |
 | `baseline`     | BaselineSnapshot     | no       | Optional captured schedule for drift.    |
 | `axisNumbering`| `day` \| `cw`        | no       | Bottom-axis labels. Omitted means `day`; `cw` uses ISO calendar-week numbers for week/day scales. |
+| `windowStart`  | ISODate              | no       | Explicit time-window start. Omitted (with `windowEnd`) means auto-fit: `[min(dates) − 5%pad .. max(dates) + 5%pad]` derived from content. Canonical JSON omits the empty value. |
+| `windowEnd`    | ISODate              | no       | Explicit time-window end (inclusive; `windowEnd >= windowStart + 1 visible scale unit`). Set/cleared as a pair with `windowStart`. Elements outside the window are clipped/hidden at render time only — the document keeps everything (see `srs-native/SRS-TimeWindow.md`). |
 
 ## CalendarSettings
 

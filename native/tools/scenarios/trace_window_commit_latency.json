@@ -1,0 +1,16 @@
+{
+  "name": "trace_window_commit_latency",
+  "description": "v2.7.3 W3 stub (profile lands in W3): commit a window change on the 6-task fixture and measure OPLATENCY around the commit dispatch -> window_commit_budget <= 2000ms (1s p50 target, SR-WIN-28/D3); the op-phase dump asserts fastPath=false (window commits are hard-ineligible for the scene-diff fast path) and PP_PROJ/PP_ROWY rewritten to match the new window (SR-WIN-24); BOTH the in-place reconcile and delete+re-emit commit paths are measured and recorded before any optimization (latency-truth rule); no content flash during the structural commit (paint lock engaged per SR-WIN-25).",
+  "exe": "ppappbarshot",
+  "trace_profile": "window-commit-latency",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": [
+    "window_commit_budget",
+    "window_commit_fastpath_ineligible",
+    "pp_proj_matches_window",
+    "no_content_flash_in_trace"
+  ],
+  "expected_trace_steps": ["pre", "immed", "+1", "+3"]
+}

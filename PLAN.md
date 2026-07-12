@@ -402,8 +402,8 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 **Review outcome (2026-07-12, adversarial subagent, 37 tool uses over the actual code):** 3 CRITICAL (C1 ReflowFromSlide back-projects clipped geometry -> data corruption; C2 rect-derived px/day + anchor math falsified by clipped bars; C3 structural classifiers ignore window fields -> flash + JSON patcher drops the window), 5 MAJOR (label-overhang bounds drift, undo/scene-cache interaction, DEP unit-clip, hidden-selection reset must generalize, DocDatesFitPaddedWindow contradiction), 10 minor. All folded into docs/time-window-plan.md W1-W3 amendments. Verdict: implementable as sliced after the W1 amendments.
 
 ### v2.7.0 - W0: SRS + foundation spec (no code)
-- [ ] spec/srs-native/SRS-TimeWindow.md (SR-WIN-01..~14 tables) + spec/data-model.md + schema additions (windowStart/windowEnd, absent = auto-fit)
-- [ ] Scenario stubs: trace_window_edge_drag, trace_window_clip_rerender, trace_window_commit_latency
+- [x] spec/srs-native/SRS-TimeWindow.md (SR-WIN-01..29 tables, 6 sections, every review finding traced) + spec/data-model.md + schema additions
+- [x] Scenario stubs x5: trace_window_edge_drag, trace_window_clip_rerender, trace_window_commit_latency, trace_window_repair_lossless (C1 gate), trace_window_undo (M2 gate)
 
 ### v2.7.1 - W1: model + scene clipping (pure layer)
 - [ ] windowStart/End in PpDocument + JSON round-trip (canonical omits empty); SetTimeWindow/ClearTimeWindow ops + guards + ops-test

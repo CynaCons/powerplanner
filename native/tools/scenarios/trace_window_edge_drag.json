@@ -1,0 +1,19 @@
+{
+  "name": "trace_window_edge_drag",
+  "description": "v2.7.2 W2 stub (profile lands in W2): hover the timescale header -> window ports appear (dump windowPortLRect/windowPortRRect); mouse-down the RIGHT port at the dump rect and drag left -> mid-gesture dump asserts windowDragActive=true, windowPillText carries two ISO dates + span delta, candidate edge snapped to the visible scale unit, over-drag stops at the min-span/max-span/edge-cross clamps; header-band pixel-diff vs pre proves the axis preview painted while shape geometry/tags stayed untouched (two-phase render, SR-WIN-11); first drag on the auto-fit chart materializes the padded window with ZERO geometry delta (SR-WIN-04/D2); Esc mid-drag cancels -> window fields unchanged, preview cleared with a repaint (SR-WIN-12). Commit is a no-op seam in W2.",
+  "exe": "ppappbarshot",
+  "trace_profile": "window-edge-drag",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": [
+    "window_ports_hover_gated",
+    "window_pill_two_iso_dates",
+    "window_drag_snaps_and_clamps",
+    "window_preview_header_pixel_diff",
+    "window_zero_delta_on_materialize",
+    "window_esc_cancel_clears_preview",
+    "pp_proj_matches_window"
+  ],
+  "expected_trace_steps": ["pre", "hover", "mid", "esc", "+1", "+3"]
+}
