@@ -7,6 +7,7 @@
 #include "GanttAppBar.h"
 #include "GanttCommandRegistry.h"
 #include "GanttTheme.h"
+#include "ThemeMenu.h"
 #include "GanttLayout.h"
 // GDI+ headers need the min/max macros that pch.h's NOMINMAX removes. Define
 // them only for the header, then drop them so std::min/std::max keep working.
@@ -414,22 +415,10 @@ enum CardControlId {
 };
 constexpr int kCardSwatchCount = 8;
 
-// 8-swatch palette (RGB). Reuses Scene.h's Material primary/milestone tokens
-// as the first two entries (so the default task/milestone colors are always
-// one click away) and rounds out the rest with a small, calm Material-ish set
-// distinct enough to tell apart at swatch size. Scene.h itself has no
-// ready-made 8-color list (MaterialLight() is a themed token STRUCT, not a
-// palette array), so these are otherwise-unused literal hex values.
-const COLORREF kCardSwatches[kCardSwatchCount] = {
-	RGB(0x1A, 0x73, 0xE8), // Material blue (primary/task default)
-	RGB(0xF9, 0xAB, 0x00), // amber (milestone default)
-	RGB(0xD9, 0x30, 0x25), // red
-	RGB(0x18, 0x8E, 0x3C), // green
-	RGB(0x9C, 0x27, 0xB0), // purple
-	RGB(0x00, 0x97, 0xA7), // teal
-	RGB(0xF4, 0x71, 0x1B), // orange
-	RGB(0x5F, 0x63, 0x68), // neutral grey
-};
+// Cards deliberately share the app bar's canonical palette.  Keeping the
+// values in kAppBarSwatches (rather than a second card-only RGB palette) means
+// the two ways of changing a task colour always agree visually and in the
+// serialized #RRGGBB value.
 
 HWND g_cardHwnd = NULL;         // top-level card window (WS_EX_TOOLWINDOW)
 HWND g_cardLabelHwnd = NULL;
@@ -444,9 +433,12 @@ WNDPROC g_oldCardFieldProc = NULL; // shared subclass proc for the 4 EDIT childr
 bool g_cardClosing = false;
 std::string g_cardKind;   // "TASK" | "MILESTONE" | "TEXT"
 std::string g_cardId;
-int g_cardSelectedSwatch = -1; // index into kCardSwatches, or -1 = no change
+int g_cardSelectedSwatch = -1; // index into kAppBarSwatches, or -1 = no change
 std::string g_cardOrigColor;   // color value read at open time (for "no change" baseline)
 bool g_cardInvalid = false;    // true while the red-border/invalid state is shown
+HFONT g_cardUiFont = NULL;
+HFONT g_editorUiFont = NULL;
+HWND g_cardFocusHwnd = NULL;
 
 enum OverlayButton {
 	BTN_ADD = 0,
@@ -1649,17 +1641,23 @@ void DestroyInlineEditor() {
 void EnsureEditorWindow() {
 	if (g_editorHwnd && g_editHwnd) return;
 
+	if (!g_editorUiFont) {
+		g_editorUiFont = ::CreateFontW(-Scale(12), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+			DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+			DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+	}
+
 	WNDCLASSEXW wc = { sizeof(wc) };
 	wc.lpfnWndProc = EditorWndProc;
 	wc.hInstance = g_inst;
 	wc.hCursor = ::LoadCursor(NULL, IDC_IBEAM);
-	wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+	wc.hbrBackground = NULL;
 	wc.lpszClassName = kEditorClass;
 	::RegisterClassExW(&wc);
 
 	g_editorHwnd = ::CreateWindowExW(
 		WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-		kEditorClass, L"", WS_POPUP | WS_BORDER,
+		kEditorClass, L"", WS_POPUP,
 		0, 0, 100, 24, NULL, NULL, g_inst, NULL);
 	if (!g_editorHwnd) return;
 
@@ -1667,7 +1665,7 @@ void EnsureEditorWindow() {
 		0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
 		0, 0, 100, 24, g_editorHwnd, (HMENU)1, g_inst, NULL);
 	if (g_editHwnd) {
-		::SendMessageW(g_editHwnd, WM_SETFONT, (WPARAM)::GetStockObject(DEFAULT_GUI_FONT), TRUE);
+		::SendMessageW(g_editHwnd, WM_SETFONT, (WPARAM)g_editorUiFont, TRUE);
 		g_oldEditProc = (WNDPROC)::SetWindowLongPtrW(g_editHwnd, GWLP_WNDPROC, (LONG_PTR)InlineEditProc);
 	}
 }
@@ -1689,7 +1687,7 @@ void OpenInlineEditor(const EditRegion& region) {
 		int h = std::max(22, (int)(rc.bottom - rc.top));
 		::SetWindowPos(g_editorHwnd, (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST,
 			rc.left, rc.top, w, h, SWP_SHOWWINDOW);
-		::MoveWindow(g_editHwnd, 0, 0, w, h, TRUE);
+		::MoveWindow(g_editHwnd, Scale(2), Scale(2), w - Scale(4), h - Scale(4), TRUE);
 		std::wstring text = Widen(value);
 		::SetWindowTextW(g_editHwnd, text.c_str());
 		g_editKind = region.kind;
@@ -1884,26 +1882,31 @@ void LayoutCardControls(bool isMilestone, bool isText) {
 void EnsureCardWindow() {
 	if (g_cardHwnd) return;
 
+	if (!g_cardUiFont) {
+		g_cardUiFont = ::CreateFontW(-Scale(12), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+			DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+			DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+	}
+
 	WNDCLASSEXW wc = { sizeof(wc) };
 	wc.lpfnWndProc = CardWndProc;
 	wc.hInstance = g_inst;
 	wc.hCursor = ::LoadCursor(NULL, IDC_ARROW);
-	wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+	wc.hbrBackground = NULL;
 	wc.lpszClassName = kCardClass;
 	::RegisterClassExW(&wc);
 
 	g_cardHwnd = ::CreateWindowExW(
 		WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-		kCardClass, L"Edit", WS_POPUP | WS_BORDER,
+		kCardClass, L"", WS_POPUP | WS_CLIPCHILDREN,
 		0, 0, Scale(kBaseCardW), 200, NULL, NULL, g_inst, NULL);
 	if (!g_cardHwnd) return;
 
-	HFONT font = (HFONT)::GetStockObject(DEFAULT_GUI_FONT);
 	auto makeEdit = [&](int id, DWORD extraStyle) {
-		HWND h = ::CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | extraStyle,
+		HWND h = ::CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | extraStyle,
 			0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)id, g_inst, NULL);
 		if (h) {
-			::SendMessageW(h, WM_SETFONT, (WPARAM)font, TRUE);
+			::SendMessageW(h, WM_SETFONT, (WPARAM)g_cardUiFont, TRUE);
 			g_oldCardFieldProc = (WNDPROC)::SetWindowLongPtrW(h, GWLP_WNDPROC, (LONG_PTR)CardFieldProc);
 		}
 		return h;
@@ -1921,26 +1924,26 @@ void EnsureCardWindow() {
 	g_cardDateErrorHwnd = ::CreateWindowExW(0, L"STATIC", L"Use YYYY-MM-DD date format",
 		WS_CHILD | SS_LEFT, 0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)CARD_ID_DELETE + 100, g_inst, NULL);
 	if (g_cardDateErrorHwnd) {
-		::SendMessageW(g_cardDateErrorHwnd, WM_SETFONT, (WPARAM)font, TRUE);
+		::SendMessageW(g_cardDateErrorHwnd, WM_SETFONT, (WPARAM)g_cardUiFont, TRUE);
 		::ShowWindow(g_cardDateErrorHwnd, SW_HIDE);
 	}
 
 	for (int i = 0; i < kCardSwatchCount; ++i) {
-		g_cardSwatchHwnd[i] = ::CreateWindowExW(0, L"BUTTON", FormatSwatchLabel(i).c_str(),
-			WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+		g_cardSwatchHwnd[i] = ::CreateWindowExW(0, L"BUTTON", L"",
+			WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
 			0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)(CARD_ID_SWATCH_BASE + i), g_inst, NULL);
-		if (g_cardSwatchHwnd[i]) ::SendMessageW(g_cardSwatchHwnd[i], WM_SETFONT, (WPARAM)font, TRUE);
+		if (g_cardSwatchHwnd[i]) ::SendMessageW(g_cardSwatchHwnd[i], WM_SETFONT, (WPARAM)g_cardUiFont, TRUE);
 	}
 
-	g_cardOkHwnd = ::CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_DEFPUSHBUTTON,
+	g_cardOkHwnd = ::CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | BS_DEFPUSHBUTTON,
 		0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)CARD_ID_OK, g_inst, NULL);
-	if (g_cardOkHwnd) ::SendMessageW(g_cardOkHwnd, WM_SETFONT, (WPARAM)font, TRUE);
+	if (g_cardOkHwnd) ::SendMessageW(g_cardOkHwnd, WM_SETFONT, (WPARAM)g_cardUiFont, TRUE);
 
 	// TEXT mode only (label field + this button, no dates/percent/swatches —
 	// see LayoutCardControls' isText branch, which hides everything else).
-	g_cardDeleteHwnd = ::CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+	g_cardDeleteHwnd = ::CreateWindowExW(0, L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
 		0, 0, 10, 10, g_cardHwnd, (HMENU)(INT_PTR)CARD_ID_DELETE, g_inst, NULL);
-	if (g_cardDeleteHwnd) ::SendMessageW(g_cardDeleteHwnd, WM_SETFONT, (WPARAM)font, TRUE);
+	if (g_cardDeleteHwnd) ::SendMessageW(g_cardDeleteHwnd, WM_SETFONT, (WPARAM)g_cardUiFont, TRUE);
 }
 
 // Destroy the card window + children and clear every bit of card state. Safe
@@ -1961,6 +1964,7 @@ void CloseCardEditor() {
 	g_cardOrigColor.clear();
 	g_cardInvalid = false;
 	g_cardClosing = false;
+	g_cardFocusHwnd = NULL;
 }
 
 // Open (or re-open, replacing any existing card per "only one editor window at
@@ -2019,9 +2023,7 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 		g_cardOrigColor = color;
 		g_cardSelectedSwatch = -1;
 		for (int i = 0; i < kCardSwatchCount; ++i) {
-			wchar_t hex[8];
-			::swprintf_s(hex, 8, L"#%02x%02x%02x", GetRValue(kCardSwatches[i]), GetGValue(kCardSwatches[i]), GetBValue(kCardSwatches[i]));
-			if (Narrow(hex) == color) { g_cardSelectedSwatch = i; break; }
+			if (AppBarColorEquals(kAppBarSwatches[i], color)) { g_cardSelectedSwatch = i; break; }
 		}
 
 		SetEditText(g_cardLabelHwnd, label);
@@ -2052,8 +2054,10 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 
 		::SetWindowPos(g_cardHwnd, (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST,
 			x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+		::InvalidateRect(g_cardHwnd, NULL, TRUE);
 		::SetForegroundWindow(g_cardHwnd);
 		::SetFocus(g_cardLabelHwnd);
+		g_cardFocusHwnd = g_cardLabelHwnd;
 		::SendMessageW(g_cardLabelHwnd, EM_SETSEL, 0, -1);
 	}
 	catch (const _com_error&) {
@@ -2141,9 +2145,7 @@ void CommitCardEdit() {
 
 	std::string color;
 	if (g_cardSelectedSwatch >= 0 && g_cardSelectedSwatch < kCardSwatchCount) {
-		wchar_t hex[8];
-		::swprintf_s(hex, 8, L"#%02x%02x%02x", GetRValue(kCardSwatches[g_cardSelectedSwatch]), GetGValue(kCardSwatches[g_cardSelectedSwatch]), GetBValue(kCardSwatches[g_cardSelectedSwatch]));
-		color = Narrow(hex);
+		color = kAppBarSwatches[g_cardSelectedSwatch];
 	} else {
 		color = g_cardOrigColor; // no swatch clicked: leave color unchanged
 	}
@@ -3913,11 +3915,42 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		CancelInlineEdit();
 		return 0;
 	}
+	if (msg == WM_ERASEBKGND) return 1;
+	if (msg == WM_PAINT && g_gdiplusToken) {
+		PAINTSTRUCT ps{};
+		::BeginPaint(hwnd, &ps);
+		RECT rc{};
+		::GetClientRect(hwnd, &rc);
+		const int w = rc.right - rc.left;
+		const int h = rc.bottom - rc.top;
+		if (w > 0 && h > 0) {
+			Gdiplus::Bitmap bmp(w, h, PixelFormat32bppPARGB);
+			Gdiplus::Graphics g(&bmp);
+			g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+			Gdiplus::GraphicsPath path;
+			AddRoundRect(path, 0.0f, 0.0f, (Gdiplus::REAL)w, (Gdiplus::REAL)h, (Gdiplus::REAL)Scale(6));
+			Gdiplus::SolidBrush surface(GpToken(255, gt::surface));
+			g.FillPath(&surface, &path);
+			Gdiplus::Pen border(GpToken(255, gt::primary), 1.5f);
+			g.DrawPath(&border, &path);
+			Gdiplus::Graphics screen(ps.hdc);
+			screen.DrawImage(&bmp, 0, 0);
+		}
+		::EndPaint(hwnd, &ps);
+		return 0;
+	}
 	if (msg == WM_SIZE && g_editHwnd) {
 		RECT rc;
 		::GetClientRect(hwnd, &rc);
-		::MoveWindow(g_editHwnd, 0, 0, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+		::MoveWindow(g_editHwnd, Scale(2), Scale(2), rc.right - rc.left - Scale(4), rc.bottom - rc.top - Scale(4), TRUE);
 		return 0;
+	}
+	if (msg == WM_CTLCOLOREDIT) {
+		HDC dc = (HDC)wp;
+		::SetBkColor(dc, AbRgb(gt::surface));
+		::SetTextColor(dc, AbRgb(gt::ink));
+		static HBRUSH editBrush = ::CreateSolidBrush(AbRgb(gt::surface));
+		return (LRESULT)editBrush;
 	}
 	if (msg == WM_DESTROY && hwnd == g_editorHwnd) {
 		g_editorHwnd = NULL;
@@ -3953,6 +3986,10 @@ LRESULT CALLBACK InlineEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // another field/swatch) must NOT cancel or commit — only WM_ACTIVATE
 // (focus leaving the card window entirely) does that; see CardWndProc.
 LRESULT CALLBACK CardFieldProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (msg == WM_SETFOCUS) {
+		g_cardFocusHwnd = hwnd;
+		if (g_cardHwnd) ::InvalidateRect(g_cardHwnd, NULL, FALSE);
+	}
 	if (msg == WM_KEYDOWN) {
 		if (wp == VK_RETURN) {
 			CommitCardEdit();
@@ -3978,6 +4015,127 @@ LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		CancelCardEdit();
 		return 0;
 	}
+	if (msg == WM_ERASEBKGND) return 1;
+	if (msg == WM_PAINT && g_gdiplusToken) {
+		PAINTSTRUCT ps{};
+		::BeginPaint(hwnd, &ps);
+		RECT rc{};
+		::GetClientRect(hwnd, &rc);
+		const int w = rc.right - rc.left;
+		const int h = rc.bottom - rc.top;
+		if (w > 0 && h > 0) {
+			Gdiplus::Bitmap bmp(w, h, PixelFormat32bppPARGB);
+			Gdiplus::Graphics g(&bmp);
+			g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+			Gdiplus::GraphicsPath shadowPath;
+			AddRoundRect(shadowPath, 1.0f, 2.0f, (Gdiplus::REAL)(w - 2), (Gdiplus::REAL)(h - 2), (Gdiplus::REAL)Scale(10));
+			Gdiplus::SolidBrush shadow(GpToken(40, gt::ink3));
+			g.FillPath(&shadow, &shadowPath);
+			Gdiplus::GraphicsPath path;
+			AddRoundRect(path, 0.0f, 0.0f, (Gdiplus::REAL)w, (Gdiplus::REAL)h, (Gdiplus::REAL)Scale(10));
+			Gdiplus::SolidBrush surface(GpToken(255, gt::surface));
+			g.FillPath(&surface, &path);
+			Gdiplus::Pen border(GpToken(255, gt::outline), 1.0f);
+			g.DrawPath(&border, &path);
+			// The card fields are real EDIT children for standard keyboard and
+			// accessibility behaviour. Their small captions live on the themed
+			// card surface in the reserved left column so date/progress values
+			// remain understandable at first sight (SR-IXC/N1).
+			Gdiplus::Font captionFont(L"Segoe UI", ScaleF(10.0f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+			Gdiplus::SolidBrush captionBrush(GpToken(255, gt::ink3));
+			Gdiplus::StringFormat captionFormat;
+			captionFormat.SetAlignment(Gdiplus::StringAlignmentFar);
+			captionFormat.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			auto paintCaption = [&](HWND field, const wchar_t* text) {
+				if (!field || !::IsWindowVisible(field)) return;
+				RECT fieldRect{};
+				::GetWindowRect(field, &fieldRect);
+				::MapWindowPoints(HWND_DESKTOP, hwnd, (POINT*)&fieldRect, 2);
+				const int left = Scale(kBaseCardPad);
+				const int right = fieldRect.left - Scale(5);
+				if (right <= left) return;
+				g.DrawString(text, -1, &captionFont,
+					Gdiplus::RectF((Gdiplus::REAL)left, (Gdiplus::REAL)fieldRect.top,
+						(Gdiplus::REAL)(right - left), (Gdiplus::REAL)(fieldRect.bottom - fieldRect.top)),
+					&captionFormat, &captionBrush);
+			};
+			paintCaption(g_cardStartHwnd, L"Start");
+			paintCaption(g_cardEndHwnd, L"End");
+			paintCaption(g_cardPercentHwnd, L"Progress %");
+			if (g_cardFocusHwnd && ::IsWindow(g_cardFocusHwnd)) {
+				RECT fr{};
+				::GetWindowRect(g_cardFocusHwnd, &fr);
+				::MapWindowPoints(HWND_DESKTOP, hwnd, (POINT*)&fr, 2);
+				::InflateRect(&fr, Scale(2), Scale(2));
+				Gdiplus::GraphicsPath ring;
+				AddRoundRect(ring, (Gdiplus::REAL)fr.left, (Gdiplus::REAL)fr.top,
+					(Gdiplus::REAL)(fr.right - fr.left), (Gdiplus::REAL)(fr.bottom - fr.top), (Gdiplus::REAL)Scale(4));
+				Gdiplus::Pen focus(GpToken(255, gt::primary), 1.5f);
+				g.DrawPath(&focus, &ring);
+			}
+			Gdiplus::Graphics screen(ps.hdc);
+			screen.DrawImage(&bmp, 0, 0);
+		}
+		::EndPaint(hwnd, &ps);
+		return 0;
+	}
+	if (msg == WM_DRAWITEM && g_gdiplusToken) {
+		const DRAWITEMSTRUCT* draw = reinterpret_cast<const DRAWITEMSTRUCT*>(lp);
+		if (!draw || draw->CtlType != ODT_BUTTON || !draw->hDC) return FALSE;
+		const int id = (int)draw->CtlID;
+		const bool isSwatch = id >= CARD_ID_SWATCH_BASE && id < CARD_ID_SWATCH_BASE + kCardSwatchCount;
+		const bool isSave = id == CARD_ID_OK;
+		const bool isDelete = id == CARD_ID_DELETE;
+		if (!isSwatch && !isSave && !isDelete) return FALSE;
+
+		const RECT& rc = draw->rcItem;
+		const int width = rc.right - rc.left;
+		const int height = rc.bottom - rc.top;
+		if (width <= 0 || height <= 0) return TRUE;
+
+		Gdiplus::Graphics g(draw->hDC);
+		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		Gdiplus::SolidBrush surface(GpToken(255, gt::surface));
+		g.FillRectangle(&surface, rc.left, rc.top, width, height);
+		const int inset = Scale(1);
+		Gdiplus::GraphicsPath buttonPath;
+		AddRoundRect(buttonPath, (Gdiplus::REAL)(rc.left + inset), (Gdiplus::REAL)(rc.top + inset),
+			(Gdiplus::REAL)std::max(1, width - inset * 2), (Gdiplus::REAL)std::max(1, height - inset * 2),
+			(Gdiplus::REAL)Scale(isSwatch ? 4 : 6));
+
+		if (isSwatch) {
+			const int index = id - CARD_ID_SWATCH_BASE;
+			const unsigned long fillRgb = gt::ParseHexColor(kAppBarSwatches[index], gt::swatch1);
+			Gdiplus::SolidBrush fill(GpToken(255, fillRgb));
+			g.FillPath(&fill, &buttonPath);
+			if (g_cardSelectedSwatch == index) {
+				Gdiplus::Pen ring(GpToken(255, gt::primary), 2.0f);
+				g.DrawPath(&ring, &buttonPath);
+			}
+		} else {
+			const bool pressed = (draw->itemState & ODS_SELECTED) != 0;
+			const unsigned long fillRgb = isSave
+				? (pressed ? gt::primaryDim : gt::primary)
+				: (pressed ? gt::deadline : gt::dangerSoft);
+			const unsigned long textRgb = isSave ? gt::surface : gt::deadline;
+			Gdiplus::SolidBrush fill(GpToken(255, fillRgb));
+			g.FillPath(&fill, &buttonPath);
+			if (isDelete && !pressed) {
+				Gdiplus::Pen dangerOutline(GpToken(255, gt::deadline), 1.0f);
+				g.DrawPath(&dangerOutline, &buttonPath);
+			}
+			Gdiplus::Font buttonFont(L"Segoe UI", ScaleF(12.0f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+			Gdiplus::SolidBrush textBrush(GpToken(255, textRgb));
+			Gdiplus::StringFormat textFormat;
+			textFormat.SetAlignment(Gdiplus::StringAlignmentCenter);
+			textFormat.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			const wchar_t* label = isSave ? L"Save" : L"Delete";
+			g.DrawString(label, -1, &buttonFont,
+				Gdiplus::RectF((Gdiplus::REAL)rc.left, (Gdiplus::REAL)rc.top,
+					(Gdiplus::REAL)width, (Gdiplus::REAL)height), &textFormat, &textBrush);
+		}
+		return TRUE;
+	}
 	if (msg == WM_COMMAND) {
 		int id = LOWORD(wp);
 		int notify = HIWORD(wp);
@@ -3991,17 +4149,38 @@ LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		}
 		if (id >= CARD_ID_SWATCH_BASE && id < CARD_ID_SWATCH_BASE + kCardSwatchCount && notify == BN_CLICKED) {
 			g_cardSelectedSwatch = id - CARD_ID_SWATCH_BASE;
+			for (int i = 0; i < kCardSwatchCount; ++i) {
+				if (g_cardSwatchHwnd[i]) ::InvalidateRect(g_cardSwatchHwnd[i], NULL, FALSE);
+			}
 			return 0;
 		}
 	}
-	if (msg == WM_CTLCOLOREDIT && g_cardInvalid) {
+	if (msg == WM_CTLCOLOREDIT) {
+		HDC dc = (HDC)wp;
 		HWND ctl = (HWND)lp;
-		if (ctl == g_cardStartHwnd || ctl == g_cardEndHwnd) {
-			HDC dc = (HDC)wp;
-			::SetBkColor(dc, RGB(0xFD, 0xE7, 0xE9)); // pale red wash: the "red border" invalid cue
+		::SetBkColor(dc, AbRgb(gt::surface));
+		::SetTextColor(dc, AbRgb(gt::ink));
+		if (g_cardInvalid && (ctl == g_cardStartHwnd || ctl == g_cardEndHwnd)) {
+			::SetBkColor(dc, RGB(0xFD, 0xE7, 0xE9));
 			static HBRUSH invalidBrush = ::CreateSolidBrush(RGB(0xFD, 0xE7, 0xE9));
 			return (LRESULT)invalidBrush;
 		}
+		static HBRUSH editBrush = ::CreateSolidBrush(AbRgb(gt::surface));
+		return (LRESULT)editBrush;
+	}
+	if (msg == WM_CTLCOLORSTATIC) {
+		HDC dc = (HDC)wp;
+		::SetBkColor(dc, AbRgb(gt::surface));
+		::SetTextColor(dc, AbRgb(gt::deadline));
+		static HBRUSH staticBrush = ::CreateSolidBrush(AbRgb(gt::surface));
+		return (LRESULT)staticBrush;
+	}
+	if (msg == WM_CTLCOLORBTN) {
+		HDC dc = (HDC)wp;
+		::SetBkColor(dc, AbRgb(gt::surface));
+		::SetTextColor(dc, AbRgb(gt::ink));
+		static HBRUSH btnBrush = ::CreateSolidBrush(AbRgb(gt::surface));
+		return (LRESULT)btnBrush;
 	}
 	// Losing activation (focus leaving the card entirely — clicking the
 	// slide, Alt+Tab, etc.) commits per SR-IXC-07 (same as inline editor
@@ -4033,6 +4212,11 @@ void EnsureWindow() {
 		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
 		kClass, L"", WS_POPUP,
 		0, 0, 10, 10, NULL, NULL, g_inst, NULL);
+	static bool themeMenuInited = false;
+	if (!themeMenuInited && g_gdiplusToken) {
+		ThemeMenu_Init(g_inst, g_gdiplusToken, Scale);
+		themeMenuInited = true;
+	}
 }
 
 // ---- premultiplied-alpha painting (GDI+) -----------------------------------
@@ -5613,32 +5797,15 @@ void ShowAppBarInsertMenu(POINT clientPt) {
 	if (g_appBarInsertPopupItems.empty()) return;
 	if (::GetEnvironmentVariableW(L"PP_OVERLAY_NO_MENU", NULL, 0) > 0) return;
 
-	HMENU menu = ::CreatePopupMenu();
-	if (!menu) return;
-	std::vector<std::pair<std::string, HMENU>> submenus;
-	auto submenuFor = [&](const std::string& name) -> HMENU {
-		for (auto& p : submenus) if (p.first == name) return p.second;
-		HMENU sub = ::CreatePopupMenu();
-		submenus.push_back({ name, sub });
-		::AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR)sub, Widen(name).c_str());
-		return sub;
-	};
-
-	HMENU insertSub = submenuFor("Insert");
+	std::vector<HtMenuItem> items;
+	items.push_back({ HtCmd_None, "Insert", false, "", true });
 	for (const auto& item : g_appBarInsertPopupItems) {
-		UINT flags = MF_STRING;
-		if (!item.enabled) flags |= MF_GRAYED;
-		::AppendMenuW(insertSub, flags, (UINT_PTR)item.cmd, Widen(MenuLabelForAppBarItem(item)).c_str());
+		items.push_back({ item.cmd, MenuLabelForAppBarItem(item), false, "Insert", item.enabled });
 	}
 
 	POINT screenPt = { clientPt.x, clientPt.y };
 	::ClientToScreen(g_appBarHwnd, &screenPt);
-	::SetForegroundWindow(g_appBarHwnd);
-	int cmd = ::TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-		screenPt.x, screenPt.y, g_appBarHwnd, NULL);
-	::PostMessageW(g_appBarHwnd, WM_NULL, 0, 0);
-	::DestroyMenu(menu);
-
+	int cmd = ThemeMenu_Show(items, screenPt, g_appBarHwnd, true);
 	if (cmd > 0 && cmd != kAppBarInsertMenuCmd)
 		HandleAppBarCommand(cmd, POINT{ 0, 0 });
 }
@@ -6830,20 +6997,10 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 	g_mutating = false;
 }
 
-// Build a real Win32 popup menu from BuildMenuForZone(hit's zone) and show it
-// via TrackPopupMenuEx, then execute whatever command the user picked. NOACTIVATE
-// windows (WS_EX_NOACTIVATE, like this overlay) do not become the foreground
-// window on their own, and Win32 popup menus need SOME window to be foreground
-// to behave correctly (dismiss on outside click, keyboard nav, etc.) — this is
-// the documented workaround: SetForegroundWindow(g_hwnd) immediately before
-// TrackPopupMenuEx, and PostMessage(g_hwnd, WM_NULL, 0, 0) immediately after,
-// per the well-known "NOACTIVATE + TrackPopupMenu" idiom (the WM_NULL nudges
-// the message queue so the menu's internal modal loop reliably tears down).
-// TrackPopupMenu is a genuinely modal call — it pumps its own message loop
-// until dismissed, so this whole function only returns after the user has
-// picked an item (or cancelled). Skipped entirely under the ops harness (env
-// var PP_OVERLAY_NO_MENU set): posting WM_RBUTTONDOWN/UP in that environment
-// still exercises hit-testing + selection without blocking on a real modal menu.
+// Build the themed context menu from BuildMenuForZone(hit's zone) and show it
+// via PowerPlannerThemeMenu (SR-THEME-03), then execute whatever command the
+// user picked. Skipped when PP_OVERLAY_NO_MENU is set (harness paths that only
+// need selection, not a visible menu). ThemeMenu_Show pumps until dismissed.
 void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 	if (hit.zone == HtZone::Outside) return;
 	bool hasRowId = !hit.rowId.empty();
@@ -6879,50 +7036,9 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 	// caller before this function runs, which is all that check verifies.
 	if (::GetEnvironmentVariableW(L"PP_OVERLAY_NO_MENU", NULL, 0) > 0) return;
 
-	HMENU menu = ::CreatePopupMenu();
-	if (!menu) return;
-	// name -> submenu HMENU, created + attached to the top-level menu (as an
-	// MF_POPUP entry) lazily the first time an item references it.
-	std::vector<std::pair<std::string, HMENU>> submenus;
-	auto submenuFor = [&](const std::string& name) -> HMENU {
-		for (auto& p : submenus) if (p.first == name) return p.second;
-		HMENU sub = ::CreatePopupMenu();
-		submenus.push_back({ name, sub });
-		::AppendMenuW(menu, MF_STRING | MF_POPUP, (UINT_PTR)sub, Widen(name).c_str());
-		return sub;
-	};
-
-	for (const auto& item : items) {
-		bool inSubmenu = !item.submenu.empty();
-		// The "Change Scale" HEADER entry (HtCmd_None, submenu=="") only
-		// exists in BuildMenuForZone's list to carry separatorBefore for the
-		// header itself; submenuFor() below appends the actual MF_POPUP
-		// header when the first Day/Week/Month leaf is seen, so this entry
-		// contributes nothing here beyond the separator (handled next).
-		if (item.cmdId == HtCmd_None && !inSubmenu) {
-			if (item.separatorBefore) ::AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-			continue;
-		}
-		UINT flags = MF_STRING;
-		if (!item.enabled) flags |= MF_GRAYED;
-		if (inSubmenu) {
-			HMENU sub = submenuFor(item.submenu);
-			::AppendMenuW(sub, flags, (UINT_PTR)item.cmdId, Widen(item.label).c_str());
-			continue;
-		}
-		if (item.separatorBefore) ::AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-		::AppendMenuW(menu, flags, (UINT_PTR)item.cmdId, Widen(item.label).c_str());
-	}
-
 	POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
-
-	// NOACTIVATE idiom: force foreground before, nudge the queue after.
-	::SetForegroundWindow(g_hwnd);
-	int cmd = ::TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-		screenPt.x, screenPt.y, g_hwnd, NULL);
+	int cmd = ThemeMenu_Show(items, screenPt, g_hwnd, true);
 	::PostMessageW(g_hwnd, WM_NULL, 0, 0);
-
-	::DestroyMenu(menu); // destroys owned submenus recursively
 
 	if (cmd > 0) {
 		HtMenuOp op = MapMenuCommand(hit.zone, cmd, hit.kind, hasRowId, doc, hitId);
@@ -7006,12 +7122,15 @@ bool IsHostActiveForOverlayChrome(HWND ppRoot) {
 	HWND fgRoot = ::GetAncestor(fg, GA_ROOT);
 
 	if (fgRoot == ppRoot) return true;
-	if (fg == g_hwnd || fg == g_editorHwnd || fg == g_cardHwnd || fg == g_appBarHwnd) return true;
-	if (fgRoot == g_hwnd || fgRoot == g_editorHwnd || fgRoot == g_cardHwnd || fgRoot == g_appBarHwnd) return true;
+	if (fg == g_hwnd || fg == g_editorHwnd || fg == g_cardHwnd || fg == g_appBarHwnd
+		|| fg == ThemeMenu_Hwnd() || fg == ThemeMenu_FlyoutHwnd()) return true;
+	if (fgRoot == g_hwnd || fgRoot == g_editorHwnd || fgRoot == g_cardHwnd || fgRoot == g_appBarHwnd
+		|| fgRoot == ThemeMenu_Hwnd() || fgRoot == ThemeMenu_FlyoutHwnd()) return true;
 
 	HWND fgRootOwner = ::GetAncestor(fg, GA_ROOTOWNER);
 	if (fgRootOwner == ppRoot) return true;
-	if (fgRootOwner == g_hwnd || fgRootOwner == g_editorHwnd || fgRootOwner == g_cardHwnd || fgRootOwner == g_appBarHwnd) return true;
+	if (fgRootOwner == g_hwnd || fgRootOwner == g_editorHwnd || fgRootOwner == g_cardHwnd || fgRootOwner == g_appBarHwnd
+		|| fgRootOwner == ThemeMenu_Hwnd() || fgRootOwner == ThemeMenu_FlyoutHwnd()) return true;
 
 	return false;
 }
@@ -7438,6 +7557,7 @@ void OverlayStart(IDispatch* app) {
 
 void OverlayStop() {
 	if (g_timer) { ::KillTimer(NULL, g_timer); g_timer = 0; }
+	ThemeMenu_Dismiss(0);
 	DestroyInlineEditor();
 	CloseCardEditor();
 	if (g_captureActive) {
@@ -7679,6 +7799,7 @@ const char* Overlay_DumpChromeStateForTest() {
 	}
 	s += "\"ownSelTaskPercent\":" + std::to_string(ownSelTaskPercent) + ",";
 	s += "\"cardVisible\":" + std::string((g_cardHwnd && ::IsWindowVisible(g_cardHwnd)) ? "true" : "false") + ",";
+	s += "\"contextMenuVisible\":" + std::string(ThemeMenu_IsVisible() ? "true" : "false") + ",";
 	s += "\"appBarVisible\":" + std::string(g_appBarShown ? "true" : "false") + ",";
 	s += "\"appBarValid\":" + std::string(g_appBarValid ? "true" : "false") + ",";
 	if (g_appBarGeomValid) {
@@ -7763,28 +7884,64 @@ void Overlay_DumpWindowStateForTest(char* buf, int bufLen) {
 			}
 		}
 	};
-	int ovVis = 0, abVis = 0, edVis = 0, cdVis = 0;
+	int ovVis = 0, abVis = 0, edVis = 0, cdVis = 0, mnVis = 0;
 	long ovL = 0, ovT = 0, ovR = 0, ovB = 0;
 	long abL = 0, abT = 0, abR = 0, abB = 0;
 	long edL = 0, edT = 0, edR = 0, edB = 0;
 	long cdL = 0, cdT = 0, cdR = 0, cdB = 0;
+	long mnL = 0, mnT = 0, mnR = 0, mnB = 0;
 	windowFields(g_hwnd, ovVis, ovL, ovT, ovR, ovB);
 	windowFields(g_appBarHwnd, abVis, abL, abT, abR, abB);
 	windowFields(g_editorHwnd, edVis, edL, edT, edR, edB);
 	windowFields(g_cardHwnd, cdVis, cdL, cdT, cdR, cdB);
+	windowFields(ThemeMenu_Hwnd(), mnVis, mnL, mnT, mnR, mnB);
 	::snprintf(buf, (size_t)bufLen,
 		"{\"hostActive\":%d,\"viewOk\":%d,\"shown\":%d,"
 		"\"windows\":["
 		"{\"cls\":\"PowerPlannerOverlay\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld},"
 		"{\"cls\":\"PowerPlannerAppBar\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld},"
 		"{\"cls\":\"PowerPlannerInlineEditor\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld},"
-		"{\"cls\":\"PowerPlannerCardEditor\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld}],"
+		"{\"cls\":\"PowerPlannerCardEditor\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld},"
+		"{\"cls\":\"PowerPlannerThemeMenu\",\"vis\":%d,\"l\":%ld,\"t\":%ld,\"r\":%ld,\"b\":%ld}],"
 		"\"counters\":{\"overlayPaints\":%ld,\"appBarPaints\":%ld,\"overlaySwp\":%ld,\"appBarSwp\":%ld}}",
 		g_lastHostActive ? 1 : 0, g_lastViewOk ? 1 : 0, g_shown ? 1 : 0,
 		ovVis, ovL, ovT, ovR, ovB,
 		abVis, abL, abT, abR, abB,
 		edVis, edL, edT, edR, edB,
 		cdVis, cdL, cdT, cdR, cdB,
+		mnVis, mnL, mnT, mnR, mnB,
 		g_overlayPaintCount, g_appBarPaintCount, g_overlaySwpCount, g_appBarSwpCount);
 	buf[bufLen - 1] = '\0';
+}
+
+void Overlay_ShowContextMenuAtClientForTest(int clientX, int clientY) {
+	POINT clientPt = { clientX, clientY };
+	HtHit hit = HitTestClientPoint(clientPt);
+	if (hit.zone == HtZone::Outside) return;
+	bool hasRowId = !hit.rowId.empty();
+	if (hit.zone == HtZone::Label && hit.kind == HtItemKind::RowLabel) {
+		hasRowId = !hit.id.empty();
+	}
+	PpDocument doc;
+	std::string hitId;
+	try {
+		if (g_app) {
+			std::string json = ReadGanttFromSlide(g_app);
+			if (!json.empty()) doc = DocumentFromJson(json);
+		}
+	}
+	catch (...) {}
+	if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL || hit.zone == HtZone::TaskEdgeR
+		|| hit.zone == HtZone::TaskProgressEdge
+		|| hit.zone == HtZone::Milestone || hit.zone == HtZone::Marker || hit.zone == HtZone::Text) {
+		hitId = hit.id;
+	} else if (hit.zone == HtZone::Label && hit.kind == HtItemKind::RowLabel) {
+		hitId = hit.id;
+	} else if (hasRowId) {
+		hitId = hit.rowId;
+	}
+	std::vector<HtMenuItem> items = BuildMenuForZone(hit.zone, hit.kind, hasRowId, doc, hitId);
+	if (items.empty()) return;
+	POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
+	ThemeMenu_Show(items, screenPt, g_hwnd, false);
 }

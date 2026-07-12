@@ -12,6 +12,7 @@
 #include "../PowerPlannerAddin/GanttBuilder.h"
 #include "../PowerPlannerAddin/GanttModel.h"
 #include "../PowerPlannerAddin/Overlay.h"
+#include "../PowerPlannerAddin/ThemeMenu.h"
 #include "../PowerPlannerAddin/GanttHitTest.h"
 #include "../PowerPlannerAddin/GanttAppBar.h"
 // GDI+ headers use unqualified min/max; provide them if a prior include pulled
@@ -2312,6 +2313,40 @@ int wmain(int argc, wchar_t** argv) {
 				const bool multiRowPass = shiftOk && ctrlOk && deleteOk;
 				wprintf(L"MULTIROW %s (shift=%d ctrl=%d delete=%d)\n",
 					multiRowPass ? L"PASS" : L"FAIL", shiftOk ? 1 : 0, ctrlOk ? 1 : 0, deleteOk ? 1 : 0);
+			} else if (traceProfile && wcscmp(traceProfile, L"theme-coherent-surfaces") == 0) {
+				Overlay_SelectForTest("TASK", "wireframes");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				HWND ov = OverlayHwnd();
+				POINT center{};
+				if (ov && FindTaskBodyCenter(app, "wireframes", &center)) {
+					POINT clientPt = center;
+					::ScreenToClient(ov, &clientPt);
+					Overlay_ShowContextMenuAtClientForTest(clientPt.x, clientPt.y);
+					PumpFor(250);
+					captureStep("menu-open", traceProfile);
+					const char* menuDump = Overlay_DumpChromeStateForTest();
+					const bool menuVis = menuDump && ::strstr(menuDump, "\"contextMenuVisible\":true");
+					HWND menuWnd = ::FindWindowW(PP_THEME_MENU_CLASS, nullptr);
+					wprintf(L"THEMEMENU visible=%d hwnd=%p\n", menuVis ? 1 : 0, (void*)menuWnd);
+					ThemeMenu_Dismiss(0);
+					PumpFor(150);
+				} else {
+					wprintf(L"THEMEMENU: wireframes task center not found\n");
+				}
+				Overlay_PerformAppBarCommandForTest(HtCmd_Edit);
+				PumpFor(350);
+				captureStep("card-open", traceProfile);
+				const char* cardDump = Overlay_DumpChromeStateForTest();
+				wprintf(L"THEMECARD visible=%hs\n",
+					(cardDump && ::strstr(cardDump, "\"cardVisible\":true")) ? "true" : "false");
+				PumpFor(150);
+				captureStep("immed", traceProfile);
+				PumpFor(300);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
 			} else {
 				// default: just exercise select + a row op
 				Overlay_PerformAppBarCommandForTest(HtCmd_AddRowBelow);

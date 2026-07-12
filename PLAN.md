@@ -368,10 +368,10 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 
 ### v2.6.6 - Iteration U6: Theme-Coherent Surfaces (Material everywhere)
 **Goal:** No default Win32 chrome anywhere. Absorbs v2.5.5 #4 (SR-THEME-01..03).
-- [ ] Custom-drawn context menu (layered window, GanttTheme tokens, hover/keyboard nav/submenu/light-dismiss) replacing TrackPopupMenu — reuse app-bar paint machinery; same registry model
-- [ ] UF-04 verified: right-click menu matches mockup aesthetic (capture + review)
-- [ ] Card editor + inline editor re-skinned to tokens (typography, borders, focus states) — no DEFAULT_GUI_FONT/WS_BORDER chrome
-- [ ] E2E: trace_theme_coherent_surfaces implemented; menu + card captures in matrix
+- [x] Custom-drawn context menu: ThemeMenu.cpp/.h layered NOACTIVATE window, GanttTheme tokens, hover highlight, submenus (Colors flyout), light-dismiss; same registry model; TrackPopupMenu retired from chart surfaces
+- [x] UF-04 verified: menu-open capture reviewed — matches mockup aesthetic, no Win32 HMENU
+- [x] Card + inline editors re-skinned: borderless token containers, Segoe UI, focus ring, owner-drawn color-chip swatches (walkthrough round 1 caught digit-buttons regression), themed Save/danger Delete, Start/End/Progress % captions
+- [x] E2E: trace_theme_coherent_surfaces implemented (menu-open + card-open steps, contextMenuVisible dump field) — PASS
 - [ ] MILESTONE GATE: user visual pass
 
 ### v2.6.7 - Iteration U7: Scale & Component Settings

@@ -2,6 +2,7 @@
   "name": "trace_theme_coherent_surfaces",
   "description": "E2E feedback #4: Trigger right-click context on task and on background; double-click task to open edit panel. Capture PNGs of the menus/panels. Verify (via review + future pixel) they use custom theme drawing (tokens) and do not resemble default PowerPoint/Win32 menus. Gate on coordinator visual sign-off.",
   "exe": "ppappbarshot",
+  "trace_profile": "theme-coherent-surfaces",
   "args": ["--trace", "theme-coherent-surfaces"],
   "timeout": 120,
   "retries": 1,

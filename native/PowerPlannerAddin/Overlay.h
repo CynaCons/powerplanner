@@ -173,6 +173,10 @@ void Overlay_GetRenderCountersForTest(long* overlayPaints, long* appBarPaints,
                                       long* overlaySwp, long* appBarSwp);
 void Overlay_DumpWindowStateForTest(char* buf, int bufLen);
 
+// Test seam: open the custom theme menu at overlay client coords without blocking
+// (harness captures while visible, then ThemeMenu_Dismiss). Never touches COM.
+void Overlay_ShowContextMenuAtClientForTest(int clientX, int clientY);
+
 // ---- floating card editor (double-click TaskBody/Milestone/Text) test hooks
 // The card is a real top-level window (WS_EX_TOOLWINDOW), registered under
 // this class name (mirrors Overlay.cpp's private kCardClass, kept in sync by
@@ -183,6 +187,7 @@ void Overlay_DumpWindowStateForTest(char* buf, int bufLen);
 // walking children by class+z-order. OVERLAY_CARD_ID_DELETE_FOR_TEST is only
 // shown in TEXT mode (label field + delete button, no dates/percent/swatches).
 #define PP_CARD_EDITOR_CLASS L"PowerPlannerCardEditor"
+#define PP_THEME_MENU_CLASS L"PowerPlannerThemeMenu"
 enum OverlayCardControlIdForTest {
 	OVERLAY_CARD_ID_LABEL_FOR_TEST = 101,
 	OVERLAY_CARD_ID_START_FOR_TEST = 102,

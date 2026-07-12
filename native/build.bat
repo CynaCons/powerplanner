@@ -49,12 +49,15 @@ cl %CLFLAGS% /Fo"GanttBuilder.obj" "%SRC%\GanttBuilder.cpp" || ( popd & exit /b 
 echo [build] compiling Overlay.cpp
 cl %CLFLAGS% /Fo"Overlay.obj" "%SRC%\Overlay.cpp" || ( popd & exit /b 1 )
 
+echo [build] compiling ThemeMenu.cpp
+cl %CLFLAGS% /Fo"ThemeMenu.obj" "%SRC%\ThemeMenu.cpp" || ( popd & exit /b 1 )
+
 echo [build] compiling resources
 rc /nologo /I"%SRC%" /fo "PowerPlannerAddin.res" "%SRC%\PowerPlannerAddin.rc" || ( popd & exit /b 1 )
 
 echo [build] linking PowerPlannerAddin.dll
 link /nologo /DLL /MACHINE:X64 /DEF:"%SRC%\PowerPlannerAddin.def" /OUT:"PowerPlannerAddin.dll" ^
-	Connect.obj dllmain.obj GanttLayout.obj GanttJson.obj GanttOps.obj GanttHitTest.obj PptRenderer.obj GanttBuilder.obj Overlay.obj PowerPlannerAddin.res ^
+	Connect.obj dllmain.obj GanttLayout.obj GanttJson.obj GanttOps.obj GanttHitTest.obj PptRenderer.obj GanttBuilder.obj Overlay.obj ThemeMenu.obj PowerPlannerAddin.res ^
 	gdi32.lib user32.lib || ( popd & exit /b 1 )
 
 popd
