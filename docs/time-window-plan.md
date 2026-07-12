@@ -1,6 +1,6 @@
 # Time Window Editing — Feature Plan (v2.7.x)
 
-**Registered:** 2026-07-12 (user feature request). **Status:** REVIEWED — adversarial subagent review 2026-07-12 found 3 critical / 5 major / 10 minor issues; ALL folded into the sections below (marked 'review-amended' / 'amended per review'). Awaiting user approval + D1–D4 veto.
+**Registered:** 2026-07-12 (user feature request). **Status:** REVIEWED — adversarial subagent review 2026-07-12 found 3 critical / 5 major / 10 minor issues; ALL folded into the sections below (marked 'review-amended' / 'amended per review'). APPROVED by user 2026-07-12 (D1 = non-interactive arrow-port continuation glyph; D2-D4 defaults confirmed). EXECUTION STARTED.
 **One-line:** the chart gets an explicit, user-controlled time window, edited by dragging
 arrow ports at the left/right ends of the timescale header; elements outside the window
 clip or hide (losslessly — the document keeps everything), and the whole chart rescales
@@ -277,8 +277,9 @@ text; gallery-window captures + README mention; cold walkthrough
    each slice's dispatch prompt.
 
 ## 6. Open decisions for the user (defaults chosen, please veto)
-- D1: partially visible bars show a small "continues" tick at the cut edge
-  (default ON; alternative: flat cut only).
+- D1: DECIDED (user 2026-07-12): partially visible bars show a small NON-INTERACTIVE
+  arrow-port glyph at the cut edge (same visual family as the window ports — a
+  continuation cue, no hit zone).
 - D2: first port-drag materializes the auto window including today's 5% pad (default;
   review-confirmed — the only zero-geometry-delta choice). Note: PP_PROJ carries no
   maxDay, so windowEnd is reconstructed from doc extents + pad (derivation specified in
