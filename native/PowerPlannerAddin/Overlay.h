@@ -177,6 +177,11 @@ void Overlay_DumpWindowStateForTest(char* buf, int bufLen);
 // (harness captures while visible, then ThemeMenu_Dismiss). Never touches COM.
 void Overlay_ShowContextMenuAtClientForTest(int clientX, int clientY);
 
+// Test seam: open the document-context Settings popover without blocking so
+// the harness can capture its themed surface; caller dismisses via
+// ThemeMenu_Dismiss. Never mutates the document.
+void Overlay_ShowSettingsMenuForTest();
+
 // ---- floating card editor (double-click TaskBody/Milestone/Text) test hooks
 // The card is a real top-level window (WS_EX_TOOLWINDOW), registered under
 // this class name (mirrors Overlay.cpp's private kCardClass, kept in sync by

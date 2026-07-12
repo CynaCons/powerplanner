@@ -296,6 +296,13 @@ bool SetGridDensity(PpDocument& doc, const std::string& density) {
 	return true;
 }
 
+bool SetAxisNumbering(PpDocument& doc, const std::string& numbering) {
+	std::string v = numbering.empty() ? "day" : numbering;
+	if (v != "day" && v != "cw") return false;
+	doc.axisNumbering = v;
+	return true;
+}
+
 bool SetGridStyle(PpDocument& doc, const std::string& style) {
 	std::string v = style.empty() ? "solid" : style;
 	if (v != "solid" && v != "dotted") return false;

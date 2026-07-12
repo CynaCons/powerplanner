@@ -5116,7 +5116,7 @@ void RebuildAppBarModelFromSlide() {
 			g_appBarSelKindBuilt = g_ownSelKind;
 			g_appBarSelIdBuilt = g_ownSelId;
 			g_appBarIsMultiBuilt = isMulti;
-			g_appBarDocSig = doc.scale + (doc.railLabels ? "1" : "0");
+			g_appBarDocSig = doc.scale + "|" + doc.gridDensity + "|" + doc.axisNumbering + (doc.railLabels ? "|1" : "|0");
 			g_lastScale = doc.scale;
 			g_appBarValid = true;
 			g_appBarModelDirty = true;
@@ -5200,11 +5200,7 @@ void AppBarStripIconLabels(AppBarGroup& group, bool labelsAndGridOnly) {
 	for (auto& item : group.items) {
 		if (item.cmd == kAppBarInsertMenuCmd) continue;
 		if (item.icon == AppBarIcon::ScaleSeg || item.icon == AppBarIcon::Swatch) continue;
-		if (labelsAndGridOnly) {
-			if (item.cmd == HtCmd_ToggleRailLabels || item.cmd == HtCmd_CycleGrid)
-				item.label.clear();
-			continue;
-		}
+		if (labelsAndGridOnly) continue;
 		if (item.icon != AppBarIcon::None) item.label.clear();
 	}
 }
@@ -5810,6 +5806,23 @@ void ShowAppBarInsertMenu(POINT clientPt) {
 		HandleAppBarCommand(cmd, POINT{ 0, 0 });
 }
 
+void ShowAppBarSettingsMenu(POINT clientPt) {
+	if (::GetEnvironmentVariableW(L"PP_OVERLAY_NO_MENU", NULL, 0) > 0) return;
+	if (!g_app || g_mutating) return;
+	PpDocument doc;
+	try {
+		if (!ReadGanttDocFromSlide(g_app, &doc)) return;
+	} catch (...) {
+		OvLog(L"unable to read document for Settings menu");
+		return;
+	}
+	POINT screenPt = { clientPt.x, clientPt.y };
+	::ClientToScreen(g_appBarHwnd, &screenPt);
+	int cmd = ThemeMenu_Show(BuildSettingsMenuItems(doc), screenPt, g_appBarHwnd, true);
+	if (cmd > 0 && cmd != HtCmd_Settings)
+		HandleAppBarCommand(cmd, POINT{ 0, 0 });
+}
+
 // SR-SMO-02 op-dispatch total timer: brackets an app-bar command so the
 // OPPHASES trace can report the full outside-UpdateGantt wall time
 // (dispatchTotal) alongside the inside-UpdateGantt phase breakdown. Covers all
@@ -5824,6 +5837,62 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 	OpDispatchTimer _opDispatchTimer;
 	if (cmd == kAppBarInsertMenuCmd) {
 		ShowAppBarInsertMenu(clientPt);
+		return;
+	}
+	if (cmd == HtCmd_Settings) {
+		ShowAppBarSettingsMenu(clientPt);
+		return;
+	}
+	if ((cmd == HtCmd_ToggleRailLabels || cmd == HtCmd_CycleGrid ||
+		cmd == HtCmd_GridAuto || cmd == HtCmd_GridDay || cmd == HtCmd_GridWeek ||
+		cmd == HtCmd_GridMonth || cmd == HtCmd_GridNone ||
+		cmd == HtCmd_AxisNumbersDay || cmd == HtCmd_AxisNumbersCW ||
+		cmd == HtCmd_RailLabelsOn || cmd == HtCmd_RailLabelsOff) && g_app && !g_mutating) {
+		g_mutating = true;
+		try {
+			PpDocument doc;
+			if (ReadGanttDocFromSlide(g_app, &doc)) {
+				const std::string keepKind = g_ownSelKind;
+				const std::string keepId = g_ownSelId;
+				const std::string beforeGrid = doc.gridDensity;
+				const std::string beforeAxis = doc.axisNumbering;
+				const bool beforeRail = doc.railLabels;
+				bool valid = true;
+				switch (cmd) {
+				case HtCmd_ToggleRailLabels: valid = SetRailLabelsGlobal(doc, !doc.railLabels); break;
+				case HtCmd_RailLabelsOn: valid = SetRailLabelsGlobal(doc, true); break;
+				case HtCmd_RailLabelsOff: valid = SetRailLabelsGlobal(doc, false); break;
+				case HtCmd_CycleGrid: {
+					const std::string cur = doc.gridDensity.empty() ? "auto" : doc.gridDensity;
+					const char* next = cur == "auto" ? "week" : cur == "week" ? "month" : cur == "month" ? "none" : "auto";
+					valid = SetGridDensity(doc, next);
+					break;
+				}
+				case HtCmd_GridAuto: valid = SetGridDensity(doc, "auto"); break;
+				case HtCmd_GridDay: valid = SetGridDensity(doc, "day"); break;
+				case HtCmd_GridWeek: valid = SetGridDensity(doc, "week"); break;
+				case HtCmd_GridMonth: valid = SetGridDensity(doc, "month"); break;
+				case HtCmd_GridNone: valid = SetGridDensity(doc, "none"); break;
+				case HtCmd_AxisNumbersDay: valid = SetAxisNumbering(doc, "day"); break;
+				case HtCmd_AxisNumbersCW: valid = SetAxisNumbering(doc, "cw"); break;
+				default: valid = false; break;
+				}
+				const bool changed = valid && (doc.gridDensity != beforeGrid || doc.axisNumbering != beforeAxis || doc.railLabels != beforeRail);
+				if (changed) {
+					RebuildChart(doc, keepId);
+					if (!keepId.empty() && !keepKind.empty()) SetOwnSelection(keepKind, keepId);
+				}
+			}
+		} catch (const _com_error&) {
+			OvLog(L"COM error changing component settings");
+		} catch (const std::exception&) {
+			OvLog(L"document error changing component settings");
+		} catch (...) {
+			OvLog(L"unknown error changing component settings");
+		}
+		g_mutating = false;
+		g_appBarValid = false;
+		RequestOverlayRepaint();
 		return;
 	}
 	if (cmd == HtCmd_InsertMarker && g_ownSelKind.empty() && g_app && !g_mutating) {
@@ -6028,71 +6097,6 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 		return;
 	}
 
-	if (cmd == HtCmd_ToggleRailLabels && g_app && !g_mutating) {
-		g_mutating = true;
-		try {
-			PpDocument doc;
-			if (ReadGanttDocFromSlide(g_app, &doc)) {
-				const std::string keepKind = g_ownSelKind;
-				const std::string keepId = g_ownSelId;
-				if (SetRailLabelsGlobal(doc, !doc.railLabels)) {
-					RebuildChart(doc, keepId);
-					if (!keepId.empty() && !keepKind.empty()) {
-						SetOwnSelection(keepKind, keepId);
-					}
-				}
-			}
-		}
-		catch (const _com_error&) {
-			OvLog(L"COM error toggling rail labels");
-		}
-		catch (const std::exception&) {
-			OvLog(L"document error toggling rail labels");
-		}
-		catch (...) {
-			OvLog(L"unknown error toggling rail labels");
-		}
-		g_mutating = false;
-		g_appBarValid = false;
-		RequestOverlayRepaint();
-		return;
-	}
-
-	if (cmd == HtCmd_CycleGrid && g_app && !g_mutating) {
-		g_mutating = true;
-		try {
-			PpDocument doc;
-			if (ReadGanttDocFromSlide(g_app, &doc)) {
-				const std::string keepKind = g_ownSelKind;
-				const std::string keepId = g_ownSelId;
-				const std::string cur = doc.gridDensity.empty() ? "auto" : doc.gridDensity;
-				const char* next = "auto";
-				if (cur == "auto") next = "week";
-				else if (cur == "week") next = "month";
-				else if (cur == "month") next = "none";
-				if (SetGridDensity(doc, next)) {
-					RebuildChart(doc, keepId);
-					if (!keepId.empty() && !keepKind.empty()) {
-						SetOwnSelection(keepKind, keepId);
-					}
-				}
-			}
-		}
-		catch (const _com_error&) {
-			OvLog(L"COM error cycling grid density");
-		}
-		catch (const std::exception&) {
-			OvLog(L"document error cycling grid density");
-		}
-		catch (...) {
-			OvLog(L"unknown error cycling grid density");
-		}
-		g_mutating = false;
-		g_appBarValid = false;
-		RequestOverlayRepaint();
-		return;
-	}
-
 	HtMenuOp op;
 	HtHit hit;
 	hit.id = g_ownSelId;
@@ -6243,6 +6247,8 @@ static bool IsStructuralDocChange(const PpDocument& before, const PpDocument& af
 	if (before.brackets.size() != after.brackets.size()) return true;
 	if (before.scale != after.scale) return true;
 	if (before.gridDensity != after.gridDensity) return true;
+	if (before.axisNumbering != after.axisNumbering) return true;
+	if (before.railLabels != after.railLabels) return true;
 	return false;
 }
 
@@ -6959,6 +6965,26 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			const std::string keepKind = g_ownSelKind;
 			const std::string keepId = g_ownSelId;
 			changed = SetRailLabelsGlobal(doc, !doc.railLabels);
+			if (changed && !keepId.empty() && !keepKind.empty()) {
+				selectId = keepId;
+				selectKind = keepKind;
+			}
+			break;
+		}
+		case HtOpKind::SetRailLabels: {
+			const std::string keepKind = g_ownSelKind;
+			const std::string keepId = g_ownSelId;
+			changed = SetRailLabelsGlobal(doc, op.railLabels);
+			if (changed && !keepId.empty() && !keepKind.empty()) {
+				selectId = keepId;
+				selectKind = keepKind;
+			}
+			break;
+		}
+		case HtOpKind::SetAxisNumbering: {
+			const std::string keepKind = g_ownSelKind;
+			const std::string keepId = g_ownSelId;
+			changed = SetAxisNumbering(doc, op.axisNumbering ? op.axisNumbering : "day");
 			if (changed && !keepId.empty() && !keepKind.empty()) {
 				selectId = keepId;
 				selectKind = keepKind;
@@ -7808,7 +7834,33 @@ const char* Overlay_DumpChromeStateForTest() {
 	} else {
 		s += "\"appBarRect\":{},";
 	}
+	PpDocument settingsDoc;
+	const bool haveSettingsDoc = Gantt_TryPeekCachedDoc(&settingsDoc);
+	const std::string gridDensity = haveSettingsDoc && !settingsDoc.gridDensity.empty()
+		? settingsDoc.gridDensity : "auto";
+	const std::string axisNumbering = haveSettingsDoc && settingsDoc.axisNumbering == "cw"
+		? "cw" : "day";
+	const bool railLabels = haveSettingsDoc && settingsDoc.railLabels;
+	std::string firstAxisLabel;
+	if (axisNumbering == "cw" && (g_lastScale == "week" || g_lastScale == "day")) {
+		PpProj proj;
+		if (ParseProj(g_chartProj, &proj)) {
+			long labelDay = proj.minDay;
+			if (g_lastScale == "week") {
+				long sinceMonday = (labelDay + 3) % 7;
+				if (sinceMonday < 0) sinceMonday += 7;
+				labelDay -= sinceMonday;
+			}
+			firstAxisLabel = "CW " + std::to_string(IsoCalendarWeekNumber(labelDay));
+		} else {
+			firstAxisLabel = "CW";
+		}
+	}
 	s += "\"scale\":\"" + g_lastScale + "\",";
+	s += "\"gridDensity\":\"" + gridDensity + "\",";
+	s += "\"axisNumbering\":\"" + axisNumbering + "\",";
+	s += "\"railLabels\":" + std::string(railLabels ? "true" : "false") + ",";
+	s += "\"firstAxisLabel\":\"" + firstAxisLabel + "\",";
 	s += "\"chartRect\":{\"left\":" + std::to_string(g_chartScreenRect.left) + ",\"top\":" + std::to_string(g_chartScreenRect.top) + ",\"right\":" + std::to_string(g_chartScreenRect.right) + ",\"bottom\":" + std::to_string(g_chartScreenRect.bottom) + "},";
 	s += "\"selScreenRect\":{\"left\":" + std::to_string(g_selScreenRect.left) + ",\"top\":" + std::to_string(g_selScreenRect.top) + ",\"right\":" + std::to_string(g_selScreenRect.right) + ",\"bottom\":" + std::to_string(g_selScreenRect.bottom) + "},";
 	s += "\"frameRect\":{\"left\":" + std::to_string(g_frameRect.left) + ",\"top\":" + std::to_string(g_frameRect.top) + ",\"right\":" + std::to_string(g_frameRect.right) + ",\"bottom\":" + std::to_string(g_frameRect.bottom) + "},";
@@ -7944,4 +7996,23 @@ void Overlay_ShowContextMenuAtClientForTest(int clientX, int clientY) {
 	if (items.empty()) return;
 	POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
 	ThemeMenu_Show(items, screenPt, g_hwnd, false);
+}
+
+void Overlay_ShowSettingsMenuForTest() {
+	if (!g_app || g_mutating || !g_appBarHwnd) return;
+	PpDocument doc;
+	try {
+		if (!ReadGanttDocFromSlide(g_app, &doc)) return;
+		RECT button = {};
+		POINT screenPt = { 0, 0 };
+		if (OverlayAppBarButtonRectForTest(HtCmd_Settings, &button)) {
+			screenPt.x = button.left;
+			screenPt.y = button.bottom + Scale(2);
+		} else {
+			::GetCursorPos(&screenPt);
+		}
+		ThemeMenu_Show(BuildSettingsMenuItems(doc), screenPt, g_appBarHwnd, false);
+	} catch (...) {
+		OvLog(L"unable to show Settings menu for test");
+	}
 }

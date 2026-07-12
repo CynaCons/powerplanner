@@ -19,6 +19,7 @@ The canonical document. This mirrors `src/types/document.ts` and is enforced by
 | `markers`      | Marker[]             | yes      |                                          |
 | `style`        | StyleSettings        | yes      |                                          |
 | `baseline`     | BaselineSnapshot     | no       | Optional captured schedule for drift.    |
+| `axisNumbering`| `day` \| `cw`        | no       | Bottom-axis labels. Omitted means `day`; `cw` uses ISO calendar-week numbers for week/day scales. |
 
 ## CalendarSettings
 

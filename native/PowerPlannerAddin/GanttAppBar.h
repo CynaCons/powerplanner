@@ -12,7 +12,7 @@ enum class AppBarIcon {
 	None, Row, Task, Milestone, Marker, Note, Edit, Swatch,
 	MinusDay, PlusDay, Label, Link, Unlink, Delete, Rename,
 	RowAbove, RowBelow, MoveUp, MoveDown, Indent, Outdent,
-	LabelsToggle, Grid, Reanchor, ScaleSeg
+	Settings, Reanchor, ScaleSeg
 };
 
 struct AppBarItem {
@@ -87,17 +87,9 @@ inline void AppBarAppendGlobalGroup(AppBarModel& model, const PpDocument& doc) {
 		item.active = (doc.scale == scales[i]);
 		g.items.push_back(item);
 	}
-	AppBarItem labelsItem;
-	labelsItem.cmd = HtCmd_ToggleRailLabels;
-	labelsItem.label = "Labels";
-	labelsItem.icon = AppBarIcon::LabelsToggle;
-	labelsItem.active = doc.railLabels;
-	g.items.push_back(labelsItem);
-	AppBarItem gridItem;
-	gridItem.cmd = HtCmd_CycleGrid;
-	gridItem.label = "Grid";
-	gridItem.icon = AppBarIcon::Grid;
-	g.items.push_back(gridItem);
+	// Component-level display settings are intentionally grouped behind one
+	// comprehensible entry; the themed popover exposes the persisted values.
+	g.items.push_back({ HtCmd_Settings, "Settings", AppBarIcon::Settings });
 	model.groups.push_back(g);
 }
 

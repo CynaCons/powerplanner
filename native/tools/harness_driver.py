@@ -883,6 +883,37 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": f"sel seq: {own_sel_seq} scale: {scale_seq}",
         })
 
+    if profile == "scale-settings":
+        # U7: the document-context Settings popover writes explicit persisted
+        # values. The trace captures each command and the post-reflow pull.
+        by_step = {s.step: s.state for s in steps}
+        grid = by_step.get("grid-week", {})
+        axis = by_step.get("axis-cw", {})
+        rail = by_step.get("rail-on", {})
+        roundtrip = by_step.get("roundtrip", {})
+        ok = (
+            bool(by_step.get("settings-open", {}).get("contextMenuVisible"))
+            and
+            grid.get("gridDensity") == "week"
+            and axis.get("axisNumbering") == "cw"
+            and "CW" in str(axis.get("firstAxisLabel", ""))
+            and rail.get("railLabels") is True
+            and roundtrip.get("gridDensity") == "week"
+            and roundtrip.get("axisNumbering") == "cw"
+            and roundtrip.get("railLabels") is True
+        )
+        results.append({
+            "rule": "scale_settings_applied_and_persisted",
+            "passed": ok,
+            "detail": (
+                f"settingsOpen={by_step.get('settings-open', {}).get('contextMenuVisible')!r}; "
+                f"grid={grid.get('gridDensity')!r}; axis={axis.get('axisNumbering')!r} "
+                f"label={axis.get('firstAxisLabel')!r}; rail={rail.get('railLabels')!r}; "
+                f"roundtrip=({roundtrip.get('gridDensity')!r}, "
+                f"{roundtrip.get('axisNumbering')!r}, {roundtrip.get('railLabels')!r})"
+            ),
+        })
+
     if profile in ("task-nudge-latency", "task-color-latency"):
         # i4b-latency-traces (v2.5.3, SR-SMO-02) §3: selection must stay TASK
         # across the whole flow -- nudge/color are single-element ops that

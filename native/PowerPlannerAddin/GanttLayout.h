@@ -72,6 +72,10 @@ long DateToDays(const std::string& iso);
 // Inverse of DateToDays: day number -> ISO "YYYY-MM-DD" (for N5 reflow).
 std::string DaysToDate(long days);
 
+// ISO-8601 calendar-week number (1-53) for a day number. Week 1 is the week
+// containing 4 January; this is shared by the scene builder and test seams.
+int IsoCalendarWeekNumber(long days);
+
 // Lay out the document. xDay is relative to viewStart; one day = one x-unit,
 // one row slot = one y-unit (device scale = 1).
 GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStart);

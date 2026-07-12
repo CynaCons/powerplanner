@@ -17,12 +17,14 @@
     "dependencies": { "type": "array", "items": { "$ref": "#/$defs/Dependency" } },
     "markers": { "type": "array", "items": { "$ref": "#/$defs/Marker" } },
     "style": { "$ref": "#/$defs/StyleSettings" },
-    "baseline": { "$ref": "#/$defs/BaselineSnapshot" }
+    "baseline": { "$ref": "#/$defs/BaselineSnapshot" },
+    "axisNumbering": { "$ref": "#/$defs/AxisNumbering" }
   },
   "$defs": {
     "ISODate": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
     "Hex": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
     "TimeScale": { "enum": ["day", "week", "month", "quarter", "year"] },
+    "AxisNumbering": { "enum": ["day", "cw"] },
     "DependencyType": { "enum": ["finish-to-start", "start-to-start", "finish-to-finish", "start-to-finish"] },
     "LabelPlacement": { "enum": ["on-bar", "left", "right", "above", "below", "hidden"] },
     "ThemeName": { "enum": ["light", "dark", "print"] },

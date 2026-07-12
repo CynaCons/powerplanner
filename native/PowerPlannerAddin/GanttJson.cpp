@@ -36,6 +36,7 @@ std::string DocumentToJson(const PpDocument& d) {
 	j["calendar"] = { {"scale", d.scale.empty() ? "week" : d.scale}, {"fiscalYearStart", 1}, {"workingDays", {1, 2, 3, 4, 5}}, {"holidays", json::array()} };
 	if (d.railLabels) j["railLabels"] = true;
 	if (!d.gridDensity.empty()) j["gridDensity"] = d.gridDensity;
+	if (d.axisNumbering == "cw") j["axisNumbering"] = "cw";
 	if (!d.gridStyle.empty()) j["gridStyle"] = d.gridStyle;
 
 	j["rows"] = json::array();
@@ -98,6 +99,7 @@ static bool IsStructuralDocDelta(const PpDocument& before, const PpDocument& aft
 	if (before.brackets.size() != after.brackets.size()) return true;
 	if (before.scale != after.scale) return true;
 	if (before.gridDensity != after.gridDensity) return true;
+	if (before.axisNumbering != after.axisNumbering) return true;
 	if (before.title != after.title) return true;
 	if (before.railLabels != after.railLabels) return true;
 	if (before.gridStyle != after.gridStyle) return true;
@@ -239,6 +241,8 @@ PpDocument DocumentFromJson(const std::string& jsonStr) {
 	}
 	doc.railLabels = d.value("railLabels", false);
 	doc.gridDensity = getStr(d, "gridDensity");
+	doc.axisNumbering = getStr(d, "axisNumbering");
+	if (doc.axisNumbering != "cw") doc.axisNumbering = "day";
 	doc.gridStyle = getStr(d, "gridStyle");
 	for (const auto& r : d.value("rows", json::array())) {
 		PpRow row;

@@ -1,0 +1,10 @@
+{
+  "name": "trace_scale_settings",
+  "description": "U7: document-context Settings persists separators, calendar-week axis numbers, and rail task names through pull-from-slide and reflow.",
+  "exe": "ppappbarshot",
+  "trace_profile": "scale-settings",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["scale_settings_applied_and_persisted"]
+}

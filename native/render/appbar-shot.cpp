@@ -10,6 +10,7 @@
 // frozen MakeSampleDocument fixture) and leaves PowerPoint open.
 #include "../PowerPlannerAddin/pch.h"
 #include "../PowerPlannerAddin/GanttBuilder.h"
+#include "../PowerPlannerAddin/GanttJson.h"
 #include "../PowerPlannerAddin/GanttModel.h"
 #include "../PowerPlannerAddin/Overlay.h"
 #include "../PowerPlannerAddin/ThemeMenu.h"
@@ -907,8 +908,7 @@ static std::vector<int> AppBarCmdCandidates(const std::string& label) {
 	else if (WalkLabelEq(label, "-1d")) v = { HtCmd_NudgeMinus1 };
 	else if (WalkLabelEq(label, "+10%")) v = { HtCmd_PercentPlus10 };
 	else if (WalkLabelEq(label, "-10%")) v = { HtCmd_PercentMinus10 };
-	else if (WalkLabelEq(label, "labels")) v = { HtCmd_ToggleRailLabels };
-	else if (WalkLabelEq(label, "grid")) v = { HtCmd_CycleGrid };
+	else if (WalkLabelEq(label, "settings")) v = { HtCmd_Settings };
 	return v;
 }
 
@@ -1728,6 +1728,52 @@ int wmain(int argc, wchar_t** argv) {
 				captureStep("task-resel", traceProfile);
 				PumpFor(300);
 				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"scale-settings") == 0) {
+				// U7: document-context display settings are persisted in PP_DOC.
+				// Drive the same app-bar command handler that the Settings popover
+				// returns to, then prove pull-from-slide + reflow retain every value.
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("document-context", traceProfile);
+				Overlay_ShowSettingsMenuForTest();
+				PumpFor(100);
+				captureStep("settings-open", traceProfile);
+				ThemeMenu_Dismiss();
+				PumpFor(100);
+				Overlay_PerformAppBarCommandForTest(HtCmd_GridWeek);
+				PumpFor(150);
+				captureStep("grid-week", traceProfile);
+				Overlay_PerformAppBarCommandForTest(HtCmd_AxisNumbersCW);
+				PumpFor(150);
+				captureStep("axis-cw", traceProfile);
+				Overlay_PerformAppBarCommandForTest(HtCmd_RailLabelsOn);
+				PumpFor(150);
+				captureStep("rail-on", traceProfile);
+
+				bool settingsRoundTrip = false;
+				try {
+					PpDocument pulled = DocumentFromJson(ReadGanttFromSlide(app));
+					bool reflowChanged = false;
+					HRESULT reflowHr = ReflowFromSlide(app, &reflowChanged);
+					PpDocument reflowed = DocumentFromJson(ReadGanttFromSlide(app));
+					settingsRoundTrip = SUCCEEDED(reflowHr)
+						&& pulled.gridDensity == "week" && pulled.axisNumbering == "cw" && pulled.railLabels
+						&& reflowed.gridDensity == "week" && reflowed.axisNumbering == "cw" && reflowed.railLabels;
+				} catch (...) {
+					settingsRoundTrip = false;
+				}
+				PumpFor(300);
+				captureStep("roundtrip", traceProfile);
+				const char* state = Overlay_DumpChromeStateForTest();
+				const bool axisHasCw = state && ::strstr(state, "\"axisNumbering\":\"cw\"")
+					&& ::strstr(state, "\"firstAxisLabel\":\"CW ");
+				wprintf(settingsRoundTrip && axisHasCw ? L"SCALE SETTINGS ROUNDTRIP OK\n" : L"SCALE SETTINGS ROUNDTRIP FAIL\n");
+				if (!settingsRoundTrip || !axisHasCw) {
+					OverlayStop();
+					if (gdiToken) Gdiplus::GdiplusShutdown(gdiToken);
+					::CoUninitialize();
+					return 1;
+				}
 			} else if (traceProfile && wcscmp(traceProfile, L"task-nudge-latency") == 0) {
 				// i4b-latency-traces (v2.5.3, SR-SMO-02) §2: select TASK t1 (showcase
 				// doc has no literal t1; same "discovery" substitution as

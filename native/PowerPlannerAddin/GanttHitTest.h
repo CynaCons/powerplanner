@@ -177,6 +177,15 @@ enum HtMenuCmd {
 	HtCmd_GridMonth,
 	HtCmd_GridNone,
 	HtCmd_ReanchorNote,
+	// U7 component settings popover. Legacy ToggleRailLabels/CycleGrid above
+	// remain valid registry commands for compatibility; these make every menu
+	// choice explicit and directly represent the persisted document value.
+	HtCmd_Settings,
+	HtCmd_GridDay,
+	HtCmd_AxisNumbersDay,
+	HtCmd_AxisNumbersCW,
+	HtCmd_RailLabelsOn,
+	HtCmd_RailLabelsOff,
 };
 
 // One flat entry in a (possibly submenu'd) popup menu. Submenu items share the
@@ -189,6 +198,7 @@ struct HtMenuItem {
 	bool separatorBefore = false;
 	std::string submenu; // empty = top-level item; non-empty = submenu label
 	bool enabled = true;
+	bool checked = false; // current option in a mutually-exclusive submenu
 };
 
 // Build the ordered list of menu items for a right-click at this zone. Items
@@ -240,6 +250,8 @@ enum class HtOpKind {
 	InsertMarkerBackground,     // add custom marker at visible center
 	SetGridDensity,      // gridDensity set (or "__cycle__" sentinel for CycleGrid)
 	ToggleRailLabels,    // flip doc.railLabels
+	SetAxisNumbering,    // axisNumbering set to "day" or "cw"
+	SetRailLabels,       // railLabels set explicitly by Settings menu
 	ReanchorNote,        // needsTaskId (text id)
 };
 
@@ -252,6 +264,8 @@ struct HtMenuOp {
 	const char* scale = ""; // "day" | "week" | ... when opKind == SetScale
 	const char* color = ""; // "#RRGGBB" when opKind == SetTaskColor
 	const char* gridDensity = ""; // when opKind == SetGridDensity
+	const char* axisNumbering = ""; // when opKind == SetAxisNumbering
+	bool railLabels = false; // when opKind == SetRailLabels
 };
 
 // Map a chosen menu command back to the operation it represents, validating

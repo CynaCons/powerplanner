@@ -71,6 +71,10 @@ bool SetRailLabelsGlobal(PpDocument& doc, bool on);
 // any other value.
 bool SetGridDensity(PpDocument& doc, const std::string& density);
 
+// Bottom-axis label numbering: "day" | "cw" (empty accepted and normalized
+// to "day"). Returns false for any other value.
+bool SetAxisNumbering(PpDocument& doc, const std::string& numbering);
+
 // Bottom-tier tick style: "solid" | "dotted" (empty accepted, normalized to
 // "solid"). Returns false for any other value.
 bool SetGridStyle(PpDocument& doc, const std::string& style);

@@ -376,10 +376,10 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 
 ### v2.6.7 - Iteration U7: Scale & Component Settings
 **Goal:** Timescale display is a component-level setting with real options. 
-- [ ] UF-10: separator granularity independent of scale (day/week/month separators at any scale); CW (calendar-week) numbering option; persisted in PP_DOC as component settings
-- [ ] Replace/rename opaque "Labels"/"Grid" buttons with a comprehensible scale-settings surface (themed popover from the document-context bar)
-- [ ] Foundation: extend spec (data-model/layout) + fixtures for separator/CW settings (shared with web later)
-- [ ] E2E: scale-settings scenarios + captures across D/W/M
+- [x] UF-10: separator granularity independent of scale (gridDensity settings surface); CW numbering (doc.axisNumbering day|cw, ISO weeks, absent-default 'day'); persisted in PP_DOC + round-trip verified across pull/reflow
+- [x] Opaque Labels/Grid buttons replaced with one document-context 'Settings' button opening a ThemeMenu popover: Separators (Auto/Day/Week/Month/None), Axis numbers (Days/Calendar weeks), Task names in rail (On/Off) — active option highlighted
+- [x] Foundation: spec/schema/document.schema.json + spec/data-model.md extended additively (axisNumbering); fixtures untouched, conformance 1/1 green
+- [x] E2E: trace_scale_settings PASS (popover capture, gridDensity=week, axisNumbering=cw with 'CW 23' axis label verified, rail toggle, persistence round-trip)
 
 ### v2.6.8 - Iteration U8: Cohesion, Architecture & Spec Migration (absorbs v2.5.5 arch items + #5 remainder)
 - [ ] M2: remove dead ContextMenuShape ribbon-XML items (or scope them to actual chart selection)

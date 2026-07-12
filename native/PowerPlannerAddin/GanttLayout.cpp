@@ -38,6 +38,23 @@ std::string DaysToDate(long z) {
 	return buf;
 }
 
+int IsoCalendarWeekNumber(long days) {
+	// DateToDays(1970-01-01) == 0 and that date was a Thursday, so +3 maps
+	// Monday to 0 with a floor-modulo for dates before the epoch as well.
+	auto daysSinceMonday = [](long d) {
+		long r = (d + 3) % 7;
+		return r < 0 ? r + 7 : r;
+	};
+	const long thursday = days + 3 - daysSinceMonday(days);
+	const std::string isoThursday = DaysToDate(thursday);
+	int isoYear = 0;
+	sscanf_s(isoThursday.c_str(), "%d", &isoYear);
+	char jan4[16];
+	sprintf_s(jan4, "%04d-01-04", isoYear);
+	const long weekOneMonday = DateToDays(jan4) - daysSinceMonday(DateToDays(jan4));
+	return (int)((days - weekOneMonday) / 7 + 1);
+}
+
 namespace {
 // max(2, span+1): inclusive-end width with a 2-unit floor (engine: max(2, endX-x+1)).
 long SpanWidthDays(const std::string& start, const std::string& end) {

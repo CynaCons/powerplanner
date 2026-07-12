@@ -322,6 +322,21 @@ HtMenuOp MapRegistryCommand(int cmdId) {
 	case HtCmd_GridNone:
 		op.opKind = HtOpKind::SetGridDensity; op.gridDensity = "none";
 		break;
+	case HtCmd_GridDay:
+		op.opKind = HtOpKind::SetGridDensity; op.gridDensity = "day";
+		break;
+	case HtCmd_AxisNumbersDay:
+		op.opKind = HtOpKind::SetAxisNumbering; op.axisNumbering = "day";
+		break;
+	case HtCmd_AxisNumbersCW:
+		op.opKind = HtOpKind::SetAxisNumbering; op.axisNumbering = "cw";
+		break;
+	case HtCmd_RailLabelsOn:
+		op.opKind = HtOpKind::SetRailLabels; op.railLabels = true;
+		break;
+	case HtCmd_RailLabelsOff:
+		op.opKind = HtOpKind::SetRailLabels; op.railLabels = false;
+		break;
 	case HtCmd_ReanchorNote:
 		op.opKind = HtOpKind::ReanchorNote; op.needsTaskId = true;
 		break;
@@ -487,7 +502,7 @@ std::vector<HtMenuItem> BuildMenuForZone(HtZone zone, HtItemKind kind, bool hasR
 
 	const std::string selId = hitId;
 	AppBarModel model = BuildAppBar(sel, doc, selId);
-	return AppBarModelToMenuItems(model);
+	return AppBarModelToMenuItems(model, doc);
 }
 
 HtMenuOp MapMenuCommand(HtZone zone, int cmdId, HtItemKind kind, bool hasRowId,

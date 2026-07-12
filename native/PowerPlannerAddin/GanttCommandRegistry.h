@@ -63,12 +63,31 @@ inline void RegistryAppendScaleSubmenu(std::vector<HtMenuItem>& items, bool sepa
 	items.push_back({ HtCmd_ScaleYear, "Year", false, "Change Scale", true });
 }
 
-inline void RegistryAppendGridSubmenu(std::vector<HtMenuItem>& items, bool separatorBeforeHeader) {
-	items.push_back({ HtCmd_None, "Grid", separatorBeforeHeader, "", true });
-	items.push_back({ HtCmd_GridAuto, "Auto", false, "Grid", true });
-	items.push_back({ HtCmd_GridWeek, "Week", false, "Grid", true });
-	items.push_back({ HtCmd_GridMonth, "Month", false, "Grid", true });
-	items.push_back({ HtCmd_GridNone, "None", false, "Grid", true });
+// Component-level timescale display settings. The visible app-bar trigger is
+// one "Settings" button; these are also used by the themed document context
+// menu so the old opaque Labels/Grid verbs never leak back into either surface.
+inline void RegistryAppendSettingsSubmenus(std::vector<HtMenuItem>& items,
+	const PpDocument& doc, bool separatorBeforeHeader) {
+	const std::string density = doc.gridDensity.empty() ? "auto" : doc.gridDensity;
+	const std::string numbering = doc.axisNumbering == "cw" ? "cw" : "day";
+	items.push_back({ HtCmd_None, "Separators", separatorBeforeHeader, "", true });
+	items.push_back({ HtCmd_GridAuto, "Auto", false, "Separators", true, density == "auto" });
+	items.push_back({ HtCmd_GridDay, "Day", false, "Separators", true, density == "day" });
+	items.push_back({ HtCmd_GridWeek, "Week", false, "Separators", true, density == "week" });
+	items.push_back({ HtCmd_GridMonth, "Month", false, "Separators", true, density == "month" });
+	items.push_back({ HtCmd_GridNone, "None", false, "Separators", true, density == "none" });
+	items.push_back({ HtCmd_None, "Axis numbers", true, "", true });
+	items.push_back({ HtCmd_AxisNumbersDay, "Days", false, "Axis numbers", true, numbering == "day" });
+	items.push_back({ HtCmd_AxisNumbersCW, "Calendar weeks", false, "Axis numbers", true, numbering == "cw" });
+	items.push_back({ HtCmd_None, "Task names in rail", true, "", true });
+	items.push_back({ HtCmd_RailLabelsOn, "On", false, "Task names in rail", true, doc.railLabels });
+	items.push_back({ HtCmd_RailLabelsOff, "Off", false, "Task names in rail", true, !doc.railLabels });
+}
+
+inline std::vector<HtMenuItem> BuildSettingsMenuItems(const PpDocument& doc) {
+	std::vector<HtMenuItem> items;
+	RegistryAppendSettingsSubmenus(items, doc, false);
+	return items;
 }
 
 inline void RegistryAppendInsertSubmenu(std::vector<HtMenuItem>& items, const AppBarGroup& group, bool separatorBeforeHeader) {
@@ -78,7 +97,8 @@ inline void RegistryAppendInsertSubmenu(std::vector<HtMenuItem>& items, const Ap
 	}
 }
 
-inline std::vector<HtMenuItem> AppBarModelToMenuItems(const AppBarModel& model) {
+inline std::vector<HtMenuItem> AppBarModelToMenuItems(const AppBarModel& model,
+	const PpDocument& doc) {
 	std::vector<HtMenuItem> items;
 	bool firstGroup = true;
 
@@ -92,10 +112,8 @@ inline std::vector<HtMenuItem> AppBarModelToMenuItems(const AppBarModel& model) 
 		if (group.label == "SCALE") {
 			RegistryAppendScaleSubmenu(items, !firstGroup);
 			for (const auto& item : group.items) {
-				if (item.cmd == HtCmd_ToggleRailLabels) {
-					items.push_back({ item.cmd, "Labels", true, "", item.enabled });
-				} else if (item.cmd == HtCmd_CycleGrid) {
-					RegistryAppendGridSubmenu(items, false);
+				if (item.cmd == HtCmd_Settings) {
+					RegistryAppendSettingsSubmenus(items, doc, false);
 				}
 			}
 			firstGroup = false;

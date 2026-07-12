@@ -51,6 +51,9 @@ struct PpDocument {
 	// scale) | year | quarter | month | week | day | none. "none" keeps band
 	// labels but draws no plot ticks.
 	std::string gridDensity;
+	// Bottom axis label numbering: "day" (the backward-compatible default) |
+	// "cw" (ISO calendar-week numbers). The canonical JSON omits "day".
+	std::string axisNumbering = "day";
 	// Bottom-tier tick style: "" = solid | solid | dotted.
 	std::string gridStyle;
 	std::vector<PpRow> rows;

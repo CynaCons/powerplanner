@@ -46,6 +46,7 @@ struct MenuRow {
 	std::string label;
 	bool enabled = true;
 	bool danger = false;
+	bool checked = false;
 	std::string submenuKey;
 };
 
@@ -83,6 +84,7 @@ void BuildMenuModel(const std::vector<HtMenuItem>& items) {
 			row.label = item.label;
 			row.enabled = item.enabled;
 			row.danger = IsDangerCmd(item.cmdId);
+			row.checked = item.checked;
 			g_submenus[item.submenu].push_back(row);
 		}
 	}
@@ -110,6 +112,7 @@ void BuildMenuModel(const std::vector<HtMenuItem>& items) {
 		row.label = item.label;
 		row.enabled = item.enabled;
 		row.danger = IsDangerCmd(item.cmdId);
+		row.checked = item.checked;
 		g_rows.push_back(row);
 	}
 }
@@ -233,7 +236,7 @@ void PaintMenuSurface(Gdiplus::Graphics& g, int W, int H, const std::vector<Menu
 		unsigned long textRgb = gt::ink;
 		if (!row.enabled) {
 			textRgb = gt::ink3;
-		} else if (hovered || submenuOpen) {
+		} else if (hovered || submenuOpen || row.checked) {
 			if (row.danger) { fillRgb = gt::dangerSoft; textRgb = gt::deadline; }
 			else { fillRgb = gt::primarySoft; textRgb = gt::primary; }
 		} else if (row.danger) {

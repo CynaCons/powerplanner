@@ -247,7 +247,8 @@ static bool MenuItemsMatchRegistry(const std::vector<HtMenuItem>& menu,
 		if (menu[i].cmdId != expected[i].cmdId
 			|| menu[i].label != expected[i].label
 			|| menu[i].submenu != expected[i].submenu
-			|| menu[i].enabled != expected[i].enabled) {
+			|| menu[i].enabled != expected[i].enabled
+			|| menu[i].checked != expected[i].checked) {
 			return Check(false, msg);
 		}
 	}
@@ -275,7 +276,7 @@ static bool RunMenuModelV4Checks() {
 	PpDocument doc = MenuSampleDoc();
 
 	auto expectFromAppBar = [&](AppBarSel sel, const std::string& selId) {
-		return AppBarModelToMenuItems(BuildAppBar(sel, doc, selId));
+		return AppBarModelToMenuItems(BuildAppBar(sel, doc, selId), doc);
 	};
 
 	// ---- TaskBody / edges: mirror task app-bar context.
@@ -341,7 +342,7 @@ static bool RunMenuModelV4Checks() {
 		ok = MenuItemsMatchRegistry(menu, expected, "EmptyCell menu is add task/milestone/note here") && ok;
 	}
 
-	// ---- Background: Insert + Scale + Grid submenus (+ Labels).
+	// ---- Background: Insert + Scale + explicit component-settings submenus.
 	for (int variant = 0; variant < 2; ++variant) {
 		std::vector<HtMenuItem> menu = (variant == 0)
 			? BuildMenuForZone(HtZone::RowBand, HtItemKind::Task, false, doc)
@@ -358,8 +359,14 @@ static bool RunMenuModelV4Checks() {
 		ok = Check(row && row->label == "Row", "pin: background Insert/Row/HtCmd_AddRow") && ok;
 		const HtMenuItem* week = MenuFindInSubmenu(items, "Change Scale", HtCmd_ScaleWeek);
 		ok = Check(week && week->label == "Week", "pin: background Scale/Week/HtCmd_ScaleWeek") && ok;
-		const HtMenuItem* gridAuto = MenuFindInSubmenu(items, "Grid", HtCmd_GridAuto);
-		ok = Check(gridAuto && gridAuto->label == "Auto", "pin: background Grid/Auto/HtCmd_GridAuto") && ok;
+		const HtMenuItem* gridAuto = MenuFindInSubmenu(items, "Separators", HtCmd_GridAuto);
+		ok = Check(gridAuto && gridAuto->label == "Auto" && gridAuto->checked,
+			"pin: background Separators/Auto is checked") && ok;
+		const HtMenuItem* cw = MenuFindInSubmenu(items, "Axis numbers", HtCmd_AxisNumbersCW);
+		ok = Check(cw && cw->label == "Calendar weeks" && !cw->checked,
+			"pin: background Axis numbers/Calendar weeks") && ok;
+		const HtMenuItem* railOff = MenuFindInSubmenu(items, "Task names in rail", HtCmd_RailLabelsOff);
+		ok = Check(railOff && railOff->checked, "pin: background Task names in rail/Off is checked") && ok;
 	}
 
 	// ---- Outside: no menu.
@@ -398,6 +405,15 @@ static bool RunMenuModelV4Checks() {
 		ok = Check(op.opKind == HtOpKind::SetGridDensity
 			&& op.gridDensity && std::string(op.gridDensity) == "month",
 			"map: background+GridMonth -> SetGridDensity(month)") && ok;
+
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_AxisNumbersCW, HtItemKind::Task, false, doc);
+		ok = Check(op.opKind == HtOpKind::SetAxisNumbering
+			&& op.axisNumbering && std::string(op.axisNumbering) == "cw",
+			"map: background+Calendar weeks -> SetAxisNumbering(cw)") && ok;
+
+		op = MapMenuCommand(HtZone::RowBand, HtCmd_RailLabelsOn, HtItemKind::Task, false, doc);
+		ok = Check(op.opKind == HtOpKind::SetRailLabels && op.railLabels,
+			"map: background+Task names On -> SetRailLabels(true)") && ok;
 
 		op = MapMenuCommand(HtZone::RowBand, HtCmd_DeleteRow, HtItemKind::Task, true, doc, "r1");
 		ok = Check(op.opKind == HtOpKind::DeleteRow && op.needsRowId,
@@ -1031,14 +1047,19 @@ static bool RunGridOpsChecks() {
 	ok = Check(SetGridDensity(d, "none") && d.gridDensity == "none", "SetGridDensity sets none") && ok;
 	ok = Check(SetGridDensity(d, "auto") && d.gridDensity.empty(), "SetGridDensity auto normalizes to empty") && ok;
 	ok = Check(!SetGridDensity(d, "bogus"), "SetGridDensity rejects invalid") && ok;
+	ok = Check(SetAxisNumbering(d, "cw") && d.axisNumbering == "cw", "SetAxisNumbering sets cw") && ok;
+	ok = Check(SetAxisNumbering(d, "") && d.axisNumbering == "day", "SetAxisNumbering empty normalizes to day") && ok;
+	ok = Check(!SetAxisNumbering(d, "bogus"), "SetAxisNumbering rejects invalid") && ok;
 	ok = Check(SetGridStyle(d, "dotted") && d.gridStyle == "dotted", "SetGridStyle sets dotted") && ok;
 	ok = Check(SetGridStyle(d, "solid") && d.gridStyle.empty(), "SetGridStyle solid normalizes to empty") && ok;
 	ok = Check(!SetGridStyle(d, "bogus"), "SetGridStyle rejects invalid") && ok;
-	SetGridDensity(d, "week"); SetGridStyle(d, "dotted");
+	SetGridDensity(d, "week"); SetAxisNumbering(d, "cw"); SetGridStyle(d, "dotted");
 	PpDocument rt = DocumentFromJson(DocumentToJson(d));
-	ok = Check(rt.gridDensity == "week" && rt.gridStyle == "dotted", "round-trip preserves gridDensity/gridStyle") && ok;
+	ok = Check(rt.gridDensity == "week" && rt.axisNumbering == "cw" && rt.gridStyle == "dotted",
+		"round-trip preserves gridDensity/axisNumbering/gridStyle") && ok;
 	PpDocument legacy = DocumentFromJson("{\"title\":\"x\",\"tasks\":[{\"id\":\"t\",\"rowId\":\"r\",\"start\":\"2026-01-01\",\"end\":\"2026-01-05\"}]}");
-	ok = Check(legacy.gridDensity.empty() && legacy.gridStyle.empty(), "legacy JSON defaults grid fields empty") && ok;
+	ok = Check(legacy.gridDensity.empty() && legacy.axisNumbering == "day" && legacy.gridStyle.empty(),
+		"legacy JSON defaults grid fields / axisNumbering") && ok;
 
 	Scene sc; std::string mn, mx; long pad = 0; float ppd = 0.0f;
 
@@ -1051,6 +1072,21 @@ static bool RunGridOpsChecks() {
 			ok = Check(AllIdsPrefix(sc, "AXIS_TICK", 'W'), "week: separators are Monday (week) ticks") && ok;
 			ok = Check(CountKind(sc, "AXIS_MAJOR") >= 1, "week: month major ticks present") && ok;
 			ok = Check(CountKind(sc, "AXIS_BANDDIV") == 1, "week: one band divider") && ok;
+		}
+	}
+
+	// --- cw: week columns carry ISO calendar-week labels without changing ids. ---
+	{
+		PpDocument w = GridDoc("2026-06-29", "2026-07-12", "week");
+		SetAxisNumbering(w, "cw");
+		if (Check(BuildProjectedScene(w, 960.0f, &sc, &mn, &mx, &pad, &ppd), "cw scene builds")) {
+			bool hasCw = false;
+			for (const auto& p : sc.prims) {
+				if (p.tagKind == "AXIS_BOT" && p.text.find(L"CW ") == 0) { hasCw = true; break; }
+			}
+			ok = Check(hasCw, "cw: week bottom labels use ISO calendar-week numbers") && ok;
+			ok = Check(IsoCalendarWeekNumber(DateToDays("2026-06-29")) == 27,
+				"cw: ISO calendar week is correct at June/July boundary") && ok;
 		}
 	}
 
@@ -1148,7 +1184,7 @@ static bool AppBarGlobalOk(const AppBarModel& model, const PpDocument& doc, cons
 	const AppBarGroup* global = AppBarFindGroup(model, "SCALE");
 	ok = Check(global != nullptr, "appbar global: SCALE group present") && ok;
 	if (!global) return ok;
-	ok = Check(global->items.size() >= 7, "appbar global: SCALE has scale+labels+grid items") && ok;
+	ok = Check(global->items.size() >= 6, "appbar global: SCALE has scale+Settings items") && ok;
 	const int scaleCmds[] = {
 		HtCmd_ScaleDay, HtCmd_ScaleWeek, HtCmd_ScaleMonth,
 		HtCmd_ScaleQuarter, HtCmd_ScaleYear
@@ -1163,12 +1199,10 @@ static bool AppBarGlobalOk(const AppBarModel& model, const PpDocument& doc, cons
 	int activeCount = 0;
 	for (int i = 0; i < 5; ++i) if (global->items[i].active) ++activeCount;
 	ok = Check(activeCount == 1, "appbar global: exactly one scale segment active") && ok;
-	const AppBarItem* labelsItem = AppBarFindItem(*global, HtCmd_ToggleRailLabels);
-	ok = Check(labelsItem != nullptr && labelsItem->label == "Labels" &&
-		labelsItem->icon == AppBarIcon::LabelsToggle &&
-		labelsItem->active == doc.railLabels,
-		"appbar global: Labels item tracks railLabels") && ok;
-	ok = Check(AppBarFindItem(*global, HtCmd_CycleGrid) != nullptr, "appbar global: Grid item present") && ok;
+	const AppBarItem* settingsItem = AppBarFindItem(*global, HtCmd_Settings);
+	ok = Check(settingsItem != nullptr && settingsItem->label == "Settings" &&
+		settingsItem->icon == AppBarIcon::Settings,
+		"appbar global: Settings item replaces opaque Labels/Grid") && ok;
 	(void)ctx;
 	return ok;
 }
@@ -1218,10 +1252,14 @@ static bool RunAppBarModelChecks() {
 		scale = AppBarFindGroup(m, "SCALE");
 		ok = Check(scale && scale->items[3].active, "appbar scale: quarter -> Q active") && ok;
 		doc.railLabels = true;
-		m = BuildAppBar(AppBarSel::None, doc, "");
-		scale = AppBarFindGroup(m, "SCALE");
-		const AppBarItem* labelsItem = scale ? AppBarFindItem(*scale, HtCmd_ToggleRailLabels) : nullptr;
-		ok = Check(labelsItem && labelsItem->active, "appbar scale: railLabels -> Labels active") && ok;
+		doc.axisNumbering = "cw";
+		doc.gridDensity = "week";
+		auto settings = BuildSettingsMenuItems(doc);
+		const HtMenuItem* railOn = MenuFindInSubmenu(settings, "Task names in rail", HtCmd_RailLabelsOn);
+		const HtMenuItem* axisCw = MenuFindInSubmenu(settings, "Axis numbers", HtCmd_AxisNumbersCW);
+		const HtMenuItem* gridWeek = MenuFindInSubmenu(settings, "Separators", HtCmd_GridWeek);
+		ok = Check(railOn && railOn->checked && axisCw && axisCw->checked && gridWeek && gridWeek->checked,
+			"appbar settings: persisted active options are checked") && ok;
 	}
 
 	// --- Task ---

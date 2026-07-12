@@ -140,7 +140,9 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 				starts.push_back(starts.empty() ? mon : starts.back() + 7);
 				for (size_t i = 0; i + 1 < starts.size(); ++i) {
 					std::string iso = DaysToDate(starts[i]); int yy, mm, dd; ymd(iso, yy, mm, dd);
-					char id[20]; sprintf_s(id, "W%s", iso.c_str()); char lb[8]; sprintf_s(lb, "%d", dd);
+					char id[20]; sprintf_s(id, "W%s", iso.c_str()); char lb[16];
+					if (doc.axisNumbering == "cw") sprintf_s(lb, "CW %d", IsoCalendarWeekNumber(starts[i]));
+					else sprintf_s(lb, "%d", dd);
 					meta.push_back({ id, lb });
 				}
 			} else if (tier == "day") {
@@ -148,7 +150,9 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 				starts.push_back(maxDAbs + 1);
 				for (long dd = minDAbs; dd <= maxDAbs; ++dd) {
 					std::string iso = DaysToDate(dd); int yy, mm, dv; ymd(iso, yy, mm, dv);
-					char id[20]; sprintf_s(id, "D%s", iso.c_str()); char lb[8]; sprintf_s(lb, "%d", dv);
+					char id[20]; sprintf_s(id, "D%s", iso.c_str()); char lb[16];
+					if (doc.axisNumbering == "cw") sprintf_s(lb, "CW %d", IsoCalendarWeekNumber(dd));
+					else sprintf_s(lb, "%d", dv);
 					meta.push_back({ id, lb });
 				}
 			}
