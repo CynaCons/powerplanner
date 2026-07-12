@@ -849,6 +849,27 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             ),
         })
 
+    if profile and profile == "link-drag-port":
+        pre_deps = steps[0].state.get("depCount", 0) if steps else 0
+        settled = [s for s in steps if s.step in ("immed", "+1", "+3")]
+        dep_delta_ok = all(s.state.get("depCount", 0) == pre_deps + 1 for s in settled) if settled else False
+        link_drag_cleared = all(not s.state.get("linkDragActive") for s in settled) if settled else True
+        results.append({
+            "rule": "link_port_creates_dep",
+            "passed": dep_delta_ok and link_drag_cleared,
+            "detail": f"depCount pre={pre_deps} seq={[s.state.get('depCount') for s in steps]}",
+        })
+
+    if profile and profile == "row-adder-boundaries":
+        pre_rows = steps[0].state.get("rowCount", 0) if steps else 0
+        settled = [s for s in steps if s.step in ("immed", "+1", "+3")]
+        row_delta_ok = all(s.state.get("rowCount", 0) == pre_rows + 1 for s in settled) if settled else False
+        results.append({
+            "rule": "row_added_via_boundary_chip",
+            "passed": row_delta_ok,
+            "detail": f"rowCount pre={pre_rows} seq={[s.state.get('rowCount') for s in steps]}",
+        })
+
     if profile and profile == "task-scale-keep-sel":
         # v2.6.3: scale from document context, then re-select task. Scale must
         # change while TASK is selected again at the end.

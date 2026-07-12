@@ -114,5 +114,6 @@ std::string AddDependency(PpDocument& doc, const std::string& from, const std::s
 // Erases every dependency whose from OR to equals id. Returns the number of
 // dependencies removed (0 when none touch the id).
 int RemoveDependenciesTouching(PpDocument& doc, const std::string& id);
+bool RemoveDependencyById(PpDocument& doc, const std::string& depId);
 
 int OpsSelfTest();

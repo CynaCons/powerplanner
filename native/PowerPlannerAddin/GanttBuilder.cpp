@@ -83,6 +83,13 @@ PpDocument MakeSampleDocument() {
 	return doc;
 }
 
+PpDocument MakeBlankDocument() {
+	PpDocument doc;
+	doc.title = "Untitled Plan";
+	doc.rows = { { "r1", "Row 1", "" } };
+	return doc;
+}
+
 // ---- emission --------------------------------------------------------------
 
 // Writes PP_DOC + PP_PROJ + PP_ROWY on the chart root in one place so the

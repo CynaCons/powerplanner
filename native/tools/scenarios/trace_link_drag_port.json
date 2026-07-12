@@ -1,0 +1,10 @@
+{
+  "name": "trace_link_drag_port",
+  "description": "v2.6.5 UF-11: drag from link port creates a dependency (depCount +1)",
+  "exe": "ppappbarshot",
+  "trace_profile": "link-drag-port",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["link_port_creates_dep"]
+}

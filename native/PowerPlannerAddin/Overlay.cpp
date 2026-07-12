@@ -71,6 +71,8 @@ int INFL = kBaseInfl;
 int BADGE_H = kBaseBadgeH;
 int TOOLBAR_H = kBaseToolbarH;
 int ROW_INSERT_BUTTON = kBaseRowInsertButton;
+int LINK_PORT_RADIUS = kBaseLinkPortRadius;
+int LINK_PORT_GAP = kBaseLinkPortGap;
 int g_buttonW = kBaseButtonW;
 int g_buttonH = kBaseButtonH;
 int g_buttonGap = kBaseButtonGap;
@@ -211,6 +213,9 @@ std::vector<OwnSelEntry> g_ownSelExtra;
 bool g_linkMode = false;
 std::string g_linkFromId;
 std::string g_linkFromKind;
+bool g_linkDragFromRight = false;
+std::string g_linkDragHoverId;
+std::string g_linkDragHoverKind;
 
 // Left-button gesture tracking (down -> up), used to distinguish a click
 // (select) from a drag and to own mouse capture for the duration of the
@@ -230,7 +235,7 @@ WPARAM g_mouseDownMk = 0;
 // without ever early-returning (the ghost still needs to paint every tick).
 bool g_gestureActive = false;
 bool g_dragActive = false;
-enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, TaskProgress, Milestone, Create, Marker, Text };
+enum class DragKind { None, TaskBody, TaskEdgeL, TaskEdgeR, TaskProgress, Milestone, Create, Marker, Text, LinkPort };
 DragKind g_dragKind = DragKind::None;
 std::string g_dragId;          // task, milestone, marker, or text PP_ID being dragged
 RECT g_dragAnchorRect = {};    // original screen rect of the dragged item at gesture start
@@ -359,6 +364,8 @@ std::string g_hoverRowId;
 RECT g_hoverBandRect = {};
 RECT g_hoverInsertRect = {};
 bool g_hoverInsertValid = false;
+RECT g_rowBoundaryInsertRects[2] = {};
+bool g_rowBoundaryInsertValid[2] = { false, false };
 bool g_lastLeftButtonDown = false;
 
 // Empty-cell hover discovery hint (SR-CRE-05) + creation-failure reason (SR-CRE-02).
@@ -546,6 +553,10 @@ void HandleHotkeyDelete();
 void HandleHotkeyNudge(long deltaDays);
 void ClearLinkMode();
 void CommitLinkTarget(const std::string& targetId);
+HtHit HitTestClientPoint(POINT pt);
+void CommitLinkPortDrop(const std::string& fromIdIn, const std::string& fromKindIn, const std::string& targetId);
+static void StartLinkPortDrag(const std::string& id, const std::string& kind, bool fromRight, POINT downPt);
+void HandleHoverQuickAddRow(bool insertAbove);
 
 const PpTask* FindTask(const PpDocument& doc, const std::string& id) {
 	for (const auto& task : doc.tasks) {
@@ -888,6 +899,8 @@ void UpdateDpiScaledMetrics() {
 	BADGE_H = Scale(kBaseBadgeH);
 	TOOLBAR_H = Scale(kBaseToolbarH);
 	ROW_INSERT_BUTTON = Scale(kBaseRowInsertButton);
+	LINK_PORT_RADIUS = Scale(kBaseLinkPortRadius);
+	LINK_PORT_GAP = Scale(kBaseLinkPortGap);
 	g_buttonW = Scale(kBaseButtonW);
 	g_buttonH = Scale(kBaseButtonH);
 	g_buttonGap = Scale(kBaseButtonGap);
@@ -932,6 +945,10 @@ void ClearHoverState() {
 	::SetRectEmpty(&g_hoverBandRect);
 	::SetRectEmpty(&g_hoverInsertRect);
 	g_hoverInsertValid = false;
+	for (int i = 0; i < 2; ++i) {
+		::SetRectEmpty(&g_rowBoundaryInsertRects[i]);
+		g_rowBoundaryInsertValid[i] = false;
+	}
 }
 
 const EditRegion* EditRegionFromScreenPoint(POINT pt) {
@@ -1005,9 +1022,102 @@ bool GripFromClientPoint(POINT pt) {
 	return g_gripValid && ::PtInRect(&g_gripRect, pt);
 }
 
+static bool IsLinkableItemKind(HtItemKind kind) {
+	return kind == HtItemKind::Task || kind == HtItemKind::Milestone;
+}
+
+static const char* HtItemKindToOwnSel(HtItemKind kind) {
+	return (kind == HtItemKind::Milestone) ? "MILESTONE" : "TASK";
+}
+
+static POINT LinkPortScreenCenter(const HtRect& item, bool rightPort) {
+	const int cx = rightPort ? item.right + LINK_PORT_GAP : item.left - LINK_PORT_GAP;
+	const int cy = (item.top + item.bottom) / 2;
+	return { cx, cy };
+}
+
+static RECT LinkPortHitRectScreen(const HtRect& item, bool rightPort) {
+	POINT c = LinkPortScreenCenter(item, rightPort);
+	const int r = LINK_PORT_RADIUS + Scale(2);
+	return { c.x - r, c.y - r, c.x + r, c.y + r };
+}
+
+static bool ShouldShowLinkPortsOnItem(const HtItem& item, bool linkDragActive, const std::string& linkDragFromId) {
+	if (!IsLinkableItemKind(item.kind)) return false;
+	if (linkDragActive) return item.id != linkDragFromId;
+	if (g_ownSelKind == "TASK" && item.kind == HtItemKind::Task && item.id == g_ownSelId) return true;
+	if (g_ownSelKind == "MILESTONE" && item.kind == HtItemKind::Milestone && item.id == g_ownSelId) return true;
+	return false;
+}
+
+static bool HitTestLinkPortAtClient(POINT clientPt, std::string* outId, std::string* outKind, bool* outRight) {
+	if (g_linkMode || IsEditSessionActive()) return false;
+	POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
+	const bool linkDragActive = g_gestureActive && g_dragKind == DragKind::LinkPort;
+	for (const auto& item : g_hitSnapshot.items) {
+		if (!ShouldShowLinkPortsOnItem(item, linkDragActive, g_dragId)) continue;
+		for (int side = 0; side < 2; ++side) {
+			const bool rightPort = (side != 0);
+			RECT hr = LinkPortHitRectScreen(item.rect, rightPort);
+			if (::PtInRect(&hr, screenPt)) {
+				if (outId) *outId = item.id;
+				if (outKind) *outKind = HtItemKindToOwnSel(item.kind);
+				if (outRight) *outRight = rightPort;
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+static void PaintLinkPortChip(Gdiplus::Graphics& g, POINT centerClient, bool highlighted) {
+	const int d = LINK_PORT_RADIUS * 2;
+	const int x = centerClient.x - LINK_PORT_RADIUS;
+	const int y = centerClient.y - LINK_PORT_RADIUS;
+	Gdiplus::GraphicsPath path;
+	AddRoundRect(path, (Gdiplus::REAL)x, (Gdiplus::REAL)y, (Gdiplus::REAL)d, (Gdiplus::REAL)d, (Gdiplus::REAL)LINK_PORT_RADIUS);
+	Gdiplus::SolidBrush fill(GpToken(highlighted ? 255 : 230, gt::surface));
+	g.FillPath(&fill, &path);
+	Gdiplus::Pen edge(GpToken(255, gt::primary), highlighted ? 2.0f : 1.5f);
+	g.DrawPath(&edge, &path);
+}
+
+static void PaintLinkPortsForSnapshot(Gdiplus::Graphics& g) {
+	const bool linkDragActive = g_gestureActive && g_dragKind == DragKind::LinkPort;
+	for (const auto& item : g_hitSnapshot.items) {
+		if (!ShouldShowLinkPortsOnItem(item, linkDragActive, g_dragId)) continue;
+		for (int side = 0; side < 2; ++side) {
+			const bool rightPort = (side != 0);
+			POINT sc = LinkPortScreenCenter(item.rect, rightPort);
+			POINT cc = { sc.x - g_windowOriginX, sc.y - g_windowOriginY };
+			const bool hi = linkDragActive && !g_linkDragHoverId.empty() &&
+				item.id == g_linkDragHoverId;
+			PaintLinkPortChip(g, cc, hi);
+		}
+	}
+}
+
+static void UpdateLinkDragHover(POINT clientPt) {
+	g_linkDragHoverId.clear();
+	g_linkDragHoverKind.clear();
+	if (g_dragKind != DragKind::LinkPort) return;
+	HtHit hit = HitTestClientPoint(clientPt);
+	if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
+		hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::Milestone) {
+		if (!hit.id.empty() && hit.id != g_dragId) {
+			g_linkDragHoverId = hit.id;
+			g_linkDragHoverKind = (hit.zone == HtZone::Milestone) ? "MILESTONE" : "TASK";
+		}
+	}
+}
+
 void LayoutHoverInsertHotspot() {
 	g_hoverInsertValid = false;
 	::SetRectEmpty(&g_hoverInsertRect);
+	for (int i = 0; i < 2; ++i) {
+		::SetRectEmpty(&g_rowBoundaryInsertRects[i]);
+		g_rowBoundaryInsertValid[i] = false;
+	}
 	if (g_hoverRowId.empty() || ::IsRectEmpty(&g_hoverBandRect)) return;
 	if (::GetKeyState(VK_LBUTTON) & 0x8000) return;
 
@@ -1016,6 +1126,29 @@ void LayoutHoverInsertHotspot() {
 	int cy = (bandTop + bandBottom) / 2;
 	const int pad6 = Scale(6);
 	const int pad4 = Scale(4);
+	int railCenterX = g_chartScreenRect.left - g_windowOriginX + pad6;
+	for (const auto& band : g_rowBands) {
+		if (band.rowId == g_hoverRowId) {
+			const int railLeft = band.screenLeftGutter - g_windowOriginX;
+			const int railRight = ::IsRectEmpty(&band.screenRailRect)
+				? (g_chartScreenRect.left - g_windowOriginX + Scale(40))
+				: (band.screenRailRect.right - g_windowOriginX);
+			railCenterX = (railLeft + railRight) / 2;
+			const int chipHalf = ROW_INSERT_BUTTON / 2;
+			// UF-06: row-adder chips on BOTH boundaries, centered on the boundary line.
+			g_rowBoundaryInsertRects[0] = {
+				railCenterX - chipHalf, bandTop - chipHalf,
+				railCenterX + chipHalf, bandTop + chipHalf
+			};
+			g_rowBoundaryInsertRects[1] = {
+				railCenterX - chipHalf, bandBottom - chipHalf,
+				railCenterX + chipHalf, bandBottom + chipHalf
+			};
+			g_rowBoundaryInsertValid[0] = true;
+			g_rowBoundaryInsertValid[1] = true;
+			break;
+		}
+	}
 	int left = g_chartScreenRect.left - g_windowOriginX + pad6;
 	for (const auto& band : g_rowBands) {
 		if (band.rowId == g_hoverRowId) {
@@ -1025,6 +1158,14 @@ void LayoutHoverInsertHotspot() {
 	}
 	g_hoverInsertRect = { left, cy - ROW_INSERT_BUTTON / 2, left + ROW_INSERT_BUTTON, cy + ROW_INSERT_BUTTON / 2 };
 	g_hoverInsertValid = true;
+}
+
+static int RowBoundaryInsertFromClientPoint(POINT pt) {
+	if (!g_hoverInsertValid) LayoutHoverInsertHotspot();
+	for (int i = 0; i < 2; ++i) {
+		if (g_rowBoundaryInsertValid[i] && ::PtInRect(&g_rowBoundaryInsertRects[i], pt)) return i;
+	}
+	return -1;
 }
 
 bool HoverInsertFromClientPoint(POINT pt) {
@@ -1140,7 +1281,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			bool isMarkerLabel = kindStr == "TODAY_LABEL" || kindStr == "DEADLINE_LABEL" || kindStr == "CUSTOM_MARKER_LABEL";
 			bool isTaskLabel = kindStr == "TASK_LABEL" || kindStr == "RAIL_TASKLBL";
 			bool isMilestoneLabel = kindStr == "MILESTONE_LABEL";
-			if (kindStr != "ROW_LABEL" && kindStr != "TITLE" && kindStr != "TASK" && kindStr != "MILESTONE" && kindStr != "TEXT"
+			if (kindStr != "ROW_LABEL" && kindStr != "TITLE" && kindStr != "TASK" && kindStr != "MILESTONE" && kindStr != "TEXT" && kindStr != "DEP"
 				&& !isMarkerLine && !isMarkerLabel && !isTaskLabel && !isMilestoneLabel) continue;
 			if (isMarkerLine) {
 				// Ignore the rendered rect entirely (see comment above); derive
@@ -1209,6 +1350,15 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			}
 			if (kindStr == "MILESTONE") {
 				g_hitSnapshot.items.push_back({ HtItemKind::Milestone, idStr, ToHtRect(rr) });
+				continue;
+			}
+			if (kindStr == "DEP") {
+				const int depPad = Scale(4);
+				RECT hr = {
+					rr.left - depPad, rr.top - depPad,
+					rr.right + depPad, rr.bottom + depPad
+				};
+				g_hitSnapshot.items.push_back({ HtItemKind::Dependency, idStr, ToHtRect(hr) });
 				continue;
 			}
 			if (kindStr == "TEXT") {
@@ -1337,6 +1487,34 @@ void SyncSelectionChromeFromOwnSelection() {
 				return;
 			}
 		}
+		ClearOwnSelection();
+		return;
+	}
+
+	if (g_ownSelKind == "DEP") {
+		RECT unionRect = {};
+		bool any = false;
+		for (const auto& item : g_hitSnapshot.items) {
+			if (item.kind != HtItemKind::Dependency || item.id != g_ownSelId) continue;
+			RECT r = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+			if (!any) {
+				unionRect = r;
+				any = true;
+			} else {
+				unionRect.left = std::min(unionRect.left, r.left);
+				unionRect.top = std::min(unionRect.top, r.top);
+				unionRect.right = std::max(unionRect.right, r.right);
+				unionRect.bottom = std::max(unionRect.bottom, r.bottom);
+			}
+		}
+		if (any) {
+			g_selKind = "DEP";
+			g_selId = g_ownSelId;
+			g_selScreenRect = unionRect;
+			g_hasSelectionChrome = true;
+			return;
+		}
+		if (g_hitSnapshot.items.empty()) return;
 		ClearOwnSelection();
 		return;
 	}
@@ -2280,8 +2458,10 @@ bool HandleSetCursor(HWND hwnd) {
 	POINT pt = screenPt;
 	::ScreenToClient(hwnd, &pt);
 
-	bool overChromeWidget = ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt);
-	if (g_linkMode && !overChromeWidget && ::PtInRect(&g_chartScreenRect, screenPt)) {
+	bool overChromeWidget = ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) ||
+		RowBoundaryInsertFromClientPoint(pt) >= 0 || GripFromClientPoint(pt);
+	if ((g_linkMode || (g_gestureActive && g_dragKind == DragKind::LinkPort)) &&
+		!overChromeWidget && ::PtInRect(&g_chartScreenRect, screenPt)) {
 		HtHit hit = HitTestClientPoint(pt);
 		if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL ||
 			hit.zone == HtZone::TaskEdgeR || hit.zone == HtZone::TaskProgressEdge ||
@@ -2335,6 +2515,10 @@ void ApplyClickSelection(const HtHit& hit, bool ctrlDown, bool shiftDown) {
 	case HtZone::Text:
 		if (shiftDown) return;
 		selectItem("TEXT", hit.id);
+		return;
+	case HtZone::Dependency:
+		if (ctrlDown || shiftDown) return;
+		SetOwnSelection("DEP", hit.id);
 		return;
 	case HtZone::RowBand:
 		if (!hit.rowId.empty()) {
@@ -2407,6 +2591,9 @@ void ResetDragGestureState() {
 	g_dragCandidatePercent = 0;
 	g_dragPillText.clear();
 	::SetRectEmpty(&g_dragPreviewRect);
+	g_linkDragFromRight = false;
+	g_linkDragHoverId.clear();
+	g_linkDragHoverKind.clear();
 }
 
 // PP_PROJ-based screen-pixel day<->point projection (SR-CRE-01). Used as a
@@ -2892,6 +3079,12 @@ void UpdateDragGesture(POINT pt) {
 		return;
 	}
 
+	if (g_dragKind == DragKind::LinkPort) {
+		UpdateLinkDragHover(pt);
+		RequestOverlayRepaint();
+		return;
+	}
+
 	if (g_dragKind == DragKind::TaskProgress) {
 		int barW = g_dragAnchorRect.right - g_dragAnchorRect.left;
 		if (barW >= 4) {
@@ -3250,7 +3443,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		if (::PtInRect(&g_chartScreenRect, screenPt)) return HTCLIENT;
 		POINT pt = screenPt;
 		::ScreenToClient(hwnd, &pt);
-		return (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt)) ? HTCLIENT : HTTRANSPARENT;
+		return (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) ||
+			RowBoundaryInsertFromClientPoint(pt) >= 0 || GripFromClientPoint(pt)) ? HTCLIENT : HTTRANSPARENT;
 	}
 	if (msg == WM_MOUSEACTIVATE) {
 		return MA_NOACTIVATE;
@@ -3285,7 +3479,23 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// task spec asks to suppress.
 		if (IsEditSessionActive()) return 0;
 		POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
-		if (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) || GripFromClientPoint(pt)) return 0;
+		if (ButtonFromClientPoint(pt) >= 0 || HoverInsertFromClientPoint(pt) ||
+			RowBoundaryInsertFromClientPoint(pt) >= 0 || GripFromClientPoint(pt)) return 0;
+		std::string portId, portKind;
+		bool portRight = false;
+		if (HitTestLinkPortAtClient(pt, &portId, &portKind, &portRight)) {
+			wchar_t pb[128];
+			::swprintf_s(pb, 128, L"LINKPORT down id=%hs right=%d", portId.c_str(), portRight ? 1 : 0);
+			OvLog(pb);
+			g_lastHit = HitTestClientPoint(pt);
+			g_mouseDownPt = pt;
+			g_mouseDownMk = wp;
+			g_captureActive = true;
+			::SetCapture(hwnd);
+			StartLinkPortDrag(portId, portKind, portRight, pt);
+			return 0;
+		}
+		OvLog(L"LINKPORT down MISS (no port at point)");
 		// Route everything else through the semantic hit test and stash the
 		// result (kept for parity/debugging; selection itself is decided on
 		// the up, from the ORIGINAL down-hit, once we know this was a click).
@@ -3364,6 +3574,20 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		float gesturePxPerPt = g_dragPxPerPt;
 		RECT dragAnchorRect = g_dragAnchorRect;
 		RECT dragTargetRowRect = g_dragTargetRowRect;
+		// Snapshot the link-drag hover target BEFORE any capture release path
+		// can clear it (same reasoning as every other snapshot above), and
+		// recompute from THIS up-point as the authority — the last MOUSEMOVE's
+		// hover can be stale or already cleared.
+		std::string linkDropTargetId = g_linkDragHoverId;
+		std::string linkFromKind = g_linkFromKind;
+		if (wasGestureActive && dragKind == DragKind::LinkPort) {
+			HtHit upHit = HitTestClientPoint(pt);
+			if ((upHit.zone == HtZone::TaskBody || upHit.zone == HtZone::TaskEdgeL ||
+				upHit.zone == HtZone::TaskEdgeR || upHit.zone == HtZone::Milestone)
+				&& !upHit.id.empty() && upHit.id != dragId) {
+				linkDropTargetId = upHit.id;
+			}
+		}
 		long finalDx = pt.x - g_mouseDownPt.x;
 		long finalDy = pt.y - g_mouseDownPt.y;
 		if (wasGestureActive && dragKind == DragKind::Text) {
@@ -3403,6 +3627,15 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 				SelectChartRoot();
 			} catch (...) {
 				OvLog(L"move-chart grip click failed");
+			}
+			return 0;
+		}
+		const int boundaryChip = RowBoundaryInsertFromClientPoint(pt);
+		if (boundaryChip >= 0) {
+			try {
+				HandleHoverQuickAddRow(boundaryChip == 0);
+			} catch (...) {
+				OvLog(L"hover quick-add row failed");
 			}
 			return 0;
 		}
@@ -3458,6 +3691,16 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 					} catch (...) {
 						OvLog(L"create gesture commit failed");
 					}
+				}
+			} else if (wasGestureActive && wasDragActive && dragKind == DragKind::LinkPort) {
+				wchar_t db[128];
+				::swprintf_s(db, 128, L"LINKPORT drop target=%hs", linkDropTargetId.empty() ? "(none)" : linkDropTargetId.c_str());
+				OvLog(db);
+				ResetDragGestureState();
+				try {
+					CommitLinkPortDrop(dragId, linkFromKind, linkDropTargetId);
+				} catch (...) {
+					OvLog(L"link-port drag commit failed");
 				}
 			} else if (wasGestureActive && wasDragActive && dragKind == DragKind::TaskProgress) {
 				try {
@@ -3604,8 +3847,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			return 0;
 		}
 		if (hit.zone == HtZone::EmptyCell && !hit.rowId.empty()) {
+			const bool altDown = ((::GetKeyState(VK_MENU) & 0x8000) != 0) ||
+				((::GetKeyState(VK_CONTROL) & 0x8000) != 0 && (::GetKeyState(VK_SHIFT) & 0x8000) != 0);
 			HtMenuOp op{};
-			op.opKind = HtOpKind::AddTaskAtPoint;
+			op.opKind = altDown ? HtOpKind::AddMilestoneAtPoint : HtOpKind::AddTaskAtPoint;
 			try {
 				HandleContextMenuCommand(op, hit, pt);
 			} catch (...) {
@@ -4032,6 +4277,23 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			g.DrawLine(&glyphPen, cx - g4, cy, cx + g4, cy);
 			g.DrawLine(&glyphPen, cx, cy - g4, cx, cy + g4);
 		}
+		for (int bi = 0; bi < 2; ++bi) {
+			if (!g_rowBoundaryInsertValid[bi]) continue;
+			const RECT& chip = g_rowBoundaryInsertRects[bi];
+			INT ex = (INT)chip.left, ey = (INT)chip.top;
+			INT ew = (INT)(chip.right - chip.left);
+			INT eh = (INT)(chip.bottom - chip.top);
+			SolidBrush plusFill(GpToken(255, gt::surface));
+			g.FillEllipse(&plusFill, ex, ey, ew, eh);
+			Pen plusPen(GpToken(255, gt::primary), 1.0f);
+			g.DrawEllipse(&plusPen, ex, ey, ew, eh);
+			Pen glyphPen(GpToken(255, gt::primary), ScaleF(2.0f));
+			int cx = (chip.left + chip.right) / 2;
+			int cy = (chip.top + chip.bottom) / 2;
+			int g4 = Scale(3);
+			g.DrawLine(&glyphPen, cx - g4, cy, cx + g4, cy);
+			g.DrawLine(&glyphPen, cx, cy - g4, cx, cy + g4);
+		}
 	}
 
 	// Drag-move-resize / row-reassign / create ghost: a translucent preview of
@@ -4269,6 +4531,8 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 
 	if (g_linkMode && g_appBarShown && g_appBarGeomValid) {
 		PaintPositionedHintPill(g, L"Link: click a target task \x00b7 Esc cancels");
+	} else if (g_gestureActive && g_dragKind == DragKind::LinkPort && g_dragActive) {
+		PaintPositionedHintPill(g, L"Drag to a target task \x00b7 Esc cancels");
 	}
 
 	const wchar_t* emptyCellHint = nullptr;
@@ -4280,7 +4544,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		// dwell elapses; painting just reads the resulting state instead of
 		// re-deriving "due" here too (see its comment for why the split used
 		// to double-fire).
-		emptyCellHint = L"Drag to create a task \x2014 double-click or right-click for more";
+		emptyCellHint = L"Drag to create a task \x2014 double-click task, Alt+double-click milestone, right-click for more";
 	}
 	if (emptyCellHint && !g_gestureActive && !g_dragActive && !g_linkMode && !IsEditSessionActive()) {
 		PaintPositionedHintPill(g, emptyCellHint);
@@ -4376,6 +4640,32 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 			g.FillPath(&handleFill, &handlePath);
 			Pen handlePen(GpToken(255, gt::primary), 1.5f);
 			g.DrawPath(&handlePen, &handlePath);
+		}
+	}
+
+	// SR-IXC-13 / SR-DEP-04: link ports on selected (or link-drag candidate) bars.
+	if (!g_gestureActive || g_dragKind == DragKind::LinkPort) {
+		PaintLinkPortsForSnapshot(g);
+	}
+
+	if (g_gestureActive && g_dragActive && g_dragKind == DragKind::LinkPort) {
+		HtRect item = { g_dragAnchorRect.left, g_dragAnchorRect.top, g_dragAnchorRect.right, g_dragAnchorRect.bottom };
+		POINT fromSc = LinkPortScreenCenter(item, g_linkDragFromRight);
+		POINT fromClient = { fromSc.x - g_windowOriginX, fromSc.y - g_windowOriginY };
+		POINT toClient = g_dragLastPt;
+		Pen bandPen(GpToken(200, gt::primary), 2.0f);
+		g.DrawLine(&bandPen, (INT)fromClient.x, (INT)fromClient.y, (INT)toClient.x, (INT)toClient.y);
+	}
+
+	if (g_ownSelKind == "DEP" && !g_ownSelId.empty()) {
+		Pen depPen(GpToken(255, gt::primary), 2.5f);
+		for (const auto& item : g_hitSnapshot.items) {
+			if (item.kind != HtItemKind::Dependency || item.id != g_ownSelId) continue;
+			const int x1 = (INT)(item.rect.left - g_windowOriginX);
+			const int y1 = (INT)(item.rect.top - g_windowOriginY);
+			const int x2 = (INT)(item.rect.right - g_windowOriginX);
+			const int y2 = (INT)(item.rect.bottom - g_windowOriginY);
+			g.DrawLine(&depPen, x1, y1, x2, y2);
 		}
 	}
 
@@ -4621,6 +4911,7 @@ AppBarSel AppBarSelFromKind(const std::string& kind) {
 	if (kind == "MILESTONE") return AppBarSel::Milestone;
 	if (kind == "MARKER") return AppBarSel::Marker;
 	if (kind == "TEXT") return AppBarSel::Note;
+	if (kind == "DEP") return AppBarSel::Dependency;
 	return AppBarSel::None;
 }
 
@@ -5547,6 +5838,29 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 		}
 	}
 
+	if (g_ownSelKind == "DEP" && !g_ownSelId.empty() && g_app && !g_mutating) {
+		if (cmd == HtCmd_Delete) {
+			g_mutating = true;
+			try {
+				PpDocument doc;
+				if (ReadGanttDocFromSlide(g_app, &doc)) {
+					if (RemoveDependencyById(doc, g_ownSelId)) {
+						RebuildChart(doc, "");
+						ClearOwnSelection();
+						RequestOverlayRepaint();
+					}
+				}
+			} catch (...) {
+				OvLog(L"appbar dep delete failed");
+			}
+			g_mutating = false;
+			g_appBarValid = false;
+			RequestOverlayRepaint();
+			return;
+		}
+		return;
+	}
+
 	if (cmd == HtCmd_ToggleRailLabels && g_app && !g_mutating) {
 		g_mutating = true;
 		try {
@@ -5634,6 +5948,65 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 
 // Commit a dependency edge picked in link mode (B7.1). Clears link mode
 // before mutating; keeps the source selection on success or silent rejection.
+// fromId/fromKind are passed by the WM_LBUTTONUP handler from its snapshot —
+// ResetDragGestureState() has already cleared g_dragId/g_linkFromKind by the
+// time this runs (same stale-global trap as the hover target).
+void CommitLinkPortDrop(const std::string& fromIdIn, const std::string& fromKindIn, const std::string& targetId) {
+	if (!g_app || g_mutating || fromIdIn.empty()) return;
+	const std::string fromId = fromIdIn;
+	const std::string fromKind = fromKindIn.empty() ? "TASK" : fromKindIn;
+	if (targetId.empty() || targetId == fromId) {
+		g_creationFailHint = L"Cannot link a task to itself";
+		SetOwnSelection(fromKind, fromId);
+		RequestOverlayRepaint();
+		return;
+	}
+	g_mutating = true;
+	try {
+		PpDocument doc;
+		if (!ReadGanttDocFromSlide(g_app, &doc)) { g_mutating = false; return; }
+		const std::string depId = AddDependency(doc, fromId, targetId);
+		if (!depId.empty()) {
+			RebuildChart(doc, fromId);
+			SetOwnSelection(fromKind, fromId);
+			g_creationFailHint.clear();
+			RequestOverlayRepaint();
+		} else {
+			SetOwnSelection(fromKind, fromId);
+			g_creationFailHint = (fromId == targetId)
+				? L"Cannot link a task to itself"
+				: L"Already linked or invalid target";
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error during port-link commit");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error during port-link commit");
+	}
+	catch (...) {
+		OvLog(L"unknown error during port-link commit");
+	}
+	g_mutating = false;
+}
+
+static void StartLinkPortDrag(const std::string& id, const std::string& kind, bool fromRight, POINT downPt) {
+	ResetDragGestureState();
+	g_dragKind = DragKind::LinkPort;
+	g_dragId = id;
+	g_linkFromKind = kind;
+	g_linkDragFromRight = fromRight;
+	g_gestureActive = true;
+	g_dragLastPt = downPt;
+	for (const auto& item : g_hitSnapshot.items) {
+		HtItemKind want = (kind == "MILESTONE") ? HtItemKind::Milestone : HtItemKind::Task;
+		if (item.kind == want && item.id == id) {
+			g_dragAnchorRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+			break;
+		}
+	}
+}
+
 void CommitLinkTarget(const std::string& targetId) {
 	if (!g_linkMode || g_linkFromId.empty() || !g_app || g_mutating) return;
 	const std::string fromId = g_linkFromId;
@@ -5650,6 +6023,11 @@ void CommitLinkTarget(const std::string& targetId) {
 			RequestOverlayRepaint();
 		} else {
 			SetOwnSelection(fromKind, fromId);
+			if (fromId == targetId) {
+				g_creationFailHint = L"Cannot link a task to itself";
+			} else {
+				g_creationFailHint = L"Already linked or invalid target";
+			}
 		}
 	}
 	catch (const _com_error&) {
@@ -6042,6 +6420,37 @@ void HandleToolbarButton(int button) {
 	}
 	catch (...) {
 		OvLog(L"unknown error during toolbar edit");
+	}
+	g_mutating = false;
+}
+
+void HandleHoverQuickAddRow(bool insertAbove) {
+	if (!g_app || g_mutating || g_hoverRowId.empty()) return;
+	const std::string rowId = g_hoverRowId;
+	g_mutating = true;
+	try {
+		PpDocument doc;
+		if (!ReadGanttDocFromSlide(g_app, &doc)) { g_mutating = false; return; }
+		std::string newRowId = insertAbove
+			? AddRowAbove(doc, rowId, "New Row")
+			: AddRowBelow(doc, rowId, "New Row");
+		if (!newRowId.empty()) {
+			RebuildChart(doc, newRowId);
+			SetOwnSelection("ROW", newRowId);
+			g_creationFailHint.clear();
+			RequestOverlayRepaint();
+		} else {
+			g_creationFailHint = L"Cannot add row here";
+		}
+	}
+	catch (const _com_error&) {
+		OvLog(L"COM error during hover quick-add row");
+	}
+	catch (const std::exception&) {
+		OvLog(L"document error during hover quick-add row");
+	}
+	catch (...) {
+		OvLog(L"unknown error during hover quick-add row");
 	}
 	g_mutating = false;
 }
@@ -7173,7 +7582,50 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"nativeSelKind\":\"" + g_lastNativeSelKindForTest + "\",";
 	s += "\"hotkeysActive\":" + std::string(g_hotkeysActive ? "true" : "false") + ",";
 	s += "\"linkMode\":" + std::string(g_linkMode ? "true" : "false") + ",";
+	s += "\"linkDragActive\":" + std::string((g_gestureActive && g_dragKind == DragKind::LinkPort && g_dragActive) ? "true" : "false") + ",";
 	s += "\"linkFromId\":\"" + g_linkFromId + "\",";
+	int depCount = 0;
+	{
+		PpDocument cached;
+		if (Gantt_TryPeekCachedDoc(&cached)) depCount = (int)cached.deps.size();
+	}
+	s += "\"depCount\":" + std::to_string(depCount) + ",";
+	// Ground-truth affordance rects (SCREEN coords) so harness profiles click
+	// exactly where the overlay hit-tests — no independent geometry recompute.
+	{
+		auto rectJson = [](const RECT& r) {
+			return "{\"left\":" + std::to_string(r.left) + ",\"top\":" + std::to_string(r.top)
+				+ ",\"right\":" + std::to_string(r.right) + ",\"bottom\":" + std::to_string(r.bottom) + "}";
+		};
+		bool portDone = false;
+		if (g_ownSelKind == "TASK" || g_ownSelKind == "MILESTONE") {
+			const HtItemKind want = (g_ownSelKind == "TASK") ? HtItemKind::Task : HtItemKind::Milestone;
+			for (const auto& item : g_hitSnapshot.items) {
+				if (item.kind != want || item.id != g_ownSelId) continue;
+				RECT lp = LinkPortHitRectScreen(item.rect, false);
+				RECT rp = LinkPortHitRectScreen(item.rect, true);
+				s += "\"linkPortLeftRect\":" + rectJson(lp) + ",";
+				s += "\"linkPortRightRect\":" + rectJson(rp) + ",";
+				portDone = true;
+				break;
+			}
+		}
+		if (!portDone) s += "\"linkPortLeftRect\":{},\"linkPortRightRect\":{},";
+		for (int i = 0; i < 2; ++i) {
+			const char* key = (i == 0) ? "rowAdderAboveRect" : "rowAdderBelowRect";
+			if (g_rowBoundaryInsertValid[i]) {
+				RECT sr = {
+					g_rowBoundaryInsertRects[i].left + g_windowOriginX,
+					g_rowBoundaryInsertRects[i].top + g_windowOriginY,
+					g_rowBoundaryInsertRects[i].right + g_windowOriginX,
+					g_rowBoundaryInsertRects[i].bottom + g_windowOriginY
+				};
+				s += std::string("\"") + key + "\":" + rectJson(sr) + ",";
+			} else {
+				s += std::string("\"") + key + "\":{},";
+			}
+		}
+	}
 	s += "\"rowCount\":" + std::to_string(g_rowBands.size()) + ",";
 	int taskCount = 0;
 	int milestoneCount = 0;

@@ -1291,7 +1291,8 @@ static bool RunAppBarModelChecks() {
 		doc.deps.push_back(PpDependency{"d1", "t1", "other", "finish-to-start"});
 		m = BuildAppBar(AppBarSel::Task, doc, "t1");
 		unlink = AppBarFindItemInModel(m, HtCmd_Unlink);
-		ok = Check(unlink && unlink->enabled, "appbar task: Unlink enabled when dep touches task") && ok;
+		ok = Check(unlink && unlink->label == "Unlink all", "appbar task: Unlink all label") && ok;
+		ok = Check(unlink && unlink->enabled, "appbar task: Unlink all enabled when dep touches task") && ok;
 		ok = AppBarItemContextOk(m, "task") && ok;
 	}
 
@@ -1612,6 +1613,17 @@ static bool RunDepOpsChecks() {
 		d.deps.push_back(PpDependency{"dep1", "t1", "t2", "finish-to-start"});
 		std::string id = AddDependency(d, "t2", "t3");
 		ok = Check(!id.empty() && id != "dep1", "AddDependency generates an id unique against existing dep ids") && ok;
+	}
+
+	// --- RemoveDependencyById ---
+	{
+		PpDocument d = DepOpsDoc();
+		std::string a = AddDependency(d, "t1", "t2");
+		std::string b = AddDependency(d, "t2", "t3");
+		ok = Check(!a.empty() && !b.empty() && d.deps.size() == 2, "RemoveDependencyById setup adds two deps") && ok;
+		ok = Check(RemoveDependencyById(d, a), "RemoveDependencyById removes one edge") && ok;
+		ok = Check(d.deps.size() == 1 && d.deps[0].id == b, "RemoveDependencyById leaves other deps") && ok;
+		ok = Check(!RemoveDependencyById(d, "missing"), "RemoveDependencyById returns false for missing id") && ok;
 	}
 
 	// --- RemoveDependenciesTouching ---

@@ -1,0 +1,10 @@
+{
+  "name": "trace_row_adder_boundaries",
+  "description": "v2.6.5 UF-06: row boundary chip inserts a row (rowCount +1)",
+  "exe": "ppappbarshot",
+  "trace_profile": "row-adder-boundaries",
+  "timeout": 120,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["row_added_via_boundary_chip"]
+}

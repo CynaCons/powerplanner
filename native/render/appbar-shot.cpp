@@ -204,6 +204,7 @@ static AppBarSel AppBarSelFromKind(const char* kind) {
 	if (strcmp(kind, "MILESTONE") == 0) return AppBarSel::Milestone;
 	if (strcmp(kind, "MARKER") == 0) return AppBarSel::Marker;
 	if (strcmp(kind, "TEXT") == 0 || strcmp(kind, "NOTE") == 0) return AppBarSel::Note;
+	if (strcmp(kind, "DEP") == 0) return AppBarSel::Dependency;
 	return AppBarSel::None;
 }
 
@@ -252,6 +253,17 @@ static void PumpHoverQuickAddTask(HWND ov, const char* rowId) {
 	PumpFor(120);
 	::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, clickLp);
 	::PostMessageW(ov, WM_LBUTTONUP, 0, clickLp);
+}
+
+static bool FindTaskBodyRect(PowerPoint::_ApplicationPtr& app, const char* taskId, RECT* out);
+
+static bool FindTaskLinkPort(PowerPoint::_ApplicationPtr& app, const char* taskId, bool rightPort, POINT* outScreen) {
+	RECT r{};
+	if (!FindTaskBodyRect(app, taskId, &r) || !outScreen) return false;
+	const int gap = 10;
+	outScreen->x = rightPort ? (r.right + gap) : (r.left - gap);
+	outScreen->y = (r.top + r.bottom) / 2;
+	return true;
 }
 
 static bool FindTaskBodyCenter(PowerPoint::_ApplicationPtr& app, const char* taskId, POINT* outScreen) {
@@ -1876,6 +1888,93 @@ int wmain(int argc, wchar_t** argv) {
 					PumpFor(400);
 				}
 				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"link-drag-port") == 0) {
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				const char* preDump = Overlay_DumpChromeStateForTest();
+				int preDeps = 0;
+				if (preDump) {
+					const char* p = ::strstr(preDump, "\"depCount\":");
+					if (p) ::sscanf_s(p, "\"depCount\":%d", &preDeps);
+				}
+				HWND ov = OverlayHwnd();
+				POINT portPt{}, targetPt{};
+				RECT portRect{};
+				if (ov && ParseNamedRectFromDump(preDump, "linkPortRightRect", &portRect)
+					&& portRect.right > portRect.left
+					&& FindTaskBodyCenter(app, "wireframes", &targetPt)) {
+					// Drag from the dump-published port hit rect (ground truth from the
+					// overlay's own hit-test geometry — no independent recompute).
+					portPt = { (portRect.left + portRect.right) / 2, (portRect.top + portRect.bottom) / 2 };
+					PostScreenDrag(ov, portPt, targetPt.x - portPt.x, targetPt.y - portPt.y);
+				} else {
+					wprintf(L"LINKPORT: linkPortRightRect not published for selection\n");
+				}
+				captureStep("immed", traceProfile);
+				const char* immedDump = Overlay_DumpChromeStateForTest();
+				int postDeps = preDeps;
+				if (immedDump) {
+					const char* p = ::strstr(immedDump, "\"depCount\":");
+					if (p) ::sscanf_s(p, "\"depCount\":%d", &postDeps);
+				}
+				wprintf(L"LINKPORT deps %d->%d\n", preDeps, postDeps);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"row-adder-boundaries") == 0) {
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+				const char* preDump = Overlay_DumpChromeStateForTest();
+				int preRows = 0;
+				if (preDump) {
+					const char* p = ::strstr(preDump, "\"rowCount\":");
+					if (p) ::sscanf_s(p, "\"rowCount\":%d", &preRows);
+				}
+				HWND ov = OverlayHwnd();
+				RECT band{};
+				if (ov && ParseRowBandFromDump(preDump, "research", &band)) {
+					// Hover INSIDE the row's left-rail area first (band-center x sits
+					// on the TODAY marker band) so the boundary chips lay out, then
+					// click the ABOVE chip at its dump-published ground-truth rect.
+					POINT hoverPt = { band.left + 40, (band.top + band.bottom) / 2 };
+					Overlay_SetCursorPosOverrideForTest(true, hoverPt);
+					POINT hoverClient = hoverPt;
+					::ScreenToClient(ov, &hoverClient);
+					::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)hoverClient.x, (short)hoverClient.y));
+					PumpFor(400);
+					RECT chip{};
+					if (ParseNamedRectFromDump(Overlay_DumpChromeStateForTest(), "rowAdderAboveRect", &chip)
+						&& chip.right > chip.left) {
+						POINT chipPt = { (chip.left + chip.right) / 2, (chip.top + chip.bottom) / 2 };
+						Overlay_SetCursorPosOverrideForTest(true, chipPt);
+						POINT clientPt = chipPt;
+						::ScreenToClient(ov, &clientPt);
+						LPARAM lp = MAKELPARAM((short)clientPt.x, (short)clientPt.y);
+						::PostMessageW(ov, WM_MOUSEMOVE, 0, lp);
+						PumpFor(150);
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+						::PostMessageW(ov, WM_LBUTTONUP, 0, lp);
+					} else {
+						wprintf(L"ROWADDER: rowAdderAboveRect not published after hover\n");
+					}
+				}
+				PumpFor(400);
+				captureStep("immed", traceProfile);
+				const char* immedDump = Overlay_DumpChromeStateForTest();
+				int postRows = preRows;
+				if (immedDump) {
+					const char* p = ::strstr(immedDump, "\"rowCount\":");
+					if (p) ::sscanf_s(p, "\"rowCount\":%d", &postRows);
+				}
+				wprintf(L"ROWADDER rows %d->%d\n", preRows, postRows);
 				PumpFor(150);
 				captureStep("+1", traceProfile);
 				PumpFor(300);

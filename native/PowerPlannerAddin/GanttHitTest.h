@@ -26,7 +26,8 @@ enum class HtItemKind {
 	RowLabel,
 	Title,
 	Marker,  // TODAY_LINE / DEADLINE / CUSTOM_MARKER vertical date lines
-	Text     // PpText annotation (anchored or free-floating), PP_KIND=TEXT
+	Text,    // PpText annotation (anchored or free-floating), PP_KIND=TEXT
+	Dependency // DEP connector segment (PP_KIND=DEP), grouped by PP_ID
 };
 
 struct HtItem {
@@ -81,6 +82,7 @@ enum class HtZone {
 	            // below TaskBody/TaskEdge/Milestone/Marker, above RowBand/
 	            // EmptyCell (a text sitting over open timeline space still
 	            // wins so it can be selected/dragged/deleted)
+	Dependency, // within a widened DEP connector segment rect (id = dep id)
 	RowBand,    // inside a row band but left of / around the label column
 	            // (rowId set), or chart background outside any band (rowId empty)
 	EmptyCell   // inside a row band's timeline area with nothing under the

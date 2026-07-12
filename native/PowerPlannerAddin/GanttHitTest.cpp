@@ -118,6 +118,17 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 		}
 	}
 
+	// 4b) Dependency connectors (widened DEP segment bounds).
+	for (const auto& it : snap.items) {
+		if (it.kind != HtItemKind::Dependency) continue;
+		if (InRect(it.rect, x, y)) {
+			hit.zone = HtZone::Dependency;
+			hit.kind = HtItemKind::Dependency;
+			hit.id = it.id;
+			return hit;
+		}
+	}
+
 	// 5) Labels (row labels + title).
 	for (const auto& it : snap.items) {
 		if (it.kind != HtItemKind::RowLabel && it.kind != HtItemKind::Title) continue;

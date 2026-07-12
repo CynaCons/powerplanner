@@ -7,6 +7,7 @@
 
 // A built-in sample chart (N3 replaces this with a parsed/round-tripped document).
 PpDocument MakeSampleDocument();
+PpDocument MakeBlankDocument();
 
 // Emit the document as native shapes on the active slide, grouped under a tagged
 // root carrying the serialized document (PP_DOC). pApp is the cached

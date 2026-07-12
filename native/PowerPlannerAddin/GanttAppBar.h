@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-enum class AppBarSel { None, Task, Row, Milestone, Marker, Note, Multi };
+enum class AppBarSel { None, Task, Row, Milestone, Marker, Note, Multi, Dependency };
 
 enum class AppBarIcon {
 	None, Row, Task, Milestone, Marker, Note, Edit, Swatch,
@@ -211,7 +211,7 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 			g.items.push_back({ HtCmd_Link, "Link", AppBarIcon::Link });
 			AppBarItem unlink;
 			unlink.cmd = HtCmd_Unlink;
-			unlink.label = "Unlink";
+			unlink.label = "Unlink all";
 			unlink.icon = AppBarIcon::Unlink;
 			unlink.enabled = AppBarAnyDepTouches(doc, selId);
 			g.items.push_back(unlink);
@@ -283,6 +283,35 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 			AppBarGroup g;
 			g.items.push_back({ HtCmd_NudgeMinus1, "-1d", AppBarIcon::MinusDay });
 			g.items.push_back({ HtCmd_NudgePlus1, "+1d", AppBarIcon::PlusDay });
+			AppBarItem del;
+			del.cmd = HtCmd_Delete;
+			del.label = "Delete";
+			del.icon = AppBarIcon::Delete;
+			del.danger = true;
+			g.items.push_back(del);
+			model.groups.push_back(g);
+		}
+		return model;
+	}
+
+	if (sel == AppBarSel::Dependency) {
+		model.name = "Dependency";
+		for (const auto& d : doc.deps) {
+			if (d.id != selId) continue;
+			std::string fromLabel = d.from, toLabel = d.to;
+			for (const auto& t : doc.tasks) {
+				if (t.id == d.from) fromLabel = t.label;
+				if (t.id == d.to) toLabel = t.label;
+			}
+			for (const auto& m : doc.milestones) {
+				if (m.id == d.from) fromLabel = m.label;
+				if (m.id == d.to) toLabel = m.label;
+			}
+			model.name = fromLabel + " \u2192 " + toLabel;
+			break;
+		}
+		{
+			AppBarGroup g;
 			AppBarItem del;
 			del.cmd = HtCmd_Delete;
 			del.label = "Delete";

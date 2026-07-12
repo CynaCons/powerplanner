@@ -482,8 +482,14 @@ void CConnect::DoInsertGantt()
 		return;
 	}
 
+	int choice = ::MessageBoxW(NULL,
+		L"Insert a blank Gantt chart or the sample Q3 Launch Plan?",
+		L"Insert Gantt", MB_YESNOCANCEL | MB_ICONQUESTION);
+	if (choice == IDCANCEL) return;
+
 	int shapeCount = 0;
-	HRESULT hr = InsertGantt(m_pApp, MakeSampleDocument(), &shapeCount);
+	const PpDocument doc = (choice == IDYES) ? MakeSampleDocument() : MakeBlankDocument();
+	HRESULT hr = InsertGantt(m_pApp, doc, &shapeCount);
 	if (SUCCEEDED(hr)) {
 		// V3-1 fit-to-slide: size/position the freshly-built CHART_ROOT to
 		// fill the slide's content area (reserving the top ~15% for a native

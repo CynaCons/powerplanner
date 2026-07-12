@@ -400,6 +400,10 @@ int RemoveDependenciesTouching(PpDocument& doc, const std::string& id) {
 	return (int)(oldSize - doc.deps.size());
 }
 
+bool RemoveDependencyById(PpDocument& doc, const std::string& depId) {
+	return RemoveIf(doc.deps, [&](const PpDependency& d) { return d.id == depId; });
+}
+
 bool NudgeTask(PpDocument& doc, const std::string& taskId, long deltaDays) {
 	for (auto& task : doc.tasks) {
 		if (task.id == taskId) {
