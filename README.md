@@ -10,11 +10,9 @@ It ships as a **single-file portable HTML app** — no install, no account, no s
 
 ### Web app
 
-![PowerPlanner web app — switching time scales](docs/media/web-demo.gif)
-
-*The single-file web app, switching time scales (week → month → quarter → year → fit).*
-
 ![PowerPlanner web app](docs/media/web-app.png)
+
+*The single-file web app — switch time scales (week → month → quarter → year → fit), edit dates by dragging, and export.*
 
 ### PowerPoint add-in (native, on-slide editor)
 
