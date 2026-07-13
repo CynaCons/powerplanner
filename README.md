@@ -20,25 +20,56 @@ It ships as a **single-file portable HTML app** — no install, no account, no s
 
 A native C++ COM add-in (think-cell style) that emits the chart as **real, editable PowerPoint shapes** — not an image — and turns the slide itself into the editor: an input-capturing overlay with its own selection model, drag gestures, scoped keyboard shortcuts, context menus, and a docked contextual **app bar**.
 
-The on-slide view — rail label column, hierarchical two-band date header, Material bars with blended tracks, milestones, dependency elbows, and today/deadline markers:
+**Hero card — task selected with full app bar:**
 
-![Native on-slide Gantt with creation guidance](docs/media/native-v5-chart.png)
+<img src="docs/media/gallery-task.png" width="520" alt="PowerPoint add-in with a task selected, showing app bar with color, nudge, label placement, link, and notes options">
 
-The app bar follows your selection. Select a **task** and you get color swatches, ±1d nudges, label placement, linking, and notes (shown here over the live slide):
+**Full-context cards for every selection context and feature:**
 
-![App bar — task selected, over the live slide](docs/media/native-v5-taskbar.png)
-
-Select a **row** by clicking its name in the rail — add above/below, reorder, indent/outdent, rename, delete (with full cascade):
-
-![App bar — row selected](docs/media/native-v5-rowbar.png)
-
-Select a **milestone** — nudge its date, rename, note, delete:
-
-![App bar — milestone selected](docs/media/native-v5-milestonebar.png)
-
-With **nothing selected**, the bar offers inserts (task / milestone / marker / note), the time scale, and display settings:
-
-![App bar — document settings](docs/media/native-v5-settings.png)
+<table>
+<tr>
+<td align="center">
+<img src="docs/media/gallery-row.png" width="260" alt="Row selected, row operations in app bar">
+<br><small>Row selected</small>
+</td>
+<td align="center">
+<img src="docs/media/gallery-milestone.png" width="260" alt="Milestone selected, date and label options">
+<br><small>Milestone selected</small>
+</td>
+<td align="center">
+<img src="docs/media/gallery-marker.png" width="260" alt="Marker selected, marker options">
+<br><small>Marker selected</small>
+</td>
+</tr>
+<tr>
+<td align="center">
+<img src="docs/media/gallery-document.png" width="260" alt="Document with nothing selected, insert and settings options">
+<br><small>Document settings</small>
+</td>
+<td align="center">
+<img src="docs/media/gallery-settings.png" width="260" alt="Settings popover showing display and time-scale options">
+<br><small>Settings popover</small>
+</td>
+<td align="center">
+<img src="docs/media/gallery-dep-link.png" width="260" alt="Dependency link between two tasks">
+<br><small>Dependency link</small>
+</td>
+</tr>
+<tr>
+<td align="center">
+<img src="docs/media/gallery-multi.png" width="260" alt="Multi-select of multiple tasks and rows">
+<br><small>Multi-select</small>
+</td>
+<td align="center">
+<img src="docs/media/gallery-context-menu.png" width="260" alt="Right-click context menu with commands">
+<br><small>Context menu</small>
+</td>
+<td align="center">
+<img src="docs/media/gallery-card.png" width="260" alt="Task detail card showing comprehensive task information">
+<br><small>Task detail card</small>
+</td>
+</tr>
+</table>
 
 Every gesture and command is one undo entry, every command also lives in the right-click menus (derived from the same command registry as the app bar), and dragging a bar reflows dates with dependencies and the embedded data kept in sync:
 
