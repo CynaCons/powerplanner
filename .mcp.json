@@ -8,6 +8,14 @@
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1"
       }
+    },
+    "powerplan": {
+      "command": "python",
+      "args": ["powerspawn/powerplan/powerplan_server.py"],
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1"
+      }
     }
   }
 }
