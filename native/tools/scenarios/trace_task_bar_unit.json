@@ -1,0 +1,16 @@
+{
+  "name": "trace_task_bar_unit",
+  "description": "v2.9.0 SR-TASK-UNIT: task bar is one non-decomposable unit. Native select of TASK_LABEL and TASK_PROGRESS mirrors to ownSel TASK (not separate objects); overlay click on label selects the same task; drag from label moves task dates.",
+  "trace_profile": "task-bar-unit",
+  "timeout": 180,
+  "retries": 2,
+  "check_invariants": true,
+  "invariants": [
+    "task_label_selects_task_unit",
+    "task_group_child_selects_task_unit",
+    "task_body_selects_same_unit",
+    "task_label_click_selects_task",
+    "task_progress_selects_task_unit",
+    "task_label_drag_moves_dates"
+  ]
+}

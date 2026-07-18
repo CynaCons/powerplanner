@@ -680,7 +680,9 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
     # Overall move/resize legitimately clears item sel to avoid weird combined chrome.
     # component-shape-protection intentionally deselects at its "reset" step (UF-07),
     # so it is exempt too (its own no_child_shape_selected / context_reset checks cover it).
-    if profile and not profile.startswith('overall-') and profile not in ('component-shape-protection', 'window-edge-drag'):
+    if profile and not profile.startswith('overall-') and profile not in (
+        'component-shape-protection', 'window-edge-drag', 'task-bar-unit',
+    ):
         empty_mid = False
         for i, (step, kind) in enumerate(own_sel_seq):
             if i > 0 and not kind:
@@ -694,7 +696,7 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
         results.append({
             "rule": "no_large_sel_drop_to_empty",
             "passed": True,
-            "detail": "skipped for overall-* / component-shape-protection (intentional deselect)",
+            "detail": "skipped for overall-* / component-shape-protection / task-bar-unit (intentional deselect)",
         })
 
     # 4. rowband count stable or increases (insert may +1)
@@ -1151,6 +1153,306 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": "appBarGroups == appBarLayoutGroups and appBarWindowCount == 1 at each step",
         })
 
+    if profile == "task-bar-unit":
+        # v2.9.0 SR-TASK-UNIT: TASK_LABEL / TASK / TASK_PROGRESS are one object.
+        by_step = {s.step: s.state for s in steps}
+
+        def _is_child_kind(k: str) -> bool:
+            return bool(k) and k != "CHART_ROOT"
+
+        def _task_unit(step_name: str, want_id: str) -> bool:
+            st = by_step.get(step_name, {})
+            native = st.get("nativeSelKind", "")
+            return (
+                st.get("ownSelKind") == "TASK"
+                and st.get("ownSelId") == want_id
+                and not _is_child_kind(native)
+            )
+
+        label_ok = _task_unit("label-settled", "discovery")
+        results.append({
+            "rule": "task_label_selects_task_unit",
+            "passed": label_ok,
+            "detail": (
+                f"label-settled ownSel=({by_step.get('label-settled', {}).get('ownSelKind')},"
+                f"{by_step.get('label-settled', {}).get('ownSelId')}) "
+                f"native={by_step.get('label-settled', {}).get('nativeSelKind')!r} "
+                f"(want TASK/discovery, native ''/CHART_ROOT)"
+            ),
+        })
+
+        grouped_label_ok = _task_unit("grouped-label-settled", "discovery")
+        results.append({
+            "rule": "task_group_child_selects_task_unit",
+            "passed": grouped_label_ok,
+            "detail": (
+                f"grouped-label-settled ownSel=("
+                f"{by_step.get('grouped-label-settled', {}).get('ownSelKind')},"
+                f"{by_step.get('grouped-label-settled', {}).get('ownSelId')}) "
+                f"native={by_step.get('grouped-label-settled', {}).get('nativeSelKind')!r} "
+                f"(outer CHART_ROOT + child TASK_LABEL must resolve TASK/discovery)"
+            ),
+        })
+
+        body_ok = _task_unit("body-settled", "discovery")
+        results.append({
+            "rule": "task_body_selects_same_unit",
+            "passed": body_ok,
+            "detail": (
+                f"body-settled ownSel=({by_step.get('body-settled', {}).get('ownSelKind')},"
+                f"{by_step.get('body-settled', {}).get('ownSelId')}) "
+                f"native={by_step.get('body-settled', {}).get('nativeSelKind')!r}"
+            ),
+        })
+
+        click_st = by_step.get("label-click", {})
+        click_ok = (
+            click_st.get("ownSelKind") == "TASK"
+            and click_st.get("ownSelId") == "discovery"
+        )
+        results.append({
+            "rule": "task_label_click_selects_task",
+            "passed": click_ok,
+            "detail": (
+                f"label-click ownSel=({click_st.get('ownSelKind')},{click_st.get('ownSelId')}) "
+                f"(want TASK/discovery)"
+            ),
+        })
+
+        prog_ok = _task_unit("progress-settled", "wireframes")
+        results.append({
+            "rule": "task_progress_selects_task_unit",
+            "passed": prog_ok,
+            "detail": (
+                f"progress-settled ownSel=({by_step.get('progress-settled', {}).get('ownSelKind')},"
+                f"{by_step.get('progress-settled', {}).get('ownSelId')}) "
+                f"native={by_step.get('progress-settled', {}).get('nativeSelKind')!r} "
+                f"(want TASK/wireframes)"
+            ),
+        })
+
+        pre_drag = by_step.get("pre-drag", {})
+        post_drag = by_step.get("post-drag", {})
+        pre_start = pre_drag.get("ownSelTaskStart", "")
+        post_start = post_drag.get("ownSelTaskStart", "")
+        pre_end = pre_drag.get("ownSelTaskEnd", "")
+        post_end = post_drag.get("ownSelTaskEnd", "")
+        dates_moved = bool(pre_start and post_start and (pre_start != post_start or pre_end != post_end))
+        still_task = (
+            post_drag.get("ownSelKind") == "TASK"
+            and post_drag.get("ownSelId") == "discovery"
+        )
+        drag_ok = still_task and dates_moved
+        results.append({
+            "rule": "task_label_drag_moves_dates",
+            "passed": drag_ok,
+            "detail": (
+                f"pre start/end={pre_start}/{pre_end} post={post_start}/{post_end} "
+                f"ownSel=({post_drag.get('ownSelKind')},{post_drag.get('ownSelId')}) "
+                f"(want same TASK/discovery with changed dates)"
+            ),
+        })
+
+    if profile == "entity-dump":
+        by_step = {s.step: s.state for s in steps}
+        before = ((by_step.get("before") or {}).get("entityDump") or {}).get("entities") or []
+        after = ((by_step.get("after-style") or {}).get("entityDump") or {}).get("entities") or []
+        required_kinds = {
+            "HEADER_BAND", "RAIL_FILL", "AXIS_BOT", "ROW_DIVIDER",
+            "TASK", "TASK_LABEL", "MILESTONE", "ROW_LABEL", "TITLE",
+        }
+        kinds = {str(e.get("kind", "")) for e in before if isinstance(e, dict)}
+        results.append({
+            "rule": "entity_kinds_complete",
+            "passed": bool(before) and required_kinds <= kinds,
+            "detail": f"entities={len(before)} missingKinds={sorted(required_kinds - kinds)}",
+        })
+
+        uniform_fields = {
+            "id", "kind", "parentId", "rowId", "slideRect", "screenRect",
+            "z", "style", "text", "flags",
+        }
+        uniform_ok = bool(before) and all(
+            isinstance(e, dict)
+            and uniform_fields <= set(e)
+            and {"fill", "stroke", "strokeW", "fontPx"} <= set(e.get("style") or {})
+            and {"selectedOwn", "selectedNative", "hover", "clipped", "visible"}
+                <= set(e.get("flags") or {})
+            for e in before
+        )
+        results.append({
+            "rule": "entity_uniform_schema",
+            "passed": uniform_ok,
+            "detail": f"uniform schema on {len(before)} entities",
+        })
+        task_children = [
+            e for e in before if e.get("kind") in
+            ("TASK_LABEL", "TASK_PROGRESS", "TASK_PCT", "RAIL_TASKLBL", "RAIL_DOT")
+        ]
+        parent_ok = bool(task_children) and all(e.get("parentId") == e.get("id") for e in task_children)
+        results.append({
+            "rule": "entity_parent_links",
+            "passed": parent_ok,
+            "detail": f"taskChildren={len(task_children)} all parentId==id: {parent_ok}",
+        })
+        rect_ok = bool(before) and all(
+            isinstance(e.get("slideRect"), list) and len(e["slideRect"]) == 4
+            and isinstance(e.get("screenRect"), list) and len(e["screenRect"]) == 4
+            for e in before
+        ) and any(
+            float(e["screenRect"][2]) > 0 and float(e["screenRect"][3]) > 0
+            for e in before
+        )
+        results.append({
+            "rule": "entity_dual_space_rects",
+            "passed": rect_ok,
+            "detail": "all entities expose 4-value slide/screen rects with visible nonzero samples",
+        })
+        def _entity(items, kind, entity_id):
+            return next((e for e in items if e.get("kind") == kind and e.get("id") == entity_id), {})
+        before_task = _entity(before, "TASK", "discovery")
+        after_task = _entity(after, "TASK", "discovery")
+        fresh = bool(before_task and after_task) and before_task.get("style") != after_task.get("style")
+        results.append({
+            "rule": "entity_dump_fresh_after_reconcile",
+            "passed": fresh,
+            "detail": f"TASK/discovery style before={before_task.get('style')} after={after_task.get('style')}",
+        })
+        results.append({
+            "rule": "entity_serializer_harness_live_parity",
+            "passed": bool(before) and bool(after),
+            "detail": "trace reads Overlay_DumpEntitiesForTest, the same serializer used by live snapshots",
+        })
+
+    if profile == "session-recorder":
+        by_step = {s.step: s.state for s in steps}
+        stopped = by_step.get("stopped") or {}
+        session_dir = Path(str(stopped.get("sessionDir") or ""))
+        events_path = session_dir / "events.jsonl"
+        meta_path = session_dir / "meta.json"
+        frames_dir = session_dir / "frames"
+        layout_ok = session_dir.is_dir() and events_path.is_file() and meta_path.is_file() and frames_dir.is_dir()
+        results.append({
+            "rule": "session_dir_layout",
+            "passed": layout_ok,
+            "detail": f"sessionDir={session_dir} layoutOk={layout_ok}",
+        })
+        try:
+            project_local = session_dir.resolve().is_relative_to((NATIVE_ROOT / "records").resolve())
+        except (OSError, ValueError):
+            project_local = False
+        results.append({
+            "rule": "project_local_session_dir",
+            "passed": project_local and not (session_dir / ".active").exists(),
+            "detail": (
+                f"sessionDir={session_dir} expectedRoot={NATIVE_ROOT / 'records'} "
+                f"activeMarker={(session_dir / '.active').exists()}"
+            ),
+        })
+        rec_events = []
+        parse_error = ""
+        if events_path.is_file():
+            try:
+                rec_events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            except Exception as exc:
+                parse_error = str(exc)
+        schema_ok = bool(rec_events) and not parse_error and all(
+            isinstance(e, dict) and isinstance(e.get("t"), int)
+            and isinstance(e.get("seq"), int) and isinstance(e.get("type"), str)
+            for e in rec_events
+        ) and all(
+            rec_events[i]["seq"] < rec_events[i + 1]["seq"]
+            and rec_events[i]["t"] <= rec_events[i + 1]["t"]
+            for i in range(len(rec_events) - 1)
+        )
+        results.append({
+            "rule": "events_jsonl_schema",
+            "passed": schema_ok,
+            "detail": f"events={len(rec_events)} parseError={parse_error!r}",
+        })
+        event_types = {e.get("type") for e in rec_events}
+        required_types = {"input", "nativeSel", "ownSel", "gesture", "op", "paint", "snapshot", "frame", "doc", "error"}
+        results.append({
+            "rule": "event_types_present",
+            "passed": required_types <= event_types,
+            "detail": f"missingTypes={sorted(required_types - event_types)}",
+        })
+        results.append({
+            "rule": "ownsel_events_on_transition",
+            "passed": any(e.get("type") == "ownSel" and e.get("kind") == "TASK" for e in rec_events),
+            "detail": "TASK ownSel transition recorded",
+        })
+        starts = [e for e in rec_events if e.get("type") == "gesture" and e.get("phase") == "start"]
+        endings = [e for e in rec_events if e.get("type") == "gesture" and e.get("phase") in ("commit", "cancel")]
+        results.append({
+            "rule": "gesture_phase_pairs",
+            "passed": bool(starts) and len(endings) >= len(starts),
+            "detail": f"starts={len(starts)} endings={len(endings)}",
+        })
+        snaps = [e for e in rec_events if e.get("type") == "snapshot"]
+        dedupe_ok = any(isinstance(e.get("entities"), list) for e in snaps) and any(e.get("entities") is None for e in snaps)
+        results.append({
+            "rule": "snapshot_entity_dedupe",
+            "passed": dedupe_ok,
+            "detail": f"snapshots={len(snaps)} full={sum(isinstance(e.get('entities'), list) for e in snaps)} deduped={sum(e.get('entities') is None for e in snaps)}",
+        })
+        progress_rects = set()
+        for snap in snaps:
+            entities = snap.get("entities")
+            if not isinstance(entities, list):
+                continue
+            for entity in entities:
+                if entity.get("kind") == "TASK_PROGRESS" and entity.get("id") == "wireframes":
+                    progress_rects.add(tuple(entity.get("slideRect") or []))
+        results.append({
+            "rule": "live_child_geometry_fresh",
+            "passed": len(progress_rects) >= 2,
+            "detail": f"TASK_PROGRESS/wireframes distinct live rects={sorted(progress_rects)}",
+        })
+        results.append({
+            "rule": "error_events_on_swallowed_catch",
+            "passed": any(e.get("type") == "error" and e.get("where") == "trace_session_recorder/forced" for e in rec_events),
+            "detail": "forced swallowed-catch path emitted structured error",
+        })
+        results.append({
+            "rule": "rec_indicator_visible",
+            "passed": (
+                (by_step.get("recording-on") or {}).get("sessionRecording") is True
+                and (by_step.get("recording-on") or {}).get("recIndicatorPainted") is True
+            ),
+            "detail": (
+                f"recording-on sessionRecording={(by_step.get('recording-on') or {}).get('sessionRecording')} "
+                f"recIndicatorPainted={(by_step.get('recording-on') or {}).get('recIndicatorPainted')}"
+            ),
+        })
+        frame_events = [e for e in rec_events if e.get("type") == "frame"]
+        composited_ok = bool(frame_events)
+        frame_details = []
+        for event in frame_events:
+            frame_path = session_dir / str(event.get("file") or "")
+            png_ok = False
+            dims = (0, 0)
+            try:
+                data = frame_path.read_bytes()
+                if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24:
+                    dims = (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+                    png_ok = dims[0] >= 300 and dims[1] >= 150 and len(data) >= 5000
+            except OSError:
+                pass
+            event_ok = (
+                event.get("surface") == "composited"
+                and isinstance(event.get("screenRect"), list)
+                and len(event.get("screenRect")) == 4
+                and png_ok
+            )
+            composited_ok = composited_ok and event_ok
+            frame_details.append(f"{frame_path.name}:{event.get('surface')}:{dims}:{png_ok}")
+        results.append({
+            "rule": "composited_frame_present",
+            "passed": composited_ok,
+            "detail": "; ".join(frame_details) or "no frame events",
+        })
+
     if profile == "component-shape-protection":
         # v2.6.1 U1 selection integrity. Steps emitted by the appbar-shot
         # "component-shape-protection" profile: pre, child-immed, child-settled,
@@ -1212,6 +1514,38 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": (
                 f"reset ownSelKind={reset_own!r} appBarGroups={reset_groups} "
                 f"hasScaleGroup={reset.get('hasScaleGroup')} (want ownSel empty + SCALE present)"
+            ),
+        })
+
+    if profile in ("drag-paint-cadence", "session-recorder"):
+        # Phase 13 v2.8.1 SR-SMO-09: mid-gesture paint cadence >= 30 Hz over
+        # a continuous drag window. Fields injected by the profile at mid step.
+        mid_step = "mid-drag" if profile == "session-recorder" else "mid"
+        mid = next((s.state for s in steps if s.step == mid_step), {})
+        hz = mid.get("paintHz")
+        if hz is None:
+            pc = mid.get("paintCadence") or {}
+            if isinstance(pc, dict):
+                hz = pc.get("hz")
+        try:
+            hz_f = float(hz) if hz is not None else None
+        except (TypeError, ValueError):
+            hz_f = None
+        wms = mid.get("paintWindowMs")
+        if wms is None and isinstance(mid.get("paintCadence"), dict):
+            wms = mid["paintCadence"].get("windowMs")
+        pc_n = mid.get("paintCount")
+        if pc_n is None and isinstance(mid.get("paintCadence"), dict):
+            pc_n = mid["paintCadence"].get("paintCount")
+        p50 = mid.get("paintP50Ms")
+        p95 = mid.get("paintP95Ms")
+        window_ok = wms is not None and float(wms) >= 300.0
+        results.append({
+            "rule": "paint_cadence_min_hz",
+            "passed": hz_f is not None and window_ok and hz_f >= 30.0,
+            "detail": (
+                f"paintHz={hz_f} (budget>=30) windowMs={wms} paintCount={pc_n} "
+                f"p50Ms={p50} p95Ms={p95} (60 Hz aspirational, not gated)"
             ),
         })
 
@@ -1763,7 +2097,21 @@ def run_scenario(name: str, update_goldens: bool = False, **overrides) -> Harnes
             check_trace_invariants(tr, spec["trace_profile"])
             if spec.get("invariants"):
                 allowed = set(spec["invariants"])
-                tr.invariants = [i for i in (tr.invariants or []) if i.get("rule") in allowed]
+                produced = {
+                    i.get("rule"): i for i in (tr.invariants or [])
+                    if i.get("rule") in allowed
+                }
+                tr.invariants = [
+                    produced.get(rule, {
+                        "rule": rule,
+                        "passed": False,
+                        "detail": (
+                            f"scenario requested invariant {rule!r}, but profile "
+                            f"{spec['trace_profile']!r} did not produce it"
+                        ),
+                    })
+                    for rule in spec["invariants"]
+                ]
             if any(not i.get("passed", True) for i in (tr.invariants or [])):
                 tr.status = "FAIL"
         shim = HarnessReport(
@@ -1789,6 +2137,10 @@ def run_scenario(name: str, update_goldens: bool = False, **overrides) -> Harnes
     )
     if "goldens" in spec:
         run_with_golden_checks(report, spec["goldens"], update=update_goldens)
+        if any(not g.get("match") for g in (report.golden_comparisons or [])):
+            if report.status == "PASS":
+                report.status = "FAIL"
+            report.notes = (report.notes or "") + "; golden mismatch (use --update-goldens if intentional)"
     return report
 
 

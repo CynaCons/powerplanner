@@ -18,6 +18,7 @@ terminals
 
 # Native add-in build output
 native/build
+native/records/
 
 # Python bytecode (native/tools harness driver)
 __pycache__/
@@ -33,3 +34,6 @@ overlay.png
 .claude/settings.local.json
 # PowerSpawn inter-agent context (auto-generated audit trail)
 IAC.md
+
+# Claude Code agent worktrees (local scratch, contains build artifacts)
+.claude/worktrees/

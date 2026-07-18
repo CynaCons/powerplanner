@@ -1,0 +1,50 @@
+{
+  "name": "insert-build-present",
+  "goal": "Full user journey sketch: start from a chart, build a small plan (add row, add task, link), then deselect for a presentable slide.",
+  "steps": [
+    {
+      "kind": "capture",
+      "note": "Starting chart visible; document-context app bar (scale/settings/insert) when nothing selected (SR-BAR)."
+    },
+    {
+      "kind": "hover",
+      "target": "row:research",
+      "note": "Discover row-adder chips on rail boundaries (UF-06 / SR-IXC-14)."
+    },
+    {
+      "kind": "click",
+      "target": "row-adder-below:research",
+      "note": "Add a row below research."
+    },
+    {
+      "kind": "capture",
+      "note": "Row count increased; selection sensible."
+    },
+    {
+      "kind": "drag",
+      "target": "empty-cell:research",
+      "to": "days:+5",
+      "note": "Drag-create a task with real bar preview (SR-IXC-05)."
+    },
+    {
+      "kind": "capture",
+      "note": "New task committed and selected."
+    },
+    {
+      "kind": "drag",
+      "target": "link-port:discovery",
+      "to": "task:wireframes",
+      "note": "Port-link two tasks if ports present (UF-11)."
+    },
+    {
+      "kind": "key",
+      "key": "Escape",
+      "note": "Deselect for presentation — no sticky item context (UF-07)."
+    },
+    {
+      "kind": "capture",
+      "note": "Presentable: calm chrome, hairline overall if selected, labels readable."
+    }
+  ],
+  "notes": "Manual-assisted OK if walkthrough runner lacks some targets; still a review checklist for Phase 13 v2.8.3."
+}

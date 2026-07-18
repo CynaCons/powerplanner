@@ -1460,6 +1460,12 @@ bool Gantt_TryPeekCachedDoc(PpDocument* out) {
 	return true;
 }
 
+bool Gantt_TryPeekCachedScene(Scene* out) {
+	if (!out || !g_sceneCacheValid) return false;
+	*out = g_lastScene;
+	return true;
+}
+
 void Gantt_SetOpDispatchTotalMs(unsigned long long ms) {
 	g_lastOpPhases.dispatchTotalMs = (uint64_t)ms;
 }

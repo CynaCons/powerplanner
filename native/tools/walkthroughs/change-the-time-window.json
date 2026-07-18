@@ -1,0 +1,34 @@
+{
+  "name": "change-the-time-window",
+  "goal": "Resize the chart's visible time window by dragging a header edge port, with live preview, then commit.",
+  "steps": [
+    {
+      "kind": "hover",
+      "target": "window-header",
+      "note": "First-time user moves over the timescale header. Expect hover-gated window ports (SR-WIN-05) to appear at left/right edges — discoverable without docs (SR-IXC-13)."
+    },
+    {
+      "kind": "capture",
+      "note": "Ports visible on header hover? Idle chrome stays calm elsewhere."
+    },
+    {
+      "kind": "drag",
+      "target": "window-port-right",
+      "to": "days:-7",
+      "note": "Drag the right window port left ~1 week. Expect live axis preview + date pill (SR-WIN-09/11, SR-IXC-03); shapes not rewritten per move."
+    },
+    {
+      "kind": "capture",
+      "note": "After drop: window committed, chart rescaled, rail complete for all rows (SR-WIN-19/20)."
+    },
+    {
+      "kind": "key",
+      "key": "Escape",
+      "note": "Esc returns to neutral chrome (SR-IXC-09)."
+    },
+    {
+      "kind": "capture",
+      "note": "Surface neutral; no sticky window-drag cursor."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "name": "appbar_matrix",
-  "description": "Capture the docked app bar in every selection context (None / TASK / ROW / MILESTONE). Uses the existing ppappbarshot --matrix mode and Overlay_SelectForTest seam. Produces ab-*.png artifacts.",
+  "description": "Capture the docked app bar in every selection context (None / TASK / ROW / MILESTONE). Uses the existing ppappbarshot --matrix mode and Overlay_SelectForTest seam. Produces ab-*.png artifacts. Phase 13: golden MD5 fail-closed for task/none appbar strips.",
   "exe": "ppappbarshot",
   "args": ["--matrix"],
   "timeout": 120,
@@ -13,5 +13,9 @@
     "APPBAR FIT OK",
     "CHROME CALM IDLE OK",
     "CHROME CALM OVERALL OK"
+  ],
+  "goldens": [
+    ["native/build/ab-task.png", "appbar-task.png"],
+    ["native/build/ab-none.png", "appbar-document.png"]
   ]
 }

@@ -1,0 +1,16 @@
+{
+  "name": "trace_entity_dump",
+  "description": "v2.10.0 SR-ENT: complete entity dump of every rendered prim with uniform properties, parent links (TASK_LABEL/PROGRESS/PCT → task), dual-space rects consistent with PP_PROJ, fresh after scene reconcile, pure COM-free serializer shared with live recorder.",
+  "trace_profile": "entity-dump",
+  "timeout": 120,
+  "retries": 2,
+  "check_invariants": true,
+  "invariants": [
+    "entity_kinds_complete",
+    "entity_uniform_schema",
+    "entity_parent_links",
+    "entity_dual_space_rects",
+    "entity_dump_fresh_after_reconcile",
+    "entity_serializer_harness_live_parity"
+  ]
+}

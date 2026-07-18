@@ -70,6 +70,9 @@ no Visual Studio needed to register).
 ./build.ps1 -Unregister
 ```
 
+`native\start.bat` always rebuilds `PowerPlannerAddin.dll` before registration
+and launch so PowerPoint cannot load a stale add-in binary.
+
 Verify load: open PowerPoint → File → Options → Add-ins → COM Add-ins, or check
 `HKCU\Software\Microsoft\Office\PowerPoint\AddIns\PowerPlanner.Connect`.
 
@@ -82,6 +85,13 @@ Verify load: open PowerPoint → File → Options → Add-ins → COM Add-ins, o
 
 ### Build notes (gotchas already solved)
 
+- **Ribbon XML must be well-formed.** PowerPoint still loads the COM add-in
+  (`OnConnection` + `GetCustomUI` log) but **silently drops the custom tab** if
+  `kRibbonXml` is invalid. Classic trap: a bare apostrophe inside a
+  single-quoted attribute (`chart's` from C++ `chart\'s`). After a ribbon
+  change, parse the concatenated XML and confirm `%TEMP%\powerplanner-addin.log`
+  shows `OnRibbonLoad — customUI accepted` (not only `GetCustomUI`).
+  The log is UTF-16; use `Get-Content $log -Encoding Unicode` when filtering it.
 - **Static CRT (`/MT`).** A `/MD` build loads fine via `regsvr32`/PowerShell but
   PowerPoint silently skips it (cannot resolve `vcruntime140.dll` in its load
   context). `dumpbin /dependents` must show only system DLLs.

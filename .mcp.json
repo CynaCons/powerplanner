@@ -16,6 +16,14 @@
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1"
       }
+    },
+    "powerplanner-recorder": {
+      "command": "python",
+      "args": ["native/tools/session_mcp.py"],
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1"
+      }
     }
   }
 }

@@ -12,7 +12,7 @@ enum class AppBarIcon {
 	None, Row, Task, Milestone, Marker, Note, Edit, Swatch,
 	MinusDay, PlusDay, Label, Link, Unlink, Delete, Rename,
 	RowAbove, RowBelow, MoveUp, MoveDown, Indent, Outdent,
-	Settings, Reanchor, ScaleSeg
+	Settings, Reanchor, ScaleSeg, Record
 };
 
 struct AppBarItem {
@@ -70,7 +70,8 @@ inline bool AppBarAnyDepTouches(const PpDocument& doc, const std::string& id) {
 	return false;
 }
 
-inline void AppBarAppendGlobalGroup(AppBarModel& model, const PpDocument& doc) {
+inline void AppBarAppendGlobalGroup(AppBarModel& model, const PpDocument& doc,
+	bool sessionRecording = false) {
 	AppBarGroup g;
 	g.label = "SCALE";
 	const char* scales[] = { "day", "week", "month", "quarter", "year" };
@@ -90,6 +91,12 @@ inline void AppBarAppendGlobalGroup(AppBarModel& model, const PpDocument& doc) {
 	// Component-level display settings are intentionally grouped behind one
 	// comprehensible entry; the themed popover exposes the persisted values.
 	g.items.push_back({ HtCmd_Settings, "Settings", AppBarIcon::Settings });
+	AppBarItem record;
+	record.cmd = HtCmd_RecordSession;
+	record.label = "Record";
+	record.icon = AppBarIcon::Record;
+	record.active = sessionRecording;
+	g.items.push_back(record);
 	model.groups.push_back(g);
 }
 
@@ -128,7 +135,8 @@ inline std::string AppBarLabelPlacementWord(const std::string& labelPlacement) {
 	return "bar";
 }
 
-inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::string& selId, int multiCount = 0) {
+inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::string& selId,
+	int multiCount = 0, bool sessionRecording = false) {
 	AppBarModel model;
 
 	if (sel == AppBarSel::Multi) {
@@ -149,7 +157,7 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 
 	if (sel == AppBarSel::None) {
 		AppBarAppendInsertGroup(model);
-		AppBarAppendGlobalGroup(model, doc);
+		AppBarAppendGlobalGroup(model, doc, sessionRecording);
 		return model;
 	}
 
@@ -160,7 +168,7 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 		}
 		if (!task) {
 			AppBarAppendInsertGroup(model);
-			AppBarAppendGlobalGroup(model, doc);
+			AppBarAppendGlobalGroup(model, doc, sessionRecording);
 			return model;
 		}
 		model.name = task->label;
@@ -341,6 +349,6 @@ inline AppBarModel BuildAppBar(AppBarSel sel, const PpDocument& doc, const std::
 
 	// None / fallback: overall component — INSERT + global scale controls
 	AppBarAppendInsertGroup(model);
-	AppBarAppendGlobalGroup(model, doc);
+	AppBarAppendGlobalGroup(model, doc, sessionRecording);
 	return model;
 }

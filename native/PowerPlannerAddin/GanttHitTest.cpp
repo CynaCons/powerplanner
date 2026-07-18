@@ -91,9 +91,22 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 		}
 	}
 
-	// 3) Task bodies.
+	// 3) Task bodies (bar fill/progress footprint).
 	for (const auto& it : snap.items) {
 		if (it.kind != HtItemKind::Task) continue;
+		if (InRect(it.rect, x, y)) {
+			hit.zone = HtZone::TaskBody;
+			hit.kind = HtItemKind::Task;
+			hit.id = it.id;
+			return hit;
+		}
+	}
+
+	// 3b) Task labels (on-bar or right-of-bar TASK_LABEL): same unit as the bar.
+	// Checked after body so the body rect still owns the interior; labels that
+	// fall outside a narrow bar still select/drag the parent task (SR-TASK-UNIT).
+	for (const auto& it : snap.items) {
+		if (it.kind != HtItemKind::TaskLabel) continue;
 		if (InRect(it.rect, x, y)) {
 			hit.zone = HtZone::TaskBody;
 			hit.kind = HtItemKind::Task;

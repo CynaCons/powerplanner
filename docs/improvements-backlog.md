@@ -1,10 +1,14 @@
 # PowerPlanner — Improvements Backlog (handoff)
 
-> Agent self-improvement note (2026-07-10): v2.4.0 added robust before/immed/delayed trace + invariants in native/tools/harness_driver + C++ seams. Always use `python native/tools/harness_driver.py trace <profile> --check-invariants` (and scenario) + screenshots when touching selection, appbar, row ops, or RebuildChart paths. Update this file + PLAN.md + docs/native-agent-feedback-loop-plan.md after learnings.
-
-A broad brainstorm of improvements and tests, grouped by area and ID-prefixed so
-they're easy to reference/assign. Not prioritized; pick by value. Items reference
-real files where useful. "(spec)" means it should be reflected in `spec/`.
+> **Phase 13 sync (2026-07-17):** Quality infrastructure is no longer “pick by
+> value” for NTS/CI/DOC items below — those are scheduled in `PLAN.md` Phase 13
+> (v2.8.0–v2.8.5). Prefer PLAN checkboxes for status. This file remains a
+> brainstorm for product/feature ideas and long-horizon work.
+>
+> Agent note: always use `python native/tools/harness_driver.py trace <profile>
+> --check-invariants` (and scenario/walkthrough) when touching selection, appbar,
+> row ops, or RebuildChart. Native commands: `AGENTS.md`. Harness index:
+> `native/tools/README.md`.
 
 ---
 
@@ -124,31 +128,35 @@ real files where useful. "(spec)" means it should be reflected in `spec/`.
 - E2E-07 Visual-regression CI (Playwright screenshots) for web; flag diffs.
 
 ## L. Tests — native conformance & harnesses
-- NTS-01 Add a real C++ test framework (doctest/Catch2) for `GanttLayout`, `GanttJson`, inverse projection.
-- NTS-02 Native conformance over ALL fixtures (today the harness skips fixtures lacking `*.expected.json`).
-- NTS-03 Headless render test via an SVG/GDI+ backend (no PowerPoint dependency) for CI.
-- NTS-04 Round-trip fuzz: random docs → insert → pull → equals.
-- NTS-05 Reflow fuzz: random bar moves → reflow → dates match positions.
-- NTS-06 Overlay coordinate test across DPI/zoom levels (assert `PointsToScreenPixels` mapping).
+- NTS-01 Add a real C++ test framework (doctest/Catch2) for `GanttLayout`, `GanttJson`, inverse projection. → **PLAN v2.8.4**
+- NTS-02 Native conformance over ALL fixtures (today the harness skips fixtures lacking `*.expected.json`). → **PLAN v2.8.4**
+- NTS-03 Headless render test via an SVG/GDI+ backend (no PowerPoint dependency) for CI. → **PLAN v2.8.4** (design/MVP)
+- NTS-04 Round-trip fuzz: random docs → insert → pull → equals. → **PLAN v2.8.4** (or document defer)
+- NTS-05 Reflow fuzz: random bar moves → reflow → dates match positions. → **PLAN v2.8.4** (or document defer)
+- NTS-06 Overlay coordinate test across DPI/zoom levels (assert `PointsToScreenPixels` mapping). → related **PLAN v2.8.2** DPI policy
+- NTS-07 Continuous paint cadence (30/60 Hz) during drag/hover. → **PLAN v2.8.1**
+- NTS-08 Visual goldens fail-closed + token/visual-vocabulary gates. → **PLAN v2.8.2**
+- NTS-09 SR-ID → scenario coverage map. → **PLAN v2.8.3**
 
 ## M. Tooling / DevEx / CI
-- CI-01 GitHub Actions: run `npm test` + `npm run lint` + `tsc -b` on PRs.
-- CI-02 GitHub Actions: build the native DLL (windows runner, MSVC) + run the conformance harness.
-- CI-03 GitHub Actions: build the single-file HTML and upload as an artifact; size check.
-- CI-04 Regenerate `spec/visual/*` and fail if they drift from committed (visual-spec freshness gate).
-- CI-05 Pre-commit hooks (lint/format/typecheck).
-- CI-06 Normalize line endings (`.gitattributes`) — the repo currently warns LF→CRLF constantly.
-- CI-07 `clang-format`/`.editorconfig` for the native C++.
-- CI-08 A `native/CMakeLists.txt` (or .vcxproj/.sln) so the add-in opens in an IDE, alongside the batch scripts.
-- CI-09 Make the GIF/screenshot generation a documented `npm run` target set for refreshing gallery assets.
+- CI-01 GitHub Actions: run `npm test` + `npm run lint` + `tsc -b` on PRs. (web; still open)
+- CI-02 GitHub Actions: build the native DLL (windows runner, MSVC) + run the conformance harness. → **PLAN v2.8.4**
+- CI-03 GitHub Actions: build the single-file HTML and upload as an artifact; size check. (web; still open)
+- CI-04 Regenerate `spec/visual/*` and fail if they drift from committed (visual-spec freshness gate). (related v2.8.2 parity)
+- CI-05 Pre-commit hooks (lint/format/typecheck). (still open)
+- CI-06 Normalize line endings (`.gitattributes`) — the repo currently warns LF→CRLF constantly. (still open)
+- CI-07 `clang-format`/`.editorconfig` for the native C++. → **PLAN v2.8.5**
+- CI-08 A `native/CMakeLists.txt` (or .vcxproj/.sln) so the add-in opens in an IDE, alongside the batch scripts. → **PLAN v2.8.5**
+- CI-09 Make the GIF/screenshot generation a documented `npm run` target set for refreshing gallery assets. (still open / gallery_matrix exists)
 
 ## N. Docs
-- DOC-01 Architecture overview diagram (spec → web → native) in the README/docs.
-- DOC-02 Contributor guide (build web, build native, run tests, run harnesses).
-- DOC-03 Native add-in developer guide: scene/renderer model, how to add a primitive, how reflow works.
-- DOC-04 Keep `PLAN.md` and `docs/native-addin.md` in sync; cross-link the SRS.
-- DOC-05 Troubleshooting expansion (add-in not loading, bitness, blocked DLL) — partly in install guide.
-- DOC-06 Changelog/release notes automation.
+- DOC-01 Architecture overview diagram (spec → web → native) in the README/docs. (still open)
+- DOC-02 Contributor guide (build web, build native, run tests, run harnesses). → **partial: AGENTS Native Commands + native/tools/README (v2.8.0)**
+- DOC-03 Native add-in developer guide: scene/renderer model, how to add a primitive, how reflow works. (still open; see native-addin.md)
+- DOC-04 Keep `PLAN.md` and `docs/native-addin.md` in sync; cross-link the SRS. → **PLAN cockpit + STRUCTURE done (v2.8.0)**
+- DOC-05 Troubleshooting expansion (add-in not loading, bitness, blocked DLL) — partly in install guide. (still open)
+- DOC-06 Changelog/release notes automation. (still open)
+- DOC-07 Archive superseded on-slide plans; agent surface hygiene. → **done v2.8.0**
 
 ## O. Accessibility & i18n
 - A11Y-01 Screen-reader labels + roles across the web app chrome and SVG (title/desc).

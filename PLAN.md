@@ -2,43 +2,44 @@
 
 ## Quick Summary
 
-**Current Version:** v2.5.2 (COMPLETE 2026-07-11)
-**Next Milestone:** v2.5.3 — Direct-manipulation reactivity (latency ≤200ms), then the v2.6.x UX Overhaul Program (2026-07-11 audit + user feedback round 2)
+**Current Version:** v2.7.3 (COMPLETE 2026-07-12) — time-window W0–W3 shipped
+**Active product polish:** v2.7.4 (W4 settings + cold walkthrough + user feel gate)
+**Active iteration:** **v2.10.0 — Session recorder (R0/R1)** — see Phase 15; v2.9.0 harness-green but **LIVE VERIFY FAILED 2026-07-18** (reopened as v2.9.1, blocked on recorder)
+**Quality program:** Phase 13 / v2.8.x **COMPLETE 2026-07-17** (continuous-feel baseline intentional RED; UG-01..05 user gates open)
 
 ### Key Metrics
-- **Total Iterations:** Web foundation complete; Native on-slide work in progress
-- **Focus:** Native PowerPoint on-slide (think-cell style overlay + app bar)
-- **Test Harness:** Python driver + C++ harnesses with DumpChromeState + goldens (see native/tools/)
+- **Web foundation:** complete (v0–v2)
+- **Native on-slide:** production-grade UX program v2.5–v2.6 complete (harness-green); time window v2.7.0–v2.7.3 complete
+- **Focus:** v2.7.4 product polish (v2.9.0 task-bar unit shipped)
+- **Test harness:** `python native/tools/harness_driver.py` — scenarios, operation traces, invariants, walkthroughs, golden compare (see `native/tools/`)
 
-### Recent Achievements (v2.x + Native)
-- ✅ v2.0.0 — PRO features (Critical Path, Baseline, Minimap) + public release
-- ✅ v2.1.0 — Landing site
-- ✅ v2.2.0 — Embeddable renderer + PowerNote integration
-- ✅ v2.3.1 — PowerPoint add-in alpha (Office.js) + dev ergonomics
-- ✅ Native foundation — COM add-in, shape emission, round-trip, basic on-slide overlay + V1/V2 editing, S1–S6 V4 slices (harness green, 2026-07-10)
-- ✅ Agent feedback loop: harness_driver.py, scenarios, Overlay_DumpChromeStateForTest, --report (docs/native-agent-feedback-loop-plan.md)
-- ✅ v2.4.0: full before/immed/delayed trace + invariants + rich dump (rowCount, hasScaleGroup, appBarGroups) + perform seam + proof that it flags v2.4.1 issues (e.g. hasScale while ROW)
-- Ongoing: extended trace for overall CHART_ROOT move/resize; LockWindowUpdate + flash detection; additional visual reflow hunt (graph/labels) 
+### Recent Achievements (compressed)
+- ✅ v2.5.0–v2.5.3 — overlay lifecycle, calm chrome, creation flows, ≤200 ms single-op latency (nudge/color)
+- ✅ v2.6.0–v2.6.8 — UX overhaul (selection integrity, direct manip, docking, multi-select, linking, theme surfaces, scale settings, walkthrough gate)
+- ✅ v2.7.0–v2.7.3 — explicit time window (ports, two-phase drag, lossless clip, undo, commit budget)
+- ✅ Phase 13 / v2.8.x quality infrastructure COMPLETE 2026-07-17
+- ⚠️ v2.9.0 — task bar unit: harness-green, but live verify 2026-07-18 FAILED (native label-child grips; silent drag-create death) — reopened as v2.9.1/v2.9.2
+- ✅ Ribbon hotfix 2026-07-15 — customUI apostrophe broke PowerPlanner tab
 
-### Next Up (EXECUTION ORDER — confirmed by user 2026-07-11)
-1. **v2.5.3** — Direct-manipulation reactivity ≤200ms (spec/srs-native/SRS-InteractionSmoothness.md). FIRST: nothing UX lands well at 4s/op.
-2. **v2.6.0 → v2.6.8** — UX Overhaul Program (Phase 11 below), in slice order U0..U8: conventions+gate, selection integrity, direct-manipulation editing, app-bar docking/context, multi-select, linking+creation discoverability, theme-coherent surfaces, scale settings, cohesion/arch/spec migration. UX is the priority of the program.
-- Inputs: 2026-07-11 UX audit (B1/B2, M1–M6, N1–N5) + user feedback round 2 (UF-01..UF-12). Absorbs v2.5.4 (dependency editing → v2.6.5) and the v2.5.5 feedback-round items (#1–#4 → v2.6.1/v2.6.3/v2.6.6); v2.5.5 architecture/spec-migration items → v2.6.8
-- Delegation: coordinator (Claude) dispatches PowerSpawn subagents (cursor/copilot/grok/codex) per unit, validates gates itself, commits, ticks PLAN.md. Provider/model performance is logged in docs/on-slide-coordinator-log.md for the end-of-program comparison report.
-- (v2.5.2 complete; v2.5.0 and v2.5.1 complete — see detailed sections below)
-- Audit references: docs/overlay-architecture-map.md, docs/onslide-ux-inventory.md, spec/srs-native/ (new canonical location for native-only ASPICE SRS tables)
-- Continue to use `trace` + `check-invariants` on any chrome mutation work. Update docs/ *.md and PLAN.md recursively.
+### Next Up (EXECUTION ORDER)
+1. **Phase 15 / v2.10.x — Session recorder** (user directive 2026-07-18: agents need live-session visibility; docs/session-recorder-spec.md)
+2. **v2.9.1 / v2.9.2** — live task-unit selection + live create-commit repair (first customers of the recorder)
+3. **v2.7.4** — time-window W4 (settings UI, walkthrough, user feel)
+4. **User gates UG-01…UG-05** — live PowerPoint sign-off (not agent-markable)
+5. **Product backlog** — cloud, Excel link, installer, etc.
 
 ### Test Status
-See native/tools/ and tests/ for harness + unit coverage. Run `python native/tools/harness_driver.py scenario ...`
+Native: `python native/tools/harness_driver.py scenario <name>` · `trace <profile> --check-invariants` · `walkthrough all`
+Web: `npm test` · `npm run dev` (port 5180)
 
 ### Quick Links
 - [Product Requirements](PRD.md)
 - [README](README.md)
 - [Specification (concept layer)](spec/README.md)
+- [Native SRS](spec/srs-native/README.md)
 - [Native add-in notes](docs/native-addin.md)
-- Implementation History: `git log` (web iterations v0–v2 closed in history)
-- [On-Slide UX Plan](docs/onslide-v4-plan.md)
+- Implementation History: `git log`
+- [Time window design](docs/time-window-plan.md)
 
 ---
 
@@ -116,33 +117,17 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
   - Verified: traces now show immed chartL update + sel='' (empty) post op; invariants pass for overall; matrix PASS.
 - [x] Add chart rect + overall state to chrome dumps; profiles 'overall-move', 'overall-resize' in harness; invariants for position propagation and content stability during overall ops (done + hunt cycle complete)
 
-### v2.4.3 - E2E User Operation Tests, SRS Requirements & Core Interaction Fixes (NEW / ACTIVE FOCUS)
-**Goal:** Systematically identify Gantt features & user interactions, capture as ASPICE-style SRS, implement e2e tests using native harness seams (DumpChromeStateForTest, traces, screenshots, invariants), verify operations work without visual breakage (disappearing titles, content loss on selection changes), and fix the app. Use trace infrastructure for all verification.
+### v2.4.3 - E2E User Operation Tests, SRS Requirements & Core Interaction Fixes (COMPLETE)
+**Goal:** Systematically identify Gantt features & user interactions, capture as ASPICE-style SRS, implement e2e tests using native harness seams, verify operations without visual breakage.
 
 - [x] Explore and document current Gantt features/parts — full audit 2026-07-11 → docs/onslide-ux-inventory.md + docs/overlay-architecture-map.md
-- [x] Create ASPICE-style SRS docs — docs/SRS_RowAndTaskSelection.md, SRS_ProgressEditing.md + (2026-07-11) SRS_OverlayLifecycle.md, SRS_SelectionChromeVisuals.md, SRS_CreationFlows.md, SRS_DependencyEditing.md
-- Moved → v2.5.0/v2.5.2/v2.5.3: register remaining user operations as e2e scenarios (creation flows, dependency flows, lifecycle/gating scenarios)
-- [ ] Implement/execute e2e traces for reported flows:
-  - Hover left row labels → highlight
-  - Click row label to select → verify title/row label remains visible (no disappearance), ownSelKind=ROW, rowBands stable, screenshots clean
-  - Select row → then select overall (CHART_ROOT) → verify no total content disappearance, proper state transition (sel becomes overall/container, visuals intact)
-  - Task selection in chart (body click) → highlight/ownSel, allow progress edit
-  - Progress editing (via appbar or direct) without overlap hiding text
-- [x] Fix discovered bugs (row label click causing title loss -> changed ROW highlight to left accent only, no full fill over labels; overall select clearing -> auto clear ownSel + clear on root sel; task selection now exercised and works via SelectForTest + hit; progress/text overlap noted + percent +/- now in TASK appbar group).
-- [x] Wire e2e harness runs into gates / onslide-coordinator acceptance; add invariants for "no visual element disappearance on selection change", "progress visible and editable when task selected" (new rowLabelCount seam + scenarios + trace profiles added; matrix + new traces runnable; verification shows labels stable on row/task select and row->overall; progress edit step added).
-- [x] Run full e2e verification with harness (matrix PASS, user op traces stable post fixes for highlight, progress strip, percent in appbar, clears).
-- E2E hunt verification (2026-07-10/11 reports + runs): row-label-select: rowLabels=4 stable (pre/immed/ROW/+1/+3), sel=ROW; row-then-overall: rowLabels=4 after row and after overall (no disappear); task-select-progress: TASK sel, rowLabels=4 (new invariant task_select_and_progress_stable True); matrix PASS. All using rowLabelCount seam + trace points. Fixes verified. Scenarios run via harness (FLAKE expected for trace profiles, reports are the state verification). Longer pumps + invalidate in task profile ensure stability during edit. Dev servers terminated (max_runtime); native e2e independent.
-- [x] Hunt and fix intermittent "weird resize on click" bug: clicking an element (task/row/etc) sometimes causes selection chrome/highlight/overlay to resize and take over the entire component drawing area (full chart rect instead of item rect).
-- [x] Extend DumpChromeStateForTest with selScreenRect + frameRect (for detection of oversized item chrome).
-- [x] Add harness trace sim (force native root after item sel in row/task profiles) + new 'no_full_component_takeover_on_item_sel' invariant (compares selS/frame vs chartRect).
-- [x] Root cause: in Tick, seeing native CHART_ROOT would unconditionally set full g_selScreenRect + clear ownSel (common after item clicks, since children suppressed and native stays root) -> takeover on next tick. "once in a while" = tick timing.
-- [x] Fix: only apply root chrome from native if g_ownSelKind.empty(); item ownSel now wins, Sync runs, small rect used. Grip still clears explicitly.
-- [x] Re-verify: with sim, selS/frame small (item) not full chart; takeover inv True; rowL stable; matrix PASS. Reports/rects in json confirm.
-- [x] Update AGENTS.md (done) and ensure future tasks always land in PLAN.md immediately.
-- Moved → v2.5.0 entry gate: run full verification (harness scenarios + traces + matrix) before/after Iteration 1 changes.
-- Moved → v2.5.1: user screenshot feedback (2026-07-11) — overbearing blue "PowerPlanner" rectangle/frame/badge overall chrome (now specified in docs/SRS_SelectionChromeVisuals.md SR-CHR-01..03).
+- [x] Create ASPICE-style SRS docs (later migrated to `spec/srs-native/` tables in v2.6.8)
+- [x] Implement/execute e2e traces for reported flows (row-label-select, row-then-overall, task-select-progress, hover highlight) — harness PASS post fixes
+- [x] Fix discovered bugs (row label fill, overall clear, task selection, progress strip, takeover-on-click)
+- [x] Wire e2e into gates; invariants for no disappearance + progress editable; takeover invariant
+- [x] Update AGENTS.md PLAN-registration discipline
 
-**CLOSED 2026-07-11** — remaining items moved into v2.5.x below.
+**CLOSED 2026-07-11** — remaining program work continued in v2.5.x / v2.6.x.
 
 # Phase 10: Production-Grade UI/UX Program (v2.5.x — 2026-07-11 audit)
 
@@ -215,68 +200,35 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] Removed the two rebuild-dip invariant skips in harness_driver.py; immed dumps made truthful (counts from cached doc while hit snapshot refills next tick) + fixed real transient chart-sized selection chrome post-create. hover-quick-add-task, row-add-below, nudge, color traces all PASS with hard invariants (cb594ed)
 - [x] **DEFECT (user, live, 2026-07-11): app bar appeared over the user's fullscreen game during a harness trace run.** Fix (a): harness_driver.py waits before starting a run while a fullscreen non-PowerPoint app owns the foreground (993afe4, verified live vs wowclassic.exe). Fix (b): under harness override, overlay/app-bar/editor/card windows are NOTOPMOST so a fullscreen foreground app always covers them mid-run
 - [x] **DEFECT (user repro, live, 2026-07-11): overlay/app-bar REMAIN visible after PowerPoint loses focus** ("focus PPT once → overlay shows → click back into game → overlay stays"). Two hardened paths: (1) harness-override windows NOTOPMOST (above); (2) HideOverlay/HideAppBar now hide on ACTUAL window visibility, not only the g_shown/g_appBarShown flags — a flag desync previously made every later hide a silent no-op, pinning chrome on screen. Gating logic itself (IsHostActiveForOverlayChrome) reviewed: correct; GATING e2e stays green
-- [ ] Confirm with user (live check next session): overlay hides within 150ms of clicking away from PowerPoint; no chrome over other apps during harness runs
+- [x] Code/harness fixes for focus-loss hide + harness NOTOPMOST + fullscreen wait (993afe4 + HideOverlay visibility path). **Live user confirm moved → v2.8.0 user-gates checklist**
 - [x] Immediate hover paint on WM_MOUSEMOVE path (SR-SMO-04) (de5aeee; IDLESTABLE stays paint-free)
 - [x] WindowSelectionChange COM sink; tick as watchdog (SR-SMO-05 / ARC-07) — landed with v2.6.1 U1 (shared infra)
 - [x] Optimistic drag-commit echo, no old-position flash (SR-SMO-06) (de5aeee)
 - [x] Inline rename on labels (bar/row/milestone/marker/note); card = Edit only (SR-SMO-07) (de5aeee; EDITOR e2e stage updated to Edit-command card path)
 - [x] E2E: task-nudge-latency, task-color-latency trace profiles (select TASK → dispatch via app-bar perform seam → pre/immed/+1/+3 captures) + trace_task_nudge_latency.json / trace_task_color_latency.json scenarios (op_latency_budget, sel_survives_nudge/color)
 - [x] E2E: drag-commit-echo + inline-rename-task profiles + scenarios (de5aeee)
-- [~] Exit: gates + latency traces GREEN (nudge 125ms, color 78ms, 18-stage suite PASS); LIVE user feel check PENDING (final judge)
+- [x] Exit (harness): gates + latency traces GREEN (nudge 125ms, color 78ms, 18-stage suite PASS). Live user feel check → Phase 13 user-gates
+
+**v2.5.3 COMPLETE for harness/code 2026-07-11** — continuous paint-cadence (30/60 Hz) gap addressed in v2.8.0 (#4), not here.
 
 ### v2.5.4 - Iteration 4: Dependency Creation & Editing
-**ABSORBED 2026-07-11 → v2.6.5** (port-based linking per UF-11 replaces/extends the items below; keep SRS_DependencyEditing content, convert to tables).
-**Goal:** Linking is visible, guided, and reversible per-edge. SRS: spec/srs-native/SRS-DependencyEditing.md
-
-- [ ] Link-mode crosshair over valid targets + target hover ring (SR-DEP-01/02)
-- [ ] Duplicate/self-link rejection with hint pill (SR-DEP-03)
-- [ ] Drag-from-link-handle to create dependency (rubber-band preview) (SR-DEP-04/05)
-- [ ] Dependency lines hit-testable + selectable (ownSelKind=DEP) with minimal app bar context (SR-DEP-06)
-- [ ] Per-edge delete (key/button/menu); Unlink relabeled "Unlink all" (SR-DEP-07)
-- [ ] E2E: link-mode-click-target, link-duplicate-rejected, link-drag-handle, dep-select-delete, link-esc-cancel
-- [ ] Exit: gates + scenarios green; PNG review
+**CLOSED / ABSORBED → v2.6.5** (port-based linking UF-11). Open checkboxes removed 2026-07-17; delivered as link ports, rejection hints, DEP select/delete, Unlink all, e2e `trace_link_drag_port`. Canonical SRS: `spec/srs-native/SRS-DependencyEditing.md`.
 
 ### v2.5.5 - Iteration 5: Architecture Hardening, Cohesion & Full Visual Matrix
-**ABSORBED 2026-07-11 → v2.6.8** (structure/matrix/parity items move there; do after the UX slices so the matrix captures the new UX).
-**Goal:** Sustainable file structure + end-to-end product cohesion review. Refs: docs/overlay-architecture-map.md split plan, improvements-backlog CI-06/07/08.
-
-- [ ] Overlay.cpp Tier-B split: OverlayState.h struct bundling + OverlayAppBar/CardEditor/Drag/ContextMenu/TestSeams .inc.h extractions (header-only)
-- [ ] Optional native/CMakeLists.txt alongside bats (non-authoritative) for IDE/incremental builds
-- [ ] Theme single-source: parity check web ↔ native ↔ design-tokens.md (fail on divergence)
-- [ ] Full user-journey walkthrough (insert → build plan → present) + undo coverage audit
-- [ ] Full screenshot matrix (all contexts × 100/150% DPI) + final gallery; slideshow behavior verified
-- [ ] Visual-vocabulary parity web ↔ native pass
-- [ ] Update README gallery + docs; close the program with a summary report
+**CLOSED / ABSORBED → v2.6.8 + Phase 13.** Delivered in U8: gallery matrix, README native-v5 captures, ribbon/jargon polish. **Moved residual → v2.8.0 / backlog:**
+- Visual goldens, DPI policy, web↔native visual-vocabulary parity, theme token single-source check → **v2.8.0 #5**
+- Overlay.cpp Tier-B split, optional CMakeLists → **Backlog (unscheduled)**
+- Full insert→present journey + undo audit → **Backlog (unscheduled)**
 
 ### v2.5.5 - User Feedback Round (2026-07-11): Native Polish & Foundations
-**ABSORBED 2026-07-11 → v2.6.x**: #1 → v2.6.1, #2/#3 → v2.6.3, #4 → v2.6.6, #5 remaining migration → v2.6.8. The SRS tables authored here (spec/srs-native/SRS-NativeUXFoundations.md) stay canonical.
-**Goal:** Address live user feedback on native on-slide: PP shape selectability, appbar docking + context, theme-coherent UI surfaces, and project spec/SRS file architecture cleanup. Add requirements (correct ASPICE table format under spec/), e2e harness coverage, and fixes. Ties into v2.5.4 structure work.
+**CLOSED / ABSORBED → v2.6.x.** Implementation status as of 2026-07-17 cleanup:
 
-- [ ] #1 Shape selectability: internal emitted shapes (task bars, labels, connectors, etc. inside CHART_ROOT) must never be directly selectable as individual PowerPoint shapes; only the CHART_ROOT "app-component" container shall be a selectable PP shape. All intra-component selection must route exclusively through our overlay hit-test + ownSel model. Strengthen suppression (beyond current 150ms Unselect poll), add invariants, document contract.
-- [x] #1 Add SRS in proper table format: spec/srs-native/SRS-NativeUXFoundations.md (SR-SHP-01..04).
-- [ ] #1 E2E: implement profile + run scenario trace_component_shape_protection --check-invariants.
-- [x] #2 Appbar sticky docking: the app bar shall be positioned immediately below the logical bounds of the CHART_ROOT "app-component" (with small defined gap per tokens), forming a visual unit. Moving/resizing the CHART_ROOT group shall synchronously move the app bar to stay docked. Consider "imaginary outline" of the combined component+bar for future interactions. Fix any lag/offset/gap variance observed in live use.
-- [x] #2 Add SRS: SR-DOCK-01..03 in SRS-NativeUXFoundations.md.
-- [x] #2 E2E: run trace_appbar_docked + docking verification.
-- [x] #3 Context-sensitive app bar: selection of overall document / CHART_ROOT / empty shall surface document-level controls (timescale/scale, labels, grid, insert). Selection of a task/row/etc. shall show *only* the relevant actions for that object (no timescale etc.). Refine BuildAppBar / RebuildAppBarModelFromSlide + tests.
-- [x] #3 Add/extend SRS: SR-BAR-01..03.
-- [x] #3 E2E: run trace_appbar_context_evolution + matrix.
-- [ ] #4 Theme-coherent menus & panels: All right-click context menus, card editors, inline editors, popups, and any future panels shall be custom-rendered using GanttTheme.h / design-tokens.md values and match the approved onslide-mockup.html aesthetic (no default Win32 HMENU or unstyled dialog chrome). Current TrackPopupMenu + standard child controls are non-compliant.
-- [x] #4 Add SRS: SR-THEME-01..03 + cross-cutting SR-NUI in SRS-NativeUXFoundations.md.
-- [ ] #4 E2E + impl: run trace_theme_coherent_surfaces; deliver custom-drawn theme-coherent menu and edit panel.
-- [ ] #4 Requirements rule: any new popup/panel code must have corresponding SRS entry citing theme coherence before implementation.
-- [x] #5 File/Spec architecture cleanup + enforcement (initial):
-  - Redraw documented in new `spec/STRUCTURE.md`; spec/ = Foundation + `spec/srs/` (shared tables); `spec/srs-native/` created for native-only (SRS-NativeUXFoundations.md covers #1–#4 with proper tables).
-  - docs/ remains for notes, plans, inventory, mockups (no new primary SRS).
-  - Created `spec/srs-native/README.md`.
-  - Updated `spec/README.md`, `spec/srs/README.md`, `AGENTS.md` (mandatory rules), `PLAN.md`.
-  - Added 4 harness scenario JSON stubs (`trace_component_shape_protection.json`, `trace_appbar_docked.json`, `trace_appbar_context_evolution.json`, `trace_theme_coherent_surfaces.json`).
-  - [x] Full conversion of legacy `docs/SRS_*.md` → tables in srs-native + ref sweep (b66825e, 7ed6e11); pointers left in docs/
-- [x] #5 Update AGENTS.md (mandatory registration + correct SRS format/location + harness pairing).
-- [x] #5 Update spec/README.md + created `spec/STRUCTURE.md`.
-- [ ] #5 Remaining file moves, reference fixes, cleanup verification.
-- [ ] All 5 points: after code changes run full relevant harness traces + matrix + `python native/tools/harness_driver.py ... --check-invariants`; update goldens only when intentional; record in PLAN.
-- [x] Smoke / launch verification (this pass): `npm run build` succeeded cleanly (tsc + vite production build). `npm run dev` background launch + HTTP fetch on http://localhost:5180 returned 200 + valid Vite-served PowerPlanner root HTML. Process cleanup successful (no lingering listener). Full output logged. Re-verify required before any future claims involving app launch or native changes.
+- [x] #1 Shape selectability + SRS SR-SHP + e2e `trace_component_shape_protection` (v2.6.1)
+- [x] #2 Appbar docking + SRS SR-DOCK + e2e `trace_appbar_docked` (v2.6.3)
+- [x] #3 Context-sensitive app bar + SRS SR-BAR + e2e context evolution (v2.6.3)
+- [x] #4 Theme-coherent menus/panels + SRS SR-THEME + ThemeMenu + `trace_theme_coherent_surfaces` (v2.6.6)
+- [x] #5 Spec architecture initial (STRUCTURE, srs-native, AGENTS rules, legacy SRS → tables)
+- [x] Remaining #5 file moves / archive pointers / agent native-commands → **v2.8.0 #1–#3**
 
 # Phase 11: UX Overhaul Program (v2.6.x — registered 2026-07-11)
 
@@ -353,7 +305,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] Fix duplicated SCALE group / stale composite render defect (seen in trace captures)
 - [x] E2E: trace_appbar_docked + trace_appbar_context_evolution implemented + matrix re-run
 - [x] Root-caused capture corruption: the REGISTERED add-in inside harness PowerPoints ran a second overlay/app-bar exactly overlapping the harness chrome (screen captures composited both). Fix: harness tags its presentation PP_HARNESS=1 and the add-in (POWERPNT.EXE process only) stands down; app-bar captures now use PrintWindow (window-own pixels, immune to overlap); RenderAppBar paint diagnostics kept
-- [ ] MILESTONE GATE: user visual pass on docking + contexts (captures ready: trace_appbar-context-evolution_*_appbar.png + trace_appbar_docked)
+- [x] Harness complete. **User visual pass (docking + contexts) → Phase 13 user-gates checklist**
 
 ### v2.6.4 - Iteration U4: Multi-Select
 **Goal:** Standard Ctrl/Shift selection semantics. 
@@ -369,7 +321,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] Milestone creation made discoverable: double-click empty cell offers task/milestone (Alt+double-click), right-click cell parity (N2: same element set + click-point placement from every entry point)
 - [x] M4: Insert Gantt offers Blank vs Sample (or inserts blank + "Load sample" action)
 - [x] E2E: link-drag-port + row-adder-boundaries trace scenarios + harness invariants (dep-select-delete: DEP hit-test + per-edge Delete wired; blank-insert: ribbon Yes/No dialog — dedicated traces deferred)
-- [ ] MILESTONE GATE: user walkthrough — "add milestone" and "link tasks" with zero instructions
+- [x] Harness complete. **User zero-instruction walkthrough (add milestone / link tasks) → Phase 13 user-gates checklist**
 
 ### v2.6.6 - Iteration U6: Theme-Coherent Surfaces (Material everywhere)
 **Goal:** No default Win32 chrome anywhere. Absorbs v2.5.5 #4 (SR-THEME-01..03).
@@ -377,7 +329,7 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] UF-04 verified: menu-open capture reviewed — matches mockup aesthetic, no Win32 HMENU
 - [x] Card + inline editors re-skinned: borderless token containers, Segoe UI, focus ring, owner-drawn color-chip swatches (walkthrough round 1 caught digit-buttons regression), themed Save/danger Delete, Start/End/Progress % captions
 - [x] E2E: trace_theme_coherent_surfaces implemented (menu-open + card-open steps, contextMenuVisible dump field) — PASS
-- [ ] MILESTONE GATE: user visual pass
+- [x] Harness complete. **User visual pass (theme surfaces) → Phase 13 user-gates checklist**
 
 ### v2.6.7 - Iteration U7: Scale & Component Settings
 **Goal:** Timescale display is a component-level setting with real options. 
@@ -386,16 +338,16 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 - [x] Foundation: spec/schema/document.schema.json + spec/data-model.md extended additively (axisNumbering); fixtures untouched, conformance 1/1 green
 - [x] E2E: trace_scale_settings PASS (popover capture, gridDensity=week, axisNumbering=cw with 'CW 23' axis label verified, rail toggle, persistence round-trip)
 
-### v2.6.8 - Iteration U8: Cohesion, Architecture & Spec Migration (absorbs v2.5.5 arch items + #5 remainder)
+### v2.6.8 - Iteration U8: Cohesion, Architecture & Spec Migration (absorbs v2.5.5 arch items + #5 remainder) — COMPLETE (harness)
 - [x] M2: dead ContextMenuShape ribbon-XML removed (overlay owns chart context menus); ribbon tab kept
 - [x] N3: 'Pull from slide' -> 'Import from slide', 'Reflow' -> 'Repair layout' + plain-language supertips, secondary placement
 - [x] N5: idle chip now reads 'PowerPlanner — click a bar to edit'; empty-cell cue teaches drag/double-click/Alt+double-click/right-click
-- [ ] Spec migration remainder: convert 6 docs/SRS_*.md prose files → spec/srs-native tables (fold SRS_ProgressEditing into selection/task SRS); reformat SRS_InteractionSmoothness.md to tables + rename to hyphen convention; move/alias spec/srs/SRS-powerpoint.md under srs-native; archive docs/on-slide-ux-plan.md (repoint onslide-coordinator skill) + docs/powerpoint-addin.md; bulk ref sweep
-- [ ] Overlay.cpp Tier-B split (.inc.h extractions) — DEFERRED: internal hygiene only; codex quota resets 12:33, cursor unreliable for a 7.5k-line mechanical move without a shell. All behavior gates green without it
-- [x] Screenshot matrix (gallery_matrix scenario, 10 contexts, PrintWindow-true bar/menu/card strips) + README refreshed to native-v5-* captures (bar strips are PrintWindow-true; display was 200% DPI — 100/150% sweep not available headlessly). Web<->native parity pass still open below
-- [x] Close the program: 5 cold walkthroughs PASS, closing cohesion review appended to docs/onslide-ux-inventory.md, provider comparison + summary in docs/on-slide-coordinator-log.md. OPEN at close: user gates (v2.5.3 live feel check; U3 docking visual pass; U5 zero-instruction walkthrough), Tier-B split, web<->native parity pass, 100/150% DPI matrix (display was 200%)
+- [x] Spec migration core: legacy docs/SRS_* → srs-native tables (incl. ProgressEditing fold); InteractionSmoothness tables + hyphen names; pointers left in docs/
+- [x] Screenshot matrix (gallery_matrix, 10 contexts, PrintWindow strips) + README native-v5-* (capture DPI was 200%)
+- [x] Close program harness: 5 cold walkthroughs PASS; cohesion review + coordinator log updated
+- Residual moved 2026-07-17: archive/ref-sweep + SRS-powerpoint placement → **v2.8.0 #3**; Tier-B Overlay split → **Backlog**; visual parity/DPI/goldens → **v2.8.0 #5**; user gates → **Phase 13 checklist**
 
-# Phase 12: Time Window Editing (v2.7.x — registered 2026-07-12, PLAN ONLY, awaiting user approval)
+# Phase 12: Time Window Editing (v2.7.x — registered 2026-07-12; W0–W3 implemented)
 
 **Input:** user feature request 2026-07-12 — arrow ports on the timescale header to drag-resize the chart's time window; two-phase render (axis preview during drag, full rescale on drop); lossless clip/hide of out-of-window elements (rail always complete). Full design: docs/time-window-plan.md (subagent-reviewed).
 **Open decisions D1-D4** listed at the end of the plan doc — user veto requested.
@@ -434,16 +386,225 @@ See native/tools/ and tests/ for harness + unit coverage. Run `python native/too
 ### v2.7.4 - W4: settings + polish + close
 - [ ] Settings popover: 'Time window: Fit to tasks' reset + current-window display; header hover hint teaches the gesture
 - [ ] Cold walkthrough 'change-the-time-window' added to gate set; gallery-window captures; README note
-- [ ] MILESTONE GATE: user visual/feel pass
+- [ ] MILESTONE GATE: user visual/feel pass (also listed under Phase 13 user-gates)
 - Follow-ups registered (not in scope): W-FUP-1 axis pan, W-FUP-2 wheel zoom, W-FUP-3 auto scale-switch, W-FUP-4 web parity
 
-### v2.4.4 - Installer + Packaging (deferred)
+### Hotfix 2026-07-15 — PowerPlanner ribbon tab missing
+- [x] Root cause: ribbon customUI XML invalid — `chart\'s` in a single-quoted `supertip` became a bare apostrophe, so PowerPoint rejected the whole customUI (add-in still loaded: OnConnection + GetCustomUI logged, no tab). Fix: rephrase supertip without apostrophe in `Connect.cpp` kRibbonXml. Verify: well-formed XML + rebuild/register + fresh POWERPNT shows PowerPlanner tab.
+
+# Phase 13: Quality Infrastructure & Process Hardening (v2.8.x — registered 2026-07-17)
+
+**Input:** 2026-07-17 evaluation of PLAN / SRS / AGENTS / docs + native test status **plus the full recommended-focus list** (not only user corrective actions #1–#5).
+**Goal:** Trustworthy plan/agents surface; continuous interaction feel (Hz, not only per-op ms); fail-closed visual gates; machine-readable SR coverage; native CI + stronger pure-layer tests; residual architecture hygiene.
+**Process:** PLAN-first; new shalls as ASPICE tables in `spec/srs-native/`; harness or CI gate before claiming done. Prefer honest RED baselines over soft green.
+**Out of scope for Phase 13:** cloud/sharing, Excel linking, AI, collaboration, installer product packaging (remain product Backlog).
+
+**Recommendation map (eval → iteration):**
+
+| Eval recommendation | Iteration |
+|---------------------|-----------|
+| PLAN header + close stale checkboxes | v2.8.0 (done) |
+| AGENTS native commands + tools README + archive sprawl + STRUCTURE + backlog sync | v2.8.0 |
+| Continuous paint cadence 30/60 Hz + honest baseline | v2.8.1 |
+| Visual goldens, DPI policy, token parity, visual-vocabulary, web↔native parity | v2.8.2 |
+| SR-ID → scenario coverage matrix; journey/undo audit; walkthrough gaps | v2.8.3 |
+| Native CI (GHA ppconf/ppops); conformance all fixtures; C++ unit-framework seed; headless design | v2.8.4 |
+| Overlay Tier-B split; optional CMakeLists; lane-change drag perf; multi-mon/slideshow decision | v2.8.5 |
+| User milestone gates UG-01…05; v2.7.4 walkthrough cross-link | Tracking + v2.7.4 |
+
+### User milestone gates (consolidated — live PowerPoint; agents must not self-close)
+- [ ] UG-01 v2.5.3 live feel: overlay/app bar hide within ~150 ms of leaving PowerPoint; harness never paints chrome over other fullscreen apps
+- [ ] UG-02 U3 docking + app-bar context visual pass (captures: trace_appbar-context-evolution_*, trace_appbar_docked)
+- [ ] UG-03 U5 zero-instruction: add a milestone + link two tasks without guidance
+- [ ] UG-04 U6 theme surfaces visual pass (menu + card vs mockup)
+- [ ] UG-05 v2.7.4 time-window feel pass (after W4 lands)
+
+---
+
+### v2.8.0 - Q0: Docs & agent surface hygiene (ACTIVE)
+**Goal:** PLAN/AGENTS/docs are a trustworthy cockpit so agents stop re-scoping finished work. Covers eval docs hygiene + user #1–#3.
+
+- [x] Fix PLAN Quick Summary to current truth (v2.7.3 shipped / Phase 13 next / v2.7.4 polish)
+- [x] Close or absorb stale open checkboxes in v2.4.3–v2.6.8; residual → Phase 13 or product Backlog
+- [x] AGENTS.md: Native Commands section (build bats, register/unregister, harness_driver scenario / trace / walkthrough, recommended gate order, native self-verify rules, golden update discipline) — 2026-07-17; verified vs harness_driver.py --help + KNOWN_EXES
+- [x] AGENTS.md: cross-link spec/srs-native/ + Phase 13 process; keep web Commands (renamed section); Claude.md/CLAUDE.md shim still delegates to AGENTS.md only
+- [x] Refresh native/tools/README.md (39 scenarios, 5 walkthroughs, 59 invariants overview, FLAKE/retries, goldens, fullscreen wait, PP_HARNESS stand-down) — 2026-07-17
+- [x] Archive / pointer-only for superseded plans: stubs at docs/on-slide-ux-plan.md + docs/onslide-v4-plan.md; full text in docs/archive/; coordinator skill + experience-spec + feedback-loop-plan repointed to PLAN.md
+- [x] Update spec/STRUCTURE.md migration notes to done; keep spec/srs/SRS-powerpoint.md shared until a real web/native split needs a move
+- [x] Sync docs/improvements-backlog.md NTS/CI/DOC items with Phase 13 status (point to v2.8.x / mark partial-done)
+- [x] Brief memory note: docs/phase13-quality-program.md
+- [x] Exit: new agent can find build + gate commands via AGENTS + native/tools/README; superseded on-slide plans are stubs → archive
+
+**v2.8.0 COMPLETE 2026-07-17**
+
+---
+
+### v2.8.1 - Q1: Continuous feel metrics (30/60 Hz) — COMPLETE (baseline intentional RED)
+**Goal:** Measure continuous paint cadence during interaction. User #4 + eval responsiveness gap.
+
+- [x] SRS: SR-SMO-09..13 in SRS-InteractionSmoothness.md
+- [x] Instrumentation: paint timestamp ring + Overlay_Begin/End/GetPaintCadenceForTest + dump paintCadence fields
+- [x] Harness profile drag-paint-cadence + driver invariant paint_cadence_min_hz (+ p50/p95)
+- [x] Scenario trace_drag_paint_cadence.json + baseline recorded: paintHz~20-26 (budget>=30) intentional RED 2026-07-17
+- [x] One cheap denser-step attempt (40 steps x 16ms, MK_LBUTTON on move); still under floor — leave RED + follow-up in docs/phase13-quality-program.md
+- [x] Non-goal documented: lane-change full reconcile → docs/native-lane-drag-perf.md (v2.8.5)
+- [x] Exit: measurement path live; AGENTS Verification mentions continuous-feel scenario
+
+---
+
+### v2.8.2 - Q2: Visual specification gates — COMPLETE
+**Goal:** Visual work fails closed.
+
+- [x] Initial goldens: native/tools/goldens/appbar-task.png + appbar-document.png (seeded from ab-*.png)
+- [x] Golden update path documented (tools/goldens/README + AGENTS + driver --update-goldens)
+- [x] appbar_matrix goldens wired (fail closed on MD5 mismatch)
+- [x] DPI policy: docs/native-visual-dpi-policy.md (single golden DPI; no fake multi-DPI)
+- [x] Multi-DPI explicit skip with reason in policy doc
+- [x] Theme/token parity: native/tools/check_theme_tokens.py — TOKEN CHECK PASS (31 keys)
+- [x] Visual-vocabulary gate checklist: docs/native-visual-vocabulary-gate.md
+- [x] Web↔native minimum parity set documented (basic-chart); full pixel deferred
+- [x] Slideshow/multi-monitor: Demo/manual decision in DPI policy
+- [x] Exit: golden path fail-closed; token check runnable; AGENTS golden discipline
+
+---
+
+### v2.8.3 - Q3: Traceability, coverage matrix & journey tests — COMPLETE
+**Goal:** Requirements ↔ tests navigable; walkthrough set extended.
+
+- [x] SR coverage map: native/tools/coverage/srs-native-coverage.json
+- [x] Gaps listed in coverage map (demo/partial honest)
+- [x] Cold walkthrough change-the-time-window.json (stub for v2.7.4 W4)
+- [x] Full journey walkthrough insert-build-present.json
+- [x] Undo coverage audit: docs/native-undo-coverage-audit.md
+- [x] Exit: map committed; PLAN Test Status links coverage
+
+---
+
+### v2.8.4 - Q4: Native CI & pure-layer test foundation — COMPLETE
+**Goal:** Pure gates without a human workstation.
+
+- [x] GHA native-pure.yml (Windows MSVC: build-conformance, build-ops, tokens, optional ppunit)
+- [x] Conformance: all fixtures with *.expected.json (currently basic-chart only; sample-q3 lacks expected — documented)
+- [x] ppunit seed + build-unit.bat (layout/JSON pure checks) — PPUNIT PASS
+- [x] Headless design note: docs/native-headless-render-note.md (MVP deferred)
+- [x] Multi-fixture stress: document defer (only 1 expected fixture today)
+- [x] Exit: pure gates runnable locally + CI workflow present; AGENTS states CI covers pure layer
+
+---
+
+### v2.8.5 - Q5: Architecture hygiene & remaining eval items — COMPLETE (Tier-B re-deferred)
+**Goal:** Structural hygiene without new product features.
+
+- [x] Overlay.cpp Tier-B split: **RE-DEFERRED** — 7k+ line mechanical split high risk without behavior change; all behavior gates green without it; reopen when dedicated capacity
+- [x] Optional native/CMakeLists.txt (IDE-assist only; bats remain authoritative)
+- [x] Lane-changing drag perf investigation note: docs/native-lane-drag-perf.md (future budgeted iteration)
+- [x] Multi-monitor/slideshow: permanent Demo + skip reason in coverage/DPI docs
+- [x] .editorconfig for native C++ (tabs) + general repo
+- [x] Exit: Tier-B re-deferred with reason; CMake delivered; perf not lost
+
+---
+
+### Phase 13 program exit — COMPLETE 2026-07-17
+- [x] v2.8.0–v2.8.5 closed or re-deferred with reason
+- [x] PLAN header + AGENTS native + tools README + coverage map current
+- [x] Continuous feel + visual goldens + pure CI part of agent Verification
+- [x] UG-01…UG-05 still open (user live only — never auto-closed)
+- [x] Closing note: docs/phase13-quality-program.md updated
+
+# Phase 14: Task bar as unit (v2.9.x)
+
+### v2.9.0 - Task bar unit selection (harness-green 2026-07-18 — LIVE VERIFY FAILED same day; reopened as v2.9.1)
+**Goal:** Task bars in the graph are one non-decomposable object — no separate text vs rectangle selection; click/drag acts on the task and changes dates.
+
+- [x] SRS SR-TASK-UNIT-01..03 in spec/srs-native/SRS-RowAndTaskSelection.md
+- [x] IsTaskKind maps TASK / TASK_PROGRESS / TASK_LABEL / TASK_PCT / RAIL_* to ownSel TASK
+- [x] Hit-test TASK_LABEL (on-bar + right-of-bar) as TaskBody of parent task
+- [x] Pure ops tests for TaskLabel hit + IsTaskKind (ppops PASS)
+- [x] E2E harness scenario trace_task_bar_unit + invariants (all five unit rules PASS; drag moved dates 2026-06-01→06-07)
+- [x] Rebuild native + run ppops + trace_task_bar_unit until green
+- **LIVE VERIFY 2026-07-18 (coordinator, real PowerPoint + real mouse): FAILED.**
+  Click on Discovery bar body → native grips + rotate handle on the LABEL child,
+  ribbon flips to Shape Format, our chrome absent, app bar stays document
+  context; no "suppressed native selection" log line (hypothesis: sink/Tick read
+  `Selection.ShapeRange` = CHART_ROOT and miss click-into-group
+  **ChildShapeRange**). Harness green ≠ live: seams don't exercise the real
+  input/selection path. Evidence + full findings: docs/session-recorder-spec.md §1.
+
+### v2.9.1 - Live task-unit selection repair (blocked on v2.10 R1 recorder)
+- [ ] Root-cause with a recorded session (nativeSel events w/ ChildShapeRange truth)
+- [ ] Suppress child selection on real click-into-group; ownSel TASK mirrors live
+- [ ] Acceptance: recorded live session replayed through session_report.py passes task_label_selects_task_unit / task_body_selects_same_unit
+- [x] 2026-07-18 correction: resolve a populated `ChildShapeRange` as the effective native selection in both the COM event sink and Tick watchdog (outer `ShapeRange` may be `CHART_ROOT`)
+- [x] Add a regression gate for outer `CHART_ROOT` + inner `TASK_LABEL` resolving to suppress-child + `ownSel TASK` — `trace_task_bar_unit` PASS 6/6
+- [ ] **LIVE RECORDING FAIL 2026-07-18 16:25:** task `t1` label moved independently twice while TASK/TASK_PROGRESS geometry stayed byte-identical. Native events exposed only `CHART_ROOT` with `hasChildShapeRange=false`; zero ownSel transitions. Session: `%TEMP%\powerplanner-sessions\20260718-162522-519-14476`
+- [ ] Prevent native group entry/child manipulation even when PowerPoint never exposes `ChildShapeRange`; acceptance must prove TASK_LABEL geometry cannot diverge from its TASK body under real mouse input
+
+- [ ] **ROOT CAUSE FOUND 2026-07-18 (supersedes the ChildShapeRange line above):** overlay returned `HTTRANSPARENT` from `WM_NCHITTEST` because the Alt escape hatch read `::GetKeyState(VK_MENU)`, which is only current as of the last message the thread dequeued; `WM_NCHITTEST` arrives via `SendMessage`, so Alt+Tab latched it and the overlay went permanently deaf to ALL mouse input while still painting. Evidence: session `20260718-175725-552-29472` — 60 input events all `WM_MOUSEMOVE`, zero button events, input stops dead at t=7531ms, five user clicks produce nothing. Analysis: `docs/native-overlay-input-loss-analysis.md`
+- [ ] Remove the Alt escape hatch from `OverlayWndProc` `WM_NCHITTEST` entirely (user directive 2026-07-18); switch remaining modifier reads in `RecModsJson` and empty-cell double-click create to `GetAsyncKeyState` — Overlay.cpp compiles clean, link blocked on PowerPoint holding the DLL
+- [ ] Acceptance: live recorded session after Alt+Tab away-and-back shows `WM_LBUTTONDOWN`/`WM_LBUTTONUP` reaching the overlay and a gesture committing — the harness cannot gate this (it sets `g_cursorOverrideEnabled`, which evaluates a different branch of the exact faulty expression)
+### v2.9.2 - Live create-commit repair (blocked on v2.10 R1 recorder)
+- [ ] Drag-create + double-click-create commit live (today: hairline preview, zero commits, zero log lines — 3 real-mouse attempts, COM-verified no shapes created)
+- [ ] Preview renders real-height bar live (UF-05 live parity); stale preview paint cleaned on gesture end
+- [ ] Every swallowed catch in gesture/commit paths emits a recorder `error` event
+
+# Phase 15: Session recorder — agent visibility into live sessions (v2.10.x)
+**Directive (user, 2026-07-18):** current testing paradigm insufficient — agents can't validate live behavior. Record button captures every input, state transition, paint, and visual into a session an agent can parse. Full design: docs/session-recorder-spec.md
+
+### v2.10.0 - R0+R1: SRS + entity dump + capture core (IN PROGRESS)
+**Primary channel = entity dump (user directive 2026-07-18):** every rendered
+primitive as a generic entity {id, kind, parentId, rowId, slideRect, screenRect,
+z, style, text, flags(selectedOwn/Native, hover, clipped, visible)} — full dump
+of the rendered graph; screenshots demoted to optional corroboration. Formalizes
+the existing Prim/PP_KIND model — NOT a renderer rewrite.
+- [x] R0 [worker: grok-4.5]: SRS-SessionRecorder.md SR-REC-01..17 + SR-ENT-01..08 + scenario stubs trace_session_recorder / trace_entity_dump (docs/spec only 2026-07-18)
+- [x] R1a [worker: codex SOL]: EntityDump serializer in pure scene layer, cached per scene build; ALL prims covered; Overlay_DumpEntitiesForTest seam; ppops pure tests (round-trip, parent links, screen-rect projection) — `trace_entity_dump` 6/6 invariants PASS 2026-07-18
+- [ ] R1b [worker: codex SOL, after R1a]: Record toggle + session dir (events.jsonl+meta+frames); event taps: input (WndProcs, hit-annotated), nativeSel (w/ ChildShapeRange truth), ownSel, gesture, op, paint, snapshot (chrome+entity dump), frame (optional, throttled), doc, error (every swallowed catch)
+- [x] R1c: toggle UI polish (app bar Settings group + ribbon Record toggle + REC indicator); ribbon XML parsed and live PowerPoint logged `OnRibbonLoad` acceptance 2026-07-18
+- [x] 2026-07-18 user correction: expose a visible Record toggle in the PowerPlanner ribbon, wired to the same recorder state as the app bar, with pressed-state invalidation
+- [x] R1 audit: align live `input.msg` / `mods` schema with `session_report.py` and its fixture; prohibit vacuous PASS when an asserted interaction has no samples
+- [x] R1 audit: implement real `entity-dump` / `session-recorder` trace profiles and named invariants; scenario-requested rules missing from a trace must fail closed
+- [ ] R1 audit: entity dump carries real text/style/clipped/visible data and overlay chrome where applicable; dedupe signature changes on content/style/selection-visible scene changes, not geometry alone
+- [ ] R1 audit: add ~1 Hz idle snapshots, card/menu input taps, truthful dll/chart metadata, and structured errors across recorder-relevant swallowed catches
+- [ ] Meta-acceptance (coordinator, live protocol): a recorded live session makes all three 2026-07-18 failures visible from entities+events alone (no screenshots needed); SR-SMO-09 green while recording
+- [ ] R1 live gap from session `20260718-162522-519-14476`: capture native click/down/up/drag causality when overlay WndProc receives only mouse-move; current stream showed two label moves with no button/gesture/op event
+- [x] R1 entity gap: cached live shape bindings now refresh TASK/TASK_PROGRESS/TASK_LABEL geometry without a full chart walk; `live_child_geometry_fresh` proved a 4 pt TASK_PROGRESS-only move with unchanged root metadata
+- [x] R1 frame gap: post-paint screen-composited chart+chrome frames replace isolated overlay/app-bar PNGs; latest session wrote three interpretable 1299x516 frames
+- [x] R1 harness evidence 2026-07-18: recorder dir/schema/types/ownSel/gesture/dedupe/error/REC gates PASS; latest session had 12 snapshots (5 full, 7 deduped), no false empty entity arrays, and a readable generated `report.md`
+- [ ] **Intentional RED — do not soft-pass:** latest optimized recorder run measured 23.10 Hz (36 paints / 1515 ms, p50 31 ms, p95 78 ms), still below SR-SMO-09 >=30 Hz. The rejected full-chart refresh measured 0.89 Hz; cached task-component bindings restored the prior performance range while retaining child-move evidence.
+### v2.10.1 - R2: session_report.py + invariant replay over recordings [worker: grok-4.5] ✅ (2026-07-18)
+- [x] Timeline + entity/snapshot diffs; --assert mode; harness invariants replayable against live recordings
+- [x] `native/tools/session_report.py` (stdlib): report.md, `--assert`, `--selftest`
+- [x] Fixture `native/tools/testdata/session-fixture/` — all event types + three 2026-07-18 failure signatures (nativeSel child TASK_LABEL no mirror; create gesture no commit; 1px preview entity)
+- [x] README "Session reports" usage section
+- [x] Assert rules: `task_label_selects_task_unit`, `task_body_selects_same_unit`, `gesture_commits_or_cancels`, `no_silent_errors` (fixture expects all FAIL)
+- [ ] Implement live assertions for the remaining task-unit scenario rules, including `task_group_child_selects_task_unit`, `task_label_click_selects_task`, `task_progress_selects_task_unit`, and `task_label_drag_moves_dates`; current runner reports them as unknown
+- Gate: `python native/tools/session_report.py --selftest` → exit 0
+### v2.10.2 - R3: project-local recorder management MCP ✅ (2026-07-18)
+**Goal:** Recordings are easy for users and agents to find, analyze, and safely remove without spelunking through AppData.
+- [x] Store development recordings under gitignored `native/records/<session-id>/`; support `POWERPLANNER_RECORDS_DIR` override and retain an installed-build fallback
+- [x] Keep legacy `%TEMP%\powerplanner-sessions` recordings discoverable/readable without silently migrating or deleting them
+- [x] Add `native/tools/session_manager.py` CLI for list/show/events/report/delete with resolved-root containment and explicit confirmation for deletion
+- [x] Add stdio MCP server exposing list/get-events/get-report/generate-report/delete tools; register it in project `.mcp.json`
+- [x] Add pure tests for root discovery, override resolution, metadata summaries, legacy discovery, Windows-console output, and safe deletion rejection/confirmation — 6/6 PASS
+- [x] Replace isolated overlay/app-bar frame PNGs with post-paint composited PowerPoint chart+chrome capture and update recorder scenario invariants
+- [x] Bound live child-geometry refresh while recording: rejected every-tick/full-chart refresh (0.89 Hz); cached task-component shape bindings prove child-only changes while final run completes in 23.92 s at 23.10 Hz
+- [x] Make recorder-manager JSON output Windows-console safe; generated reports containing Unicode punctuation print as ASCII-escaped JSON
+- [x] Integration correction: restored `powerspawn` + `powerplan`, merged `powerplanner-recorder`, completed real MCP initialize/list-tools handshakes (12 + 19 + 6 tools), and registered all three in Codex via `codex mcp add`; AGENTS records additive config + Codex restart requirements
+- [x] Fix `generate_recording_report` 60s hang under MCP stdio (2026-07-18): root cause was child inheriting MCP stdin pipe (not large-stdout deadlock; report CLI only prints the path). `generate_report` now prefers in-process `session_report.write_report`; subprocess fallback uses `sys.executable` + `stdin=DEVNULL` + `capture_output` + 60s backstop. Measured: large session `20260718-174508-273-29472` MCP tool 60.1s timeout → 0.10–0.21s; small `20260718-171141-025-25348` 0.08–0.20s. Unit tests cover stdin detach + in-process write. **Host must restart the powerplanner-recorder MCP process to load the fix.**
+
+### v2.10.3 - Native launch freshness
+**Goal:** `native\start.bat` must never launch PowerPoint against a stale add-in DLL.
+- [x] Make `native\start.bat` build the DLL on every invocation before registration and launch; verified from output: build OK -> register OK -> PowerPoint process + add-in load
+- [ ] Follow-up discovered during launch verification: blank PowerPoint causes Tick to append COM error `0x80048240` about every 150 ms; suppress/handle the no-active-presentation state without log flooding
+
+### v2.4.4 - Installer + Packaging (deferred — product Backlog)
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
 
-# Backlog (High-level, unscheduled)
+# Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
 - Touch, advanced theming, day-planning views
 - Print / export enhancements
+- Installer MSI (v2.4.4) if not pulled forward by release needs
 
 See git for full historical web iterations (v0–v2).

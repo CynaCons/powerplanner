@@ -18,6 +18,7 @@ const wchar_t* kMenuClass = L"PowerPlannerThemeMenu";
 HINSTANCE g_inst = NULL;
 ULONG_PTR g_gdiplusToken = 0;
 int (*g_scale)(int) = nullptr;
+ThemeMenuRecordInputFn g_recordInput = nullptr;
 
 int S(int px) { return g_scale ? g_scale(px) : px; }
 Gdiplus::REAL SF(float px) { return (Gdiplus::REAL)S((int)px); }
@@ -422,6 +423,7 @@ int CmdForFlyoutRow(int rowIndex) {
 }
 
 LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (g_recordInput) g_recordInput("menu", msg, hwnd, wp, lp);
 	if (msg == WM_NCHITTEST) return HTCLIENT;
 	if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
 	if (msg == WM_MOUSEMOVE) {
@@ -451,6 +453,7 @@ LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 LRESULT CALLBACK MenuWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (g_recordInput) g_recordInput("menu", msg, hwnd, wp, lp);
 	if (msg == WM_NCHITTEST) return HTCLIENT;
 	if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
 	if (msg == WM_KEYDOWN) {
@@ -579,10 +582,12 @@ int PumpUntilMenuClosed() {
 
 } // namespace
 
-void ThemeMenu_Init(HINSTANCE inst, ULONG_PTR gdiplusToken, int (*scalePx)(int)) {
+void ThemeMenu_Init(HINSTANCE inst, ULONG_PTR gdiplusToken, int (*scalePx)(int),
+	ThemeMenuRecordInputFn recordInput) {
 	g_inst = inst;
 	g_gdiplusToken = gdiplusToken;
 	g_scale = scalePx;
+	g_recordInput = recordInput;
 }
 
 int ThemeMenu_Show(const std::vector<HtMenuItem>& items, POINT screenPt, HWND ownerHwnd, bool block) {

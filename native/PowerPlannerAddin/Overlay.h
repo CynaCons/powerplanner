@@ -46,6 +46,36 @@ enum OverlayNativeSelAction {
 // records the observed kind for the harness. Returns an OverlayNativeSelAction.
 int Overlay_OnNativeSelectionChanged(const char* firstShapeKind, const char* firstShapeId, bool hasShapeSelection);
 
+// Resolve PowerPoint's grouped-selection shape. When ChildShapeRange is
+// populated, its first child is the effective user pick even though ShapeRange
+// commonly reports the outer CHART_ROOT group. This is the production entry
+// used by both the selection event sink and Tick watchdog.
+int Overlay_OnNativeSelectionChangedWithChild(
+	const char* firstShapeKind, const char* firstShapeId, bool hasShapeSelection,
+	bool hasChildShapeRange, const char* childKind, const char* childId);
+
+// R1b / SR-REC-06: stash ChildShapeRange truth from the COM selection sink
+// (Connect) or Tick watchdog BEFORE Overlay_OnNativeSelectionChanged so the
+// nativeSel event + entity flags can include hasChildShapeRange/childKind/id.
+// Cheap store; call even when recording is off (entity dump may use it).
+void Overlay_NoteNativeSelDetail(bool hasChild, const char* childKind, const char* childId);
+
+// R1b session-recorder ForTest seams (lifecycle only in this slice; no UI).
+// Start creates %TEMP%\powerplanner-sessions\<yyyymmdd-hhmmss>\ with
+// events.jsonl + meta.json + frames/. Stop flushes/closes. Zero cost when off.
+void Overlay_StartSessionRecordForTest();
+void Overlay_StopSessionRecordForTest();
+bool Overlay_IsSessionRecordingForTest();
+// Production recorder controls shared by ribbon and app-bar surfaces.
+void Overlay_SetSessionRecording(bool active);
+typedef void (*OverlaySessionRecordStateChanged)(bool active, void* context);
+void Overlay_SetSessionRecordStateChangedCallback(
+	OverlaySessionRecordStateChanged callback, void* context);
+// Last (or current) session directory as a narrow path; static buffer.
+const char* Overlay_GetSessionDirForTest();
+// Emit an error event while recording (Connect/sink catch paths).
+void Overlay_RecError(const char* where, long hr, const char* msg);
+
 // Debug/test hook: the internally-selected element's id (task/milestone/row),
 // or empty if nothing is internally selected. Drives the harness's OWNSEL
 // stage assertion. Never touches COM.
@@ -174,10 +204,23 @@ void Overlay_CommitWindowGestureForTest(const char* startISO, const char* endISO
 // Never touches COM. Safe for harnesses to call after steps.
 const char* Overlay_DumpChromeStateForTest();
 
+// R1a / SR-ENT-08: complete entity dump of every PP_KIND chart child
+// ({"entities":[...]}). Geometry is cached with BuildRowBands; flags
+// (selectedOwn/selectedNative/hover/clipped/visible) are filled from live
+// globals at call time. Never touches COM. Empty chart → {"entities":[]}.
+const char* Overlay_DumpEntitiesForTest();
+
 // Render/SWP counters and compact window-state dump for gate harnesses.
 // Never touches COM.
 void Overlay_GetRenderCountersForTest(long* overlayPaints, long* appBarPaints,
                                       long* overlaySwp, long* appBarSwp);
+// Phase 13 v2.8.1 (SR-SMO-09..12): continuous paint cadence sample during drag.
+// Begin starts a timestamp ring; each successful overlay UpdateLayeredWindow
+// records a sample; Get returns Hz = paints/window, p50/p95 inter-paint ms.
+void Overlay_BeginPaintCadenceSampleForTest();
+void Overlay_EndPaintCadenceSampleForTest();
+void Overlay_GetPaintCadenceForTest(double* outHz, long* outPaintCount,
+	long* outWindowMs, double* outP50Ms, double* outP95Ms);
 void Overlay_DumpWindowStateForTest(char* buf, int bufLen);
 
 // Test seam: open the custom theme menu at overlay client coords without blocking

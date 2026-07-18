@@ -1,0 +1,10 @@
+{
+  "name": "session_fixture_live_failures",
+  "description": "Assert invariants against the synthetic 2026-07-18 failure fixture. Expect FAILs that prove the report surfaces the live-vs-harness gap.",
+  "invariants": [
+    "task_label_selects_task_unit",
+    "task_body_selects_same_unit",
+    "gesture_commits_or_cancels",
+    "no_silent_errors"
+  ]
+}

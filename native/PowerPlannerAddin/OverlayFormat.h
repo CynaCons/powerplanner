@@ -38,9 +38,7 @@ inline void NormalizeRect(RECT& rc) {
 	if (rc.top > rc.bottom) std::swap(rc.top, rc.bottom);
 }
 
-inline bool IsTaskKind(const std::string& kind) {
-	return kind == "TASK" || kind == "TASK_PROGRESS";
-}
+// IsTaskKind lives in GanttHitTest.h (pure; shared with ops harness).
 
 inline std::wstring FormatSwatchLabel(int idx) {
 	wchar_t buf[8];
