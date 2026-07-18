@@ -11,6 +11,7 @@
     "entity_parent_links",
     "entity_dual_space_rects",
     "entity_dump_fresh_after_reconcile",
+    "entity_task_hover_scoped",
     "entity_serializer_harness_live_parity"
   ]
 }

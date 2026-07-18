@@ -3130,6 +3130,34 @@ int wmain(int argc, wchar_t** argv) {
 				PumpFor(450);
 				publishEntities();
 				captureStep("after-style", traceProfile);
+
+				// Task-bar hover: park the pointer well outside the chart for a
+				// DETERMINISTIC no-hover control (the steps above run with the
+				// machine's real cursor wherever it happens to be), then move it
+				// onto a task in a different row than the selected one.
+				{
+					HWND hovOv = OverlayHwnd();
+					POINT offPt{ 0, 0 };
+					Overlay_SetCursorPosOverrideForTest(true, offPt);
+					if (hovOv) ::PostMessageW(hovOv, WM_MOUSEMOVE, 0, MAKELPARAM(0, 0));
+					PumpFor(300);
+					publishEntities();
+					captureStep("hover-off", traceProfile);
+
+					POINT hoverPt{};
+					if (hovOv && FindTaskBodyCenter(app, "wireframes", &hoverPt)) {
+						POINT hoverClient = hoverPt;
+						::ScreenToClient(hovOv, &hoverClient);
+						Overlay_SetCursorPosOverrideForTest(true, hoverPt);
+						::PostMessageW(hovOv, WM_MOUSEMOVE, 0,
+							MAKELPARAM((short)hoverClient.x, (short)hoverClient.y));
+						PumpFor(350);
+					}
+					publishEntities();
+					captureStep("task-hover", traceProfile);
+					Overlay_SetCursorPosOverrideForTest(false, POINT{});
+					PumpFor(250);
+				}
 				extraTraceFieldsForTrace.clear();
 			} else if (traceProfile && wcscmp(traceProfile, L"session-recorder") == 0) {
 				Overlay_SelectForTest("", "");

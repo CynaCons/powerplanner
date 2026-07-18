@@ -1318,6 +1318,39 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "passed": fresh,
             "detail": f"TASK/discovery style before={before_task.get('style')} after={after_task.get('style')}",
         })
+        # Task-bar hover is scoped to ONE bar unit (not the whole row band).
+        hover_state = by_step.get("task-hover") or {}
+        hover_entities = ((hover_state.get("entityDump") or {}).get("entities")) or []
+        hover_task_id = str(hover_state.get("hoverTaskId") or "")
+        before_hover_id = str((by_step.get("hover-off") or {}).get("hoverTaskId") or "")
+        def _hovered(kind, entity_id):
+            e = next((x for x in hover_entities
+                      if x.get("kind") == kind and x.get("id") == entity_id), {})
+            return bool((e.get("flags") or {}).get("hover")), bool(e)
+        bar_hover, bar_present = _hovered("TASK", "wireframes")
+        # Same bar unit, different primitive: hovering the bar must flag its label
+        # too (SR-TASK-UNIT-01 — one object, not separate hoverable pieces).
+        label_hover, _ = _hovered("TASK_LABEL", "wireframes")
+        # A task in a DIFFERENT row must stay un-hovered. (A row-mate such as
+        # "visual" is legitimately flagged by the pre-existing ROW-level hover,
+        # so hoverTaskId — not flags.hover — is the task-scoped discriminator.)
+        other_row_hover, _ = _hovered("TASK", "discovery")
+        hover_ok = (
+            before_hover_id == ""
+            and hover_task_id == "wireframes"
+            and bar_present and bar_hover and label_hover
+            and not other_row_hover
+        )
+        results.append({
+            "rule": "entity_task_hover_scoped",
+            "passed": hover_ok,
+            "detail": (
+                f"hoverTaskId before='{before_hover_id}' onHover='{hover_task_id}' "
+                f"wireframes TASK.hover={bar_hover} TASK_LABEL.hover={label_hover} "
+                f"other-row discovery.hover={other_row_hover} (want ''->wireframes, True, True, False)"
+            ),
+        })
+
         results.append({
             "rule": "entity_serializer_harness_live_parity",
             "passed": bool(before) and bool(after),

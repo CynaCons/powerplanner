@@ -451,6 +451,16 @@ bool g_gripHover = false;
 
 std::string g_hoverRowId;
 RECT g_hoverBandRect = {};
+// Task-level hover (v2.10.x): the task bar unit currently under the cursor and
+// its SCREEN rect, so PaintOverlay can outline exactly the bar the pointer is
+// over. Row hover (above) stays coarse — it washes the whole band — whereas
+// this names ONE task. Set only from UpdateHoverFromCursor, only while no drag
+// gesture is in flight, and cleared by ClearHoverState (which the hide path
+// calls), so a hidden overlay never keeps a stale highlight.
+// TASK_LABEL / TASK_PROGRESS / TASK_PCT hits resolve to HtZone::TaskBody with
+// the task's own id (SR-TASK-UNIT-01), so hovering a label highlights its bar.
+std::string g_hoverTaskId;
+RECT g_hoverTaskRect = {};
 RECT g_hoverInsertRect = {};
 bool g_hoverInsertValid = false;
 RECT g_rowBoundaryInsertRects[2] = {};
@@ -1085,6 +1095,8 @@ bool UpdateDpiForWindow(HWND hwnd) {
 void ClearHoverState() {
 	g_hoverRowId.clear();
 	::SetRectEmpty(&g_hoverBandRect);
+	g_hoverTaskId.clear();
+	::SetRectEmpty(&g_hoverTaskRect);
 	::SetRectEmpty(&g_hoverInsertRect);
 	g_hoverInsertValid = false;
 	for (int i = 0; i < 2; ++i) {
@@ -1930,14 +1942,23 @@ void SyncSelectionChromeFromOwnSelection() {
 bool UpdateHoverFromCursor() {
 	std::string oldId = g_hoverRowId;
 	RECT oldRect = g_hoverBandRect;
+	const std::string oldTaskId = g_hoverTaskId;
+	const RECT oldTaskRect = g_hoverTaskRect;
 	const bool oldWindowHeaderHover = g_windowHeaderHover;
 	ClearHoverState();
 	g_windowHeaderHover = false;
 
+	// SR-SMO-04: hover is a repaint TRIGGER, so "changed" must be exact —
+	// returning true on an unchanged target would repaint on every WM_MOUSEMOVE.
+	auto changed = [&]() {
+		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
+			|| oldTaskId != g_hoverTaskId || !SameRect(oldTaskRect, g_hoverTaskRect)
+			|| oldWindowHeaderHover != g_windowHeaderHover;
+	};
+
 	POINT pt = {};
 	if (!OverlayGetCursorPos(&pt) || !::PtInRect(&g_chartScreenRect, pt)) {
-		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
-			|| oldWindowHeaderHover != g_windowHeaderHover;
+		return changed();
 	}
 	if (!::IsRectEmpty(&g_headerBandScreenRect) && ::PtInRect(&g_headerBandScreenRect, pt))
 		g_windowHeaderHover = true;
@@ -1952,9 +1973,27 @@ bool UpdateHoverFromCursor() {
 			break;
 		}
 	}
+
+	// Task-bar hover. Suppressed for the whole duration of a drag gesture: a
+	// highlight that tracked the pointer mid-drag would compete with the drag
+	// ghost and force extra paints on the hottest path in the app.
+	if (!g_gestureActive && !g_dragActive && g_dragKind == DragKind::None) {
+		const HtHit hit = GanttHitTestPoint(g_hitSnapshot, pt.x, pt.y);
+		if (hit.zone == HtZone::TaskBody && !hit.id.empty()) {
+			// Resolve to the TASK body rect even when the pointer is over the
+			// label/progress/pct geometry — those hit-test as TaskBody carrying
+			// the task's id, and the bar is the thing we outline.
+			for (const auto& item : g_hitSnapshot.items) {
+				if (item.kind != HtItemKind::Task || item.id != hit.id) continue;
+				g_hoverTaskId = hit.id;
+				g_hoverTaskRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+				break;
+			}
+		}
+	}
+
 	LayoutHoverInsertHotspot();
-	return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
-		|| oldWindowHeaderHover != g_windowHeaderHover;
+	return changed();
 }
 
 // Single repaint entry point: everything that wants pixels on screen goes
@@ -6041,7 +6080,29 @@ static void PaintOwnSelItemFrame(Gdiplus::Graphics& g, const std::string& kind, 
 void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	g_recIndicatorPainted = false;
 	using namespace Gdiplus;
-	// Background stays fully transparent (alpha 0) — the caller cleared it.
+	// Mouse-capture layer over the chart.
+	//
+	// The caller clears to alpha 0, and a layered window pushed with ULW_ALPHA
+	// is hit-tested against its per-pixel alpha: where alpha is 0 the window is
+	// click-through and never receives the message at all — WM_NCHITTEST is not
+	// even sent. That made the overlay interactive ONLY where it happened to
+	// paint something (the left rail), while the whole plot area fell through to
+	// the PowerPoint shapes underneath, contradicting the hit-test's own
+	// contract ("the overlay captures ALL mouse input over the chart area").
+	// Reported live 2026-07-18: hover worked only over the left panel, and
+	// clicks anywhere else selected the native shape or its text.
+	//
+	// Alpha 1 is the lowest value that keeps the pixel hit-testable and is
+	// visually indistinguishable from fully transparent. RGB must stay 0 for
+	// PixelFormat32bppPARGB (premultiplied: channels must not exceed alpha).
+	if (!::IsRectEmpty(&g_chartScreenRect)) {
+		const int cl = g_chartScreenRect.left - g_windowOriginX;
+		const int ct = g_chartScreenRect.top - g_windowOriginY;
+		const int cw = g_chartScreenRect.right - g_chartScreenRect.left;
+		const int ch = g_chartScreenRect.bottom - g_chartScreenRect.top;
+		SolidBrush capture(Color(1, 0, 0, 0));
+		g.FillRectangle(&capture, cl, ct, cw, ch);
+	}
 
 	LayoutToolbarButtons(W, H);
 	LayoutHoverInsertHotspot();
@@ -6447,6 +6508,24 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		}
 	}
 
+	// Task-bar hover outline. Mirrors PaintOwnSelItemFrame's geometry (same
+	// screen->client shift, same 1px chromeItemFramePx stroke) but strokes in
+	// gt::primaryDim instead of gt::primary, so a hovered bar reads as "under
+	// the cursor" while a selected bar keeps the stronger accent frame. Drawn
+	// BEFORE the selection chrome below so selection always wins on the same
+	// bar; skipped entirely mid-drag and when the hovered bar is the selected
+	// one (a second frame in a paler color would only muddy the selection).
+	if (!g_hoverTaskId.empty() && !::IsRectEmpty(&g_hoverTaskRect)
+		&& !g_gestureActive && !g_dragActive
+		&& !(g_ownSelKind == "TASK" && g_ownSelId == g_hoverTaskId)) {
+		const REAL hx = (REAL)(g_hoverTaskRect.left - g_windowOriginX);
+		const REAL hy = (REAL)(g_hoverTaskRect.top - g_windowOriginY);
+		const REAL hw = (REAL)(g_hoverTaskRect.right - g_hoverTaskRect.left);
+		const REAL hh = (REAL)(g_hoverTaskRect.bottom - g_hoverTaskRect.top);
+		Pen hoverPen(GpToken(255, gt::primaryDim), ScaleF(gt::chromeItemFramePx));
+		g.DrawRectangle(&hoverPen, (INT)hx, (INT)hy, (INT)hw, (INT)hh);
+	}
+
 	for (const auto& extra : g_ownSelExtra) {
 		if (extra.kind == "ROW") PaintRowBandSelectionWash(g, extra.id);
 		else PaintOwnSelItemFrame(g, extra.kind, extra.id);
@@ -6788,11 +6867,10 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	bool resized = hadWindow && (oldWindow.right - oldWindow.left != ww || oldWindow.bottom - oldWindow.top != wh);
 	bool needUpdate = dpiChanged || !wasShown || !hadWindow || moved || resized;
 	if (needUpdate) {
-		// Under harness override the gating that would hide this window when
-		// another app is foreground is bypassed — so it must NOT be TOPMOST,
-		// or it paints over whatever the user is doing while a test run
-		// borrows the desktop (live report 2026-07-11: app bar over a
-		// fullscreen game). Production keeps TOPMOST (it hides via gating).
+		// Neither harness nor production uses TOPMOST any more: the chrome is
+		// owned by PowerPoint's root window, so it sits above its owner and
+		// follows it without a topmost bit. HWND_TOP keeps it at the front of
+		// its own z-order band. See EnsureChromeOwner.
 		HWND insertAfter = HWND_TOP;
 		::SetWindowPos(g_hwnd, insertAfter, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		++g_overlaySwpCount;
@@ -9766,6 +9844,10 @@ const char* Overlay_DumpEntitiesForTest() {
 				&& !g_suppressedId.empty() && e.id == g_suppressedId;
 		}
 		e.flags.hover = (!g_hoverRowId.empty() && (e.id == g_hoverRowId || e.rowId == g_hoverRowId))
+			// Task-bar hover: every primitive of the hovered bar unit (fill,
+			// progress, label, % readout, rail chrome) shares the task id and
+			// is part of the one hovered object (SR-TASK-UNIT-01).
+			|| (!g_hoverTaskId.empty() && e.id == g_hoverTaskId && IsTaskKind(e.kind))
 			|| (!g_lastHit.id.empty() && e.id == g_lastHit.id);
 		// BuildRowBands maps the cached pure Scene primitive's clippedL/clippedR
 		// flags into the entity. Preserve that truth here (SR-ENT-02).
@@ -9798,6 +9880,10 @@ const char* Overlay_DumpChromeStateForTest() {
 	// COM sink most recently observed ("" / "CHART_ROOT" / a child kind), and
 	// whether the Delete/arrow hotkeys are currently registered. Consumed by the
 	// component-shape-protection scenario (no_child_shape_selected + hotkey scope).
+	// Task-bar hover ground truth (gated by trace_entity_dump's
+	// entity_task_hover_scoped invariant): "" when no bar is under the cursor.
+	s += "\"hoverTaskId\":\"" + g_hoverTaskId + "\",";
+	s += "\"hoverRowId\":\"" + g_hoverRowId + "\",";
 	s += "\"nativeSelKind\":\"" + g_lastNativeSelKindForTest + "\",";
 	s += "\"hotkeysActive\":" + std::string(g_hotkeysActive ? "true" : "false") + ",";
 	s += "\"linkMode\":" + std::string(g_linkMode ? "true" : "false") + ",";
