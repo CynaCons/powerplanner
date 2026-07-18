@@ -348,6 +348,9 @@ RECT g_chartScreenRect = {};
 // derives this screen rect from the first PP_ROWY lane top minus scaled AXIS_H.
 RECT g_headerBandScreenRect = {};
 bool g_windowHeaderHover = false;
+// Which window port (if any) the pointer is over. Drives the emphasized paint
+// state and the "click or drag to widen" hint; NOT a visibility gate.
+HtZone g_windowPortHoverZone = HtZone::Outside;
 static float g_chartLeftPt = 0.0f;
 static float g_chartWidthPt = 0.0f;
 RECT g_selScreenRect = {};
@@ -1244,24 +1247,72 @@ static bool IsWindowEdgeDragActive() {
 	return g_gestureActive && IsWindowEdgeDragKind(g_dragKind);
 }
 
+// Discoverability fix (2026-07-18). The ports USED to be gated on
+// g_windowHeaderHover, i.e. on the pointer already being inside the axis header
+// band. That band's PIXEL height is kAxisHeaderHeightPt * yScale, and
+// yScale = chartHeightPt / PP_ROWY.naturalH (see BuildRowBands): every row the
+// user adds grows naturalH while the fitted chart frame stays put, so the
+// reveal target shrinks monotonically as the chart fills up. On an empty/near
+// empty chart the band is tall enough to stumble into; after "placing tasks" it
+// collapses to a few pixels and the affordance becomes unreachable — exactly
+// the reported "couldn't find the arrow buttons". Live recordings agree: the
+// port rects are {} in every snapshot of 9/10 sessions, and in the tenth they
+// blink on for 2.7s (one header traversal) with the selection unchanged.
+//
+// The ports are now laid out and painted whenever the header band exists.
+// Hover only promotes them from resting to emphasized; it no longer decides
+// whether they exist at all.
 static bool ShouldShowWindowPorts() {
-	return !::IsRectEmpty(&g_headerBandScreenRect)
-		&& (g_windowHeaderHover || IsWindowEdgeDragActive());
+	if (::IsRectEmpty(&g_headerBandScreenRect)) return false;
+	if (g_linkMode || IsEditSessionActive()) return false;
+	// A non-window gesture (task drag, create, link) owns the pointer; the
+	// ports would only compete with its ghost/pill chrome.
+	if (g_gestureActive && !IsWindowEdgeDragKind(g_dragKind)) return false;
+	return true;
 }
 
+// Resting affordance geometry. The old target was a LINK_PORT_RADIUS circle
+// (14x14 px in the recordings) pinned to the chart edge; that is below the
+// threshold at which a control reads as a control. This is a chevron pill
+// sized off the header band, floored so it never degrades with row count.
 static RECT WindowPortHitRectScreen(bool rightPort) {
 	if (!ShouldShowWindowPorts()) return {};
-	const int hitRadius = LINK_PORT_RADIUS + Scale(2);
+	const int w = std::max(Scale(20), LINK_PORT_RADIUS * 2 + Scale(8));
+	const int bandH = g_headerBandScreenRect.bottom - g_headerBandScreenRect.top;
+	const int h = std::max(Scale(20), std::min(w + Scale(6), bandH - Scale(2)));
 	const int cx = rightPort
-		? g_headerBandScreenRect.right - hitRadius
-		: g_headerBandScreenRect.left + hitRadius;
+		? g_headerBandScreenRect.right - w / 2 - Scale(1)
+		: g_headerBandScreenRect.left + w / 2 + Scale(1);
 	const int cy = (g_headerBandScreenRect.top + g_headerBandScreenRect.bottom) / 2;
-	return { cx - hitRadius, cy - hitRadius, cx + hitRadius, cy + hitRadius };
+	RECT r = { cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2 };
+	// Every pixel must stay inside the chart rect. The overlay is a layered
+	// window hit-tested against its PER-PIXEL ALPHA, and only the chart rect
+	// carries the capture-layer fill, so a port that spilled outside would be
+	// click-through even while visibly painted.
+	if (r.top < g_chartScreenRect.top) {
+		r.bottom += g_chartScreenRect.top - r.top;
+		r.top = g_chartScreenRect.top;
+	}
+	if (r.bottom > g_chartScreenRect.bottom) {
+		r.top -= r.bottom - g_chartScreenRect.bottom;
+		r.bottom = g_chartScreenRect.bottom;
+	}
+	if (r.left < g_chartScreenRect.left) {
+		r.right += g_chartScreenRect.left - r.left;
+		r.left = g_chartScreenRect.left;
+	}
+	if (r.right > g_chartScreenRect.right) {
+		r.left -= r.right - g_chartScreenRect.right;
+		r.right = g_chartScreenRect.right;
+	}
+	if (r.right <= r.left || r.bottom <= r.top) return {};
+	return r;
 }
 
-static HtZone HitTestWindowPortAtClient(POINT clientPt) {
-	if (!ShouldShowWindowPorts() || g_linkMode || IsEditSessionActive()) return HtZone::Outside;
-	const POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
+// Pointer-over-port state, refreshed by UpdateHoverFromCursor so a hover
+// transition is a repaint TRIGGER (SR-SMO-04) rather than something the paint
+// path re-derives from the live cursor.
+static HtZone WindowPortUnderPoint(POINT screenPt) {
 	const RECT left = WindowPortHitRectScreen(false);
 	const RECT right = WindowPortHitRectScreen(true);
 	if (::PtInRect(&left, screenPt)) return HtZone::WindowPortL;
@@ -1269,34 +1320,96 @@ static HtZone HitTestWindowPortAtClient(POINT clientPt) {
 	return HtZone::Outside;
 }
 
+static HtZone HitTestWindowPortAtClient(POINT clientPt) {
+	if (!ShouldShowWindowPorts()) return HtZone::Outside;
+	const POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
+	return WindowPortUnderPoint(screenPt);
+}
+
+// Resting chevron button. Painted at every repaint the ports are laid out for,
+// so the control is FINDABLE: a bordered pill with an outward double chevron
+// ("widen the visible range this way"), not an invisible 14px hotspot.
 static void PaintWindowPort(Gdiplus::Graphics& g, const RECT& hitScreen, bool rightPort, bool highlighted) {
 	if (::IsRectEmpty(&hitScreen)) return;
-	POINT center = {
-		(hitScreen.left + hitScreen.right) / 2 - g_windowOriginX,
-		(hitScreen.top + hitScreen.bottom) / 2 - g_windowOriginY
-	};
-	PaintLinkPortChip(g, center, highlighted);
-	const int d = std::max(3, LINK_PORT_RADIUS / 2);
-	Gdiplus::Point arrow[3] = {};
-	if (rightPort) {
-		arrow[0] = { center.x - d / 2, center.y - d };
-		arrow[1] = { center.x - d / 2, center.y + d };
-		arrow[2] = { center.x + d, center.y };
-	} else {
-		arrow[0] = { center.x + d / 2, center.y - d };
-		arrow[1] = { center.x + d / 2, center.y + d };
-		arrow[2] = { center.x - d, center.y };
+	const Gdiplus::REAL x = (Gdiplus::REAL)(hitScreen.left - g_windowOriginX);
+	const Gdiplus::REAL y = (Gdiplus::REAL)(hitScreen.top - g_windowOriginY);
+	const Gdiplus::REAL w = (Gdiplus::REAL)(hitScreen.right - hitScreen.left);
+	const Gdiplus::REAL h = (Gdiplus::REAL)(hitScreen.bottom - hitScreen.top);
+	Gdiplus::GraphicsPath path;
+	AddRoundRect(path, x, y, w, h, ScaleF(3.0f));
+	Gdiplus::SolidBrush fill(GpToken(highlighted ? 255 : 232, gt::surface));
+	g.FillPath(&fill, &path);
+	Gdiplus::Pen edge(GpToken(highlighted ? 255 : 200, gt::primary),
+		highlighted ? ScaleF(2.0f) : ScaleF(1.0f));
+	g.DrawPath(&edge, &path);
+
+	const int cx = (hitScreen.left + hitScreen.right) / 2 - g_windowOriginX;
+	const int cy = (hitScreen.top + hitScreen.bottom) / 2 - g_windowOriginY;
+	const int arm = std::max(2, (int)(h / 5));
+	const int gap = std::max(2, arm);
+	const int dir = rightPort ? 1 : -1;
+	Gdiplus::Pen glyph(GpToken(255, gt::primary), ScaleF(highlighted ? 2.0f : 1.6f));
+	glyph.SetStartCap(Gdiplus::LineCapRound);
+	glyph.SetEndCap(Gdiplus::LineCapRound);
+	glyph.SetLineJoin(Gdiplus::LineJoinRound);
+	for (int i = 0; i < 2; ++i) {
+		const int tipX = cx + dir * (gap / 2 + i * gap);
+		Gdiplus::Point chevron[3] = {
+			{ tipX - dir * arm, cy - arm },
+			{ tipX, cy },
+			{ tipX - dir * arm, cy + arm }
+		};
+		g.DrawLines(&glyph, chevron, 3);
 	}
-	Gdiplus::SolidBrush glyph(GpToken(255, gt::primary));
-	g.FillPolygon(&glyph, arrow, 3);
+}
+
+// Hover hint. The affordance is now visible at rest, but "what does this do"
+// still has to be answerable without a manual — so name the gesture the moment
+// the pointer lands on it.
+static void PaintWindowPortHint(Gdiplus::Graphics& g, const RECT& hitScreen, bool rightPort) {
+	if (::IsRectEmpty(&hitScreen)) return;
+	const wchar_t* text = L"Click or drag to widen";
+	Gdiplus::Font font(L"Segoe UI", ScaleF(10.0f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+	Gdiplus::RectF measured;
+	g.MeasureString(text, -1, &font, Gdiplus::PointF(0.0f, 0.0f), &measured);
+	const Gdiplus::REAL padX = ScaleF(6.0f), padY = ScaleF(3.0f);
+	const Gdiplus::REAL w = measured.Width + padX * 2.0f;
+	const Gdiplus::REAL h = measured.Height + padY * 2.0f;
+	Gdiplus::REAL x = rightPort
+		? (Gdiplus::REAL)(hitScreen.left - g_windowOriginX) - w - ScaleF(4.0f)
+		: (Gdiplus::REAL)(hitScreen.right - g_windowOriginX) + ScaleF(4.0f);
+	const Gdiplus::REAL y = (Gdiplus::REAL)(hitScreen.top - g_windowOriginY);
+	const Gdiplus::REAL chartLeft = (Gdiplus::REAL)(g_chartScreenRect.left - g_windowOriginX);
+	const Gdiplus::REAL chartRight = (Gdiplus::REAL)(g_chartScreenRect.right - g_windowOriginX);
+	if (x < chartLeft) x = chartLeft;
+	if (x + w > chartRight) x = chartRight - w;
+	if (x < chartLeft) return; // chart narrower than the hint: skip rather than spill
+	Gdiplus::GraphicsPath path;
+	AddRoundRect(path, x, y, w, h, ScaleF(3.0f));
+	Gdiplus::SolidBrush fill(GpToken(240, gt::ink));
+	g.FillPath(&fill, &path);
+	Gdiplus::SolidBrush ink(GpToken(255, gt::surface));
+	Gdiplus::StringFormat sf;
+	sf.SetAlignment(Gdiplus::StringAlignmentCenter);
+	sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+	sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+	g.DrawString(text, -1, &font, Gdiplus::RectF(x, y, w, h), &sf, &ink);
 }
 
 static void PaintWindowPorts(Gdiplus::Graphics& g) {
 	if (!ShouldShowWindowPorts()) return;
-	PaintWindowPort(g, WindowPortHitRectScreen(false), false,
-		IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeL);
-	PaintWindowPort(g, WindowPortHitRectScreen(true), true,
-		IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeR);
+	const RECT left = WindowPortHitRectScreen(false);
+	const RECT right = WindowPortHitRectScreen(true);
+	const bool dragL = IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeL;
+	const bool dragR = IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeR;
+	const bool hoverL = g_windowPortHoverZone == HtZone::WindowPortL;
+	const bool hoverR = g_windowPortHoverZone == HtZone::WindowPortR;
+	PaintWindowPort(g, left, false, dragL || hoverL);
+	PaintWindowPort(g, right, true, dragR || hoverR);
+	if (!IsWindowEdgeDragActive()) {
+		if (hoverL) PaintWindowPortHint(g, left, false);
+		else if (hoverR) PaintWindowPortHint(g, right, true);
+	}
 }
 
 // W2's two-phase renderer: paint the candidate axis only into the header
@@ -1529,6 +1642,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_editRegions.clear();
 		::SetRectEmpty(&g_headerBandScreenRect);
 		g_windowHeaderHover = false;
+		g_windowPortHoverZone = HtZone::Outside;
 		InvalidateHitSnapshot();
 		return;
 	}
@@ -1539,6 +1653,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			g_editRegions.clear();
 			::SetRectEmpty(&g_headerBandScreenRect);
 			g_windowHeaderHover = false;
+			g_windowPortHoverZone = HtZone::Outside;
 			InvalidateHitSnapshot();
 			return;
 		}
@@ -1865,6 +1980,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_editRegions.clear();
 		::SetRectEmpty(&g_headerBandScreenRect);
 		g_windowHeaderHover = false;
+		g_windowPortHoverZone = HtZone::Outside;
 		InvalidateHitSnapshot();
 	}
 	catch (const std::exception&) {
@@ -1876,6 +1992,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_editRegions.clear();
 		::SetRectEmpty(&g_headerBandScreenRect);
 		g_windowHeaderHover = false;
+		g_windowPortHoverZone = HtZone::Outside;
 		InvalidateHitSnapshot();
 	}
 }
@@ -1945,15 +2062,18 @@ bool UpdateHoverFromCursor() {
 	const std::string oldTaskId = g_hoverTaskId;
 	const RECT oldTaskRect = g_hoverTaskRect;
 	const bool oldWindowHeaderHover = g_windowHeaderHover;
+	const HtZone oldWindowPortHover = g_windowPortHoverZone;
 	ClearHoverState();
 	g_windowHeaderHover = false;
+	g_windowPortHoverZone = HtZone::Outside;
 
 	// SR-SMO-04: hover is a repaint TRIGGER, so "changed" must be exact —
 	// returning true on an unchanged target would repaint on every WM_MOUSEMOVE.
 	auto changed = [&]() {
 		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
 			|| oldTaskId != g_hoverTaskId || !SameRect(oldTaskRect, g_hoverTaskRect)
-			|| oldWindowHeaderHover != g_windowHeaderHover;
+			|| oldWindowHeaderHover != g_windowHeaderHover
+			|| oldWindowPortHover != g_windowPortHoverZone;
 	};
 
 	POINT pt = {};
@@ -1962,6 +2082,7 @@ bool UpdateHoverFromCursor() {
 	}
 	if (!::IsRectEmpty(&g_headerBandScreenRect) && ::PtInRect(&g_headerBandScreenRect, pt))
 		g_windowHeaderHover = true;
+	g_windowPortHoverZone = ShouldShowWindowPorts() ? WindowPortUnderPoint(pt) : HtZone::Outside;
 
 	for (const auto& band : g_rowBands) {
 		if (pt.y >= band.screenRect.top && pt.y <= band.screenRect.bottom) {
@@ -4064,6 +4185,33 @@ static void ComputeWindowEdgeCandidate(DragKind kind, const std::string& baselin
 	*outEnd = DaysToDate(endDay);
 }
 
+// Click-to-widen (2026-07-18 discoverability fix). Before this, a window port
+// only did anything if the press turned into a threshold-crossing DRAG: a plain
+// click fell through to the zero-delta no-op and the user got no feedback at
+// all, which is indistinguishable from "this is not a button". A click now
+// steps the pressed edge outward by one visible unit; drag remains the precise
+// gesture. Snap/clamp go through the same pure helpers as the drag path so a
+// click can never produce a window the commit would reject.
+static void ComputeWindowExpandStep(DragKind kind, const std::string& baselineStart,
+	const std::string& baselineEnd, const std::string& scale,
+	std::string* outStart, std::string* outEnd) {
+	if (!outStart || !outEnd) return;
+	long startDay = DateToDays(baselineStart);
+	long endDay = DateToDays(baselineEnd);
+	const std::string& edgeIso = (kind == DragKind::WindowEdgeL) ? baselineStart : baselineEnd;
+	long step = MinimumWindowSpanDays(edgeIso, scale);
+	// At "day" scale one unit is one day — a step the user would read as
+	// "nothing happened". A week is the smallest legible increment.
+	if (step < 7) step = 7;
+	long candidateDay = (kind == DragKind::WindowEdgeL) ? startDay - step : endDay + step;
+	candidateDay = SnapDayToScale(candidateDay, scale);
+	candidateDay = ClampWindowEdgeDay(kind, candidateDay, startDay, endDay, scale);
+	if (kind == DragKind::WindowEdgeL) startDay = candidateDay;
+	else if (kind == DragKind::WindowEdgeR) endDay = candidateDay;
+	*outStart = DaysToDate(startDay);
+	*outEnd = DaysToDate(endDay);
+}
+
 static void UpdateWindowEdgeDragCandidate(long dx) {
 	std::string candidateStart, candidateEnd;
 	ComputeWindowEdgeCandidate(g_dragKind, g_dragOrigStart, g_dragOrigEnd, g_dragPxPerDay,
@@ -5333,6 +5481,23 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// from these up/down endpoints) commits via GanttOps; otherwise this
 		// is a plain click and selects exactly as before.
 		if (wasCaptureActive) {
+			if (wasGestureActive && !wasDragActive && IsWindowEdgeDragKind(dragKind)) {
+				// Plain click on a window port: step this edge outward one unit.
+				// Snapshot locals only (Reset/release already ran, see above).
+				ResetDragGestureState();
+				std::string stepStart = dragOrigStart, stepEnd = dragOrigEnd;
+				ComputeWindowExpandStep(dragKind, dragOrigStart, dragOrigEnd,
+					windowScale, &stepStart, &stepEnd);
+				OvLog(dragKind == DragKind::WindowEdgeL
+					? L"WINDOWPORT left click -> widen" : L"WINDOWPORT right click -> widen");
+				try {
+					CommitWindowGesture(stepStart, stepEnd, dragOrigStart, dragOrigEnd);
+				} catch (...) {
+					OvLog(L"window port click commit failed");
+					RecError("CommitWindowGesture/click", (long)E_FAIL, "exception");
+				}
+				return 0;
+			}
 			if (wasGestureActive && wasDragActive && IsWindowEdgeDragKind(dragKind)) {
 				// Snapshot locals above are the sole source after Reset/release.
 				// dragOrigStart/End carry the gesture BASELINE (StartWindowEdgeDrag
@@ -9923,6 +10088,21 @@ const char* Overlay_DumpChromeStateForTest() {
 		s += "\"windowHeaderBandRect\":" + (IsRectEmpty(&g_headerBandScreenRect) ? std::string("{}") : rectJson(g_headerBandScreenRect)) + ",";
 		s += "\"windowPortLRect\":" + (IsRectEmpty(&windowPortL) ? std::string("{}") : rectJson(windowPortL)) + ",";
 		s += "\"windowPortRRect\":" + (IsRectEmpty(&windowPortR) ? std::string("{}") : rectJson(windowPortR)) + ",";
+		// Ground truth for the discoverability gate: a port is only real if the
+		// overlay would actually route a press there (alpha-covered = inside the
+		// chart rect, and the zone hit test agrees with the published rect).
+		{
+			auto portLive = [&](const RECT& r, HtZone want) {
+				if (IsRectEmpty(&r)) return false;
+				RECT clipped{};
+				if (!::IntersectRect(&clipped, &r, &g_chartScreenRect) || !SameRect(clipped, r)) return false;
+				const POINT c = { (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+				return WindowPortUnderPoint(c) == want;
+			};
+			s += std::string("\"windowPortLHitTestable\":") + (portLive(windowPortL, HtZone::WindowPortL) ? "true" : "false") + ",";
+			s += std::string("\"windowPortRHitTestable\":") + (portLive(windowPortR, HtZone::WindowPortR) ? "true" : "false") + ",";
+			s += std::string("\"windowPortHover\":\"") + RecHtZoneName(g_windowPortHoverZone) + "\",";
+		}
 		for (int i = 0; i < 2; ++i) {
 			const char* key = (i == 0) ? "rowAdderAboveRect" : "rowAdderBelowRect";
 			if (g_rowBoundaryInsertValid[i]) {

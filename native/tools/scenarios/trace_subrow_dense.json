@@ -1,0 +1,17 @@
+{
+  "name": "trace_subrow_dense",
+  "description": "Sub-row (lane) positioning on a DENSE chart: 5 rows / 11 tasks / 2 milestones with three 3-lane rows, a touching-ends pair and a single-day/next-day pair. Proves (a) same-row same-lane bars never overlap horizontally, (b) an exactly-horizontal date-only drag of a task on lane 1 of a 3-lane row changes neither its rowId nor its lane and does not shuffle its row-mates, (c) a drag from a single-lane row into a 3-lane row on the right side of the chart lands in the target row's lane stack. Regression guard for the GanttLayout.cpp Step 2 packing rule, which freed a lane at the occupant's END DATE while the bar actually paints through start + widthDays - 1.",
+  "trace_profile": "subrow-dense",
+  "timeout": 180,
+  "retries": 2,
+  "check_invariants": true,
+  "invariants": [
+    "subrow_dense_chart_rendered",
+    "subrow_multi_lane_rows_present",
+    "subrow_lane_bars_never_overlap",
+    "subrow_date_drag_keeps_row_and_lane",
+    "subrow_date_drag_no_rowmate_lane_churn",
+    "subrow_row_drag_latches_target_row",
+    "subrow_drag_into_multilane_row_lands_in_lane"
+  ]
+}

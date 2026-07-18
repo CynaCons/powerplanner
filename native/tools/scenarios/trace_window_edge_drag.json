@@ -7,7 +7,7 @@
   "retries": 1,
   "check_invariants": true,
   "invariants": [
-    "window_ports_hover_gated",
+    "window_ports_persistently_laid_out",
     "window_pill_two_iso_dates",
     "window_drag_snaps_and_clamps",
     "window_preview_header_pixel_diff",

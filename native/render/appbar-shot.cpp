@@ -85,6 +85,59 @@ static PpDocument MakeShowcaseDocument() {
 	return doc;
 }
 
+// Dense multi-lane fixture for the `subrow-dense` trace (trace_subrow_dense).
+// The showcase document only ever produces 2-lane rows, so it cannot expose the
+// class of defect the user reported ("a row made of several sub-rows ... doesn't
+// handle the sub-rows on the right side properly"). This one is deliberately
+// nastier:
+//   sr_alpha   3 lanes (a1/a2/a3 all mutually overlapping) + a milestone
+//   sr_beta    1 lane  (the drag SOURCE for the row-retarget leg)
+//   sr_gamma   3 lanes, later in time (the drag TARGET: "on the right side")
+//   sr_delta   2 lanes that merely TOUCH (b.start == a.end) — the case the old
+//              `tracks[k] <= t->start` packing rule stacked on ONE lane, so the
+//              two bars painted on top of each other
+//   sr_eps     1 lane containing a single-day task next to a next-day task —
+//              the SpanWidthDays(>=2) floor makes those paint over each other
+//              under the old rule as well
+static PpDocument MakeDenseSubRowDocument() {
+	PpDocument doc;
+	doc.title = "";
+	doc.scale = "week";
+	doc.rows = {
+		{ "sr_alpha", "Alpha",   "" },
+		{ "sr_beta",  "Beta",    "" },
+		{ "sr_gamma", "Gamma",   "" },
+		{ "sr_delta", "Delta",   "" },
+		{ "sr_eps",   "Epsilon", "" },
+	};
+	doc.tasks = {
+		{ "a1", "Alpha one",   "2026-06-01", "2026-06-14", "sr_alpha", "#4355E0", 100, "" },
+		{ "a2", "Alpha two",   "2026-06-05", "2026-06-18", "sr_alpha", "#4355E0", 60,  "" },
+		{ "a3", "Alpha three", "2026-06-09", "2026-06-22", "sr_alpha", "#4355E0", 30,  "" },
+		// percent 0 on purpose: at percent 50 the progress handle sits exactly on
+		// the bar's geometric CENTRE, and GanttHitTest step 1b resolves the
+		// progress edge before the task body — so "grab the middle and move it"
+		// silently becomes a percent drag. See the defect note in the report;
+		// this fixture must exercise a BODY drag, so it avoids that collision.
+		{ "b1", "Beta one",    "2026-06-02", "2026-06-11", "sr_beta",  "#0E8D8A", 0,   "" },
+		{ "g1", "Gamma one",   "2026-07-01", "2026-07-18", "sr_gamma", "#7A4FA3", 20,  "" },
+		{ "g2", "Gamma two",   "2026-07-06", "2026-07-24", "sr_gamma", "#7A4FA3", 10,  "" },
+		{ "g3", "Gamma three", "2026-07-11", "2026-07-30", "sr_gamma", "#7A4FA3", 0,   "" },
+		{ "d1", "Delta one",   "2026-06-01", "2026-06-15", "sr_delta", "#5B6C8F", 0,   "" },
+		{ "d2", "Delta two",   "2026-06-15", "2026-06-29", "sr_delta", "#5B6C8F", 0,   "" },
+		{ "e1", "Eps one",     "2026-06-03", "2026-06-03", "sr_eps",   "#B4553F", 0,   "" },
+		{ "e2", "Eps two",     "2026-06-04", "2026-06-12", "sr_eps",   "#B4553F", 0,   "" },
+	};
+	doc.milestones = {
+		{ "m_alpha", "Alpha gate", "2026-06-20", "sr_alpha", "" },
+		{ "m_gamma", "Gamma gate", "2026-07-28", "sr_gamma", "" },
+	};
+	doc.markers = {
+		{ "today", "today", "TODAY", "2026-06-25", "" },
+	};
+	return doc;
+}
+
 static void PumpFor(DWORD ms) {
 	DWORD start = ::GetTickCount();
 	MSG msg;
@@ -386,6 +439,34 @@ static void PostTaskBodyDrag(HWND ov, POINT screenCenter, int dragPx) {
 	Overlay_SetCursorPosOverrideForTest(true, upScreen);
 	::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)clientPt.y));
 	PumpFor(400);
+}
+
+// Two-axis variant of PostTaskBodyDrag: the sub-row traces need a drag that is
+// EXACTLY horizontal (dy == 0, the "date-only" leg that must not change rowId)
+// and one that also travels vertically into another row's lane stack.
+static void PostTaskBodyDragXY(HWND ov, POINT screenCenter, int dragPx, int dragPy) {
+	if (!ov) return;
+	POINT clientPt = screenCenter;
+	::ScreenToClient(ov, &clientPt);
+	Overlay_SetCursorPosOverrideForTest(true, screenCenter);
+	::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON,
+		MAKELPARAM((short)clientPt.x, (short)clientPt.y));
+	PumpFor(60);
+	const int steps = 6;
+	for (int s = 1; s <= steps; ++s) {
+		const int ox = dragPx * s / steps, oy = dragPy * s / steps;
+		POINT screenPt = { screenCenter.x + ox, screenCenter.y + oy };
+		Overlay_SetCursorPosOverrideForTest(true, screenPt);
+		::PostMessageW(ov, WM_MOUSEMOVE, MK_LBUTTON,
+			MAKELPARAM((short)(clientPt.x + ox), (short)(clientPt.y + oy)));
+		PumpFor(45);
+	}
+	POINT upScreen = { screenCenter.x + dragPx, screenCenter.y + dragPy };
+	Overlay_SetCursorPosOverrideForTest(true, upScreen);
+	::PostMessageW(ov, WM_LBUTTONUP, 0,
+		MAKELPARAM((short)(clientPt.x + dragPx), (short)(clientPt.y + dragPy)));
+	PumpFor(500);
+	Overlay_SetCursorPosOverrideForTest(false, POINT{});
 }
 
 static bool FindTaskBodyRect(PowerPoint::_ApplicationPtr& app, const char* taskId, RECT* out);
@@ -1657,6 +1738,15 @@ int wmain(int argc, wchar_t** argv) {
 	for (int i = 1; i < argc; ++i) {
 		if (wcscmp(argv[i], L"--gallery") == 0) { gallery = true; break; }
 	}
+	// The seeded document is chosen BEFORE the trace-profile argument is parsed
+	// further down, so the subrow-dense fixture needs its own early scan.
+	bool denseSubRow = false;
+	for (int i = 1; i + 1 < argc; ++i) {
+		if (wcscmp(argv[i], L"--trace") == 0 && wcscmp(argv[i + 1], L"subrow-dense") == 0) {
+			denseSubRow = true;
+			break;
+		}
+	}
 	HWND existingPpt = ::FindWindowW(L"PPTFrameClass", nullptr);
 	if (existingPpt && !attach) {
 		wprintf(L"APPBARSHOT REFUSE: PowerPoint already running; close it or pass --attach\n");
@@ -1701,7 +1791,7 @@ int wmain(int argc, wchar_t** argv) {
 			title->GetFill()->PutVisible(Office::msoFalse);
 		}
 
-		PpDocument showcaseDoc = MakeShowcaseDocument();
+		PpDocument showcaseDoc = denseSubRow ? MakeDenseSubRowDocument() : MakeShowcaseDocument();
 		// The gallery has one explicit dependency-selection frame. Keep the
 		// normal harness fixture untouched so existing traces remain byte-for-byte
 		// representative of their established setup.
@@ -1968,6 +2058,7 @@ int wmain(int argc, wchar_t** argv) {
 				wcscmp(traceProfile, L"task-select-progress") == 0 ||
 				wcscmp(traceProfile, L"task-bar-unit") == 0 ||
 				wcscmp(traceProfile, L"entity-dump") == 0 ||
+				wcscmp(traceProfile, L"subrow-dense") == 0 ||
 				wcscmp(traceProfile, L"session-recorder") == 0 ||
 				wcscmp(traceProfile, L"component-shape-protection") == 0 ||
 				wcscmp(traceProfile, L"appbar-docked") == 0 ||
@@ -2588,6 +2679,67 @@ int wmain(int argc, wchar_t** argv) {
 				captureStep("+1", traceProfile);
 				PumpFor(300);
 				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"window-expand") == 0) {
+				// Discoverability regression gate (2026-07-18). On the populated
+				// showcase doc (many tasks + milestones) the window-expand ports
+				// must be laid out, alpha-covered and hit-testable with the
+				// pointer parked FAR from the axis header, must survive the
+				// rebuild the commit triggers, and a plain CLICK (no drag) must
+				// really widen the visible range.
+				Overlay_SelectForTest("", "");
+				// Park the cursor in the top-left corner: nowhere near the header
+				// band, so nothing here can be explained by a hover reveal.
+				Overlay_SetCursorPosOverrideForTest(true, POINT{ 0, 0 });
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+
+				HWND ov = OverlayHwnd();
+				RECT leftPort{}, rightPort{};
+				if (ov && ParseNamedRectFromDump(Overlay_DumpChromeStateForTest(), "windowPortLRect", &leftPort)
+					&& leftPort.right > leftPort.left) {
+					POINT lp2 = { (leftPort.left + leftPort.right) / 2, (leftPort.top + leftPort.bottom) / 2 };
+					POINT lp2Client = lp2;
+					::ScreenToClient(ov, &lp2Client);
+					Overlay_SetCursorPosOverrideForTest(true, lp2);
+					::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)lp2Client.x, (short)lp2Client.y));
+					PumpFor(200);
+				} else {
+					wprintf(L"WINDOWEXPAND: windowPortLRect not published with pointer parked away\n");
+				}
+				captureStep("hover", traceProfile);
+
+				// Two successive plain clicks on the RIGHT port. Between them the
+				// pointer is parked away again, so the second click also proves the
+				// ports were re-laid-out after the first commit's rebuild.
+				auto clickRightPort = [&](const char* step) {
+					if (!ov) { captureStep(step, traceProfile); return; }
+					RECT port{};
+					if (ParseNamedRectFromDump(Overlay_DumpChromeStateForTest(), "windowPortRRect", &port)
+						&& port.right > port.left) {
+						POINT p = { (port.left + port.right) / 2, (port.top + port.bottom) / 2 };
+						POINT pc = p;
+						::ScreenToClient(ov, &pc);
+						LPARAM plp = MAKELPARAM((short)pc.x, (short)pc.y);
+						Overlay_SetCursorPosOverrideForTest(true, p);
+						::PostMessageW(ov, WM_MOUSEMOVE, 0, plp);
+						PumpFor(120);
+						// No intervening WM_MOUSEMOVE: this must stay a CLICK, never
+						// a threshold-crossing drag.
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, plp);
+						PumpFor(80);
+						::PostMessageW(ov, WM_LBUTTONUP, 0, plp);
+						PumpFor(600);
+					} else {
+						wprintf(L"WINDOWEXPAND: windowPortRRect not published before %hs\n", step);
+					}
+					Overlay_SetCursorPosOverrideForTest(true, POINT{ 0, 0 });
+					PumpFor(250);
+					captureStep(step, traceProfile);
+				};
+				clickRightPort("click1");
+				clickRightPort("click2");
+				PumpFor(400);
+				captureStep("+3", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"window-edge-drag") == 0) {
 				// W2: real hover + posted mouse gesture, with target coordinates read
 				// exclusively from overlay dump rectangles (no geometry duplicate).
@@ -3115,6 +3267,69 @@ int wmain(int argc, wchar_t** argv) {
 				Overlay_InvalidateAppBarForTest();
 				PumpFor(400);
 				captureStep("component", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"subrow-dense") == 0) {
+				// Sub-row (lane) positioning on a DENSE chart. Two legs:
+				//   date-drag  a2 lives on lane 1 of the 3-lane row sr_alpha.
+				//              Drag it EXACTLY horizontally. Its rowId must not
+				//              move (the live recording of 2026-07-18 caught a
+				//              date-only drag silently rewriting rowId).
+				//   row-drag   b1 is alone on the single-lane row sr_beta. Drag
+				//              it down-right into sr_gamma's 3-lane stack ("the
+				//              right side") and it must land in that row, on a
+				//              lane that collides with nothing.
+				// Every step publishes the entity dump so the invariants can read
+				// per-entity rowId + slide/screen rects rather than guessing from
+				// pixels.
+				auto publishEntities = [&]() {
+					const char* dump = Overlay_DumpEntitiesForTest();
+					extraTraceFieldsForTrace = "\"entityDump\":";
+					extraTraceFieldsForTrace += dump ? dump : "{\"entities\":[]}";
+					extraTraceFieldsForTrace += ",";
+				};
+				HWND srOv = OverlayHwnd();
+				Overlay_SelectForTest("", "");
+				PumpFor(350);
+				publishEntities();
+				captureStep("before", traceProfile);
+
+				POINT a2c{};
+				if (srOv && FindTaskBodyCenter(app, "a2", &a2c)) {
+					PostTaskBodyDragXY(srOv, a2c, 90, 0); // date-only: dy == 0
+					PumpFor(500);
+				}
+				publishEntities();
+				captureStep("date-drag", traceProfile);
+
+				POINT b1c{}, g2c{};
+				const bool okB1 = srOv && FindTaskBodyCenter(app, "b1", &b1c);
+				const bool okG2 = srOv && FindTaskBodyCenter(app, "g2", &g2c);
+				if (okB1 && okG2) {
+					const int ddx = (int)(g2c.x - b1c.x), ddy = (int)(g2c.y - b1c.y);
+					POINT bc = b1c;
+					::ScreenToClient(srOv, &bc);
+					Overlay_SetCursorPosOverrideForTest(true, b1c);
+					::PostMessageW(srOv, WM_LBUTTONDOWN, MK_LBUTTON,
+						MAKELPARAM((short)bc.x, (short)bc.y));
+					PumpFor(80);
+					for (int s = 1; s <= 6; ++s) {
+						POINT sp = { b1c.x + ddx * s / 6, b1c.y + ddy * s / 6 };
+						Overlay_SetCursorPosOverrideForTest(true, sp);
+						::PostMessageW(srOv, WM_MOUSEMOVE, MK_LBUTTON,
+							MAKELPARAM((short)(bc.x + ddx * s / 6), (short)(bc.y + ddy * s / 6)));
+						PumpFor(50);
+					}
+					publishEntities();
+					captureStep("mid-row-drag", traceProfile);
+					POINT up = { b1c.x + ddx, b1c.y + ddy };
+					Overlay_SetCursorPosOverrideForTest(true, up);
+					::PostMessageW(srOv, WM_LBUTTONUP, 0,
+						MAKELPARAM((short)(bc.x + ddx), (short)(bc.y + ddy)));
+					PumpFor(700);
+					Overlay_SetCursorPosOverrideForTest(false, POINT{});
+				}
+				publishEntities();
+				captureStep("row-drag", traceProfile);
+				extraTraceFieldsForTrace.clear();
 			} else if (traceProfile && wcscmp(traceProfile, L"entity-dump") == 0) {
 				auto publishEntities = [&]() {
 					const char* dump = Overlay_DumpEntitiesForTest();

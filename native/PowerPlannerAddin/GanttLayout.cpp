@@ -80,6 +80,23 @@ GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStar
 	}
 
 	// Step 2 — sub-row stacking (greedy first-fit by ascending start).
+	//
+	// A track records the last day its occupant still PAINTS, not the occupant's
+	// end date. Those differ for two reasons, and comparing raw end dates (as
+	// spec/layout.md Step 2 literally says) makes bars on the same lane overlap:
+	//
+	//   1. Step 4 / SpanWidthDays render an inclusive-end bar, so a task ending
+	//      on day E covers day E. A task starting on day E therefore collides
+	//      with it; `tracks[k] <= t->start` wrongly called that lane free.
+	//   2. SpanWidthDays floors the width at 2 days, so a single-day task paints
+	//      through start+1 even though its end date is start.
+	//
+	// Reserving start..start+widthDays-1 and requiring the track to be free
+	// STRICTLY BEFORE the next task's start keeps Step 2 consistent with the
+	// footprint Step 4 actually emits. Tasks that genuinely overlap still stack
+	// exactly as before (spec/fixtures/basic-chart stays green); only touching
+	// and single-day neighbours change lane, and only because they really did
+	// paint on top of each other.
 	std::vector<int> subRowCount(visible.size(), 1);
 	std::map<std::string, int> taskSubRow;
 	for (size_t i = 0; i < visible.size(); ++i) {
@@ -87,13 +104,15 @@ GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStar
 		for (const auto& t : doc.tasks) if (t.rowId == visible[i]->id) rowTasks.push_back(&t);
 		std::stable_sort(rowTasks.begin(), rowTasks.end(),
 			[](const PpTask* a, const PpTask* b) { return a->start < b->start; });
-		std::vector<std::string> tracks;  // each track = ISO end date occupying it
+		std::vector<long> tracks;  // each track = last painted day occupying it
 		for (const PpTask* t : rowTasks) {
+			const long startDay = DateToDays(t->start);
+			const long lastDay = startDay + SpanWidthDays(t->start, t->end) - 1;
 			int placed = -1;
 			for (size_t k = 0; k < tracks.size(); ++k) {
-				if (tracks[k] <= t->start) { tracks[k] = t->end; placed = (int)k; break; }
+				if (tracks[k] < startDay) { tracks[k] = lastDay; placed = (int)k; break; }
 			}
-			if (placed == -1) { tracks.push_back(t->end); placed = (int)tracks.size() - 1; }
+			if (placed == -1) { tracks.push_back(lastDay); placed = (int)tracks.size() - 1; }
 			taskSubRow[t->id] = placed;
 		}
 		subRowCount[i] = std::max(1, (int)tracks.size());

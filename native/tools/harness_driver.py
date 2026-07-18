@@ -1253,6 +1253,158 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             ),
         })
 
+    if profile == "subrow-dense":
+        by_step = {s.step: s.state for s in steps}
+
+        def _ents(step):
+            return ((by_step.get(step) or {}).get("entityDump") or {}).get("entities") or []
+
+        def _tasks(step):
+            return [e for e in _ents(step)
+                    if isinstance(e, dict) and e.get("kind") == "TASK"
+                    and isinstance(e.get("slideRect"), list) and len(e["slideRect"]) == 4]
+
+        def _task(step, tid):
+            return next((e for e in _tasks(step) if e.get("id") == tid), {})
+
+        def _rect(e):
+            # slideRect is [left, top, width, height] in slide points.
+            x, y, w, h = (float(v) for v in e["slideRect"])
+            return x, y, x + w, y + h
+
+        steps_present = [s for s in ("before", "date-drag", "row-drag") if _tasks(s)]
+        results.append({
+            "rule": "subrow_dense_chart_rendered",
+            "passed": len(steps_present) == 3 and len(_tasks("before")) == 11,
+            "detail": (
+                f"steps with TASK entities={steps_present} "
+                f"beforeTasks={len(_tasks('before'))} (want 3 steps, 11 tasks)"
+            ),
+        })
+
+        # The dense fixture must actually produce multi-lane rows, otherwise the
+        # rest of these invariants are vacuous. Lanes are counted as distinct
+        # slideRect tops within one rowId.
+        lane_counts = {}
+        for e in _tasks("before"):
+            lane_counts.setdefault(str(e.get("rowId")), set()).add(round(float(e["slideRect"][1]), 1))
+        multi = {r: len(v) for r, v in lane_counts.items() if len(v) > 1}
+        results.append({
+            "rule": "subrow_multi_lane_rows_present",
+            "passed": multi.get("sr_alpha", 0) >= 3 and multi.get("sr_gamma", 0) >= 3
+                      and multi.get("sr_delta", 0) >= 2 and multi.get("sr_eps", 0) >= 2,
+            "detail": f"lanes per row={ {r: len(v) for r, v in lane_counts.items()} } multi={multi}",
+        })
+
+        # Core lane invariant: two task bars in the SAME row on the SAME lane
+        # (same slideRect top) must never overlap horizontally. This is the
+        # regression guard for the packing rule in GanttLayout.cpp Step 2, which
+        # used to free a lane at the occupant's END DATE even though the bar
+        # paints through start + widthDays - 1 (inclusive end, 2-day floor).
+        overlaps = []
+        for step in ("before", "date-drag", "row-drag"):
+            ts = _tasks(step)
+            for i in range(len(ts)):
+                for j in range(i + 1, len(ts)):
+                    a, b = ts[i], ts[j]
+                    if a.get("rowId") != b.get("rowId"):
+                        continue
+                    ax0, ay0, ax1, ay1 = _rect(a)
+                    bx0, by0, bx1, by1 = _rect(b)
+                    if abs(ay0 - by0) > 0.5:      # different lane
+                        continue
+                    if ax0 < bx1 - 0.5 and bx0 < ax1 - 0.5:
+                        overlaps.append(f"{step}:{a.get('id')}~{b.get('id')}@{a.get('rowId')}")
+        results.append({
+            "rule": "subrow_lane_bars_never_overlap",
+            "passed": not overlaps,
+            "detail": f"same-row same-lane horizontal overlaps={overlaps or 'none'}",
+        })
+
+        # Date-only (exactly horizontal) drag must move the dates and NOTHING
+        # else: same rowId, same lane top, same width.
+        a2_pre, a2_post = _task("before", "a2"), _task("date-drag", "a2")
+        if a2_pre and a2_post:
+            px0, py0, px1, _ = _rect(a2_pre)
+            qx0, qy0, qx1, _ = _rect(a2_post)
+            moved = abs(qx0 - px0) > 0.5
+            same_row = a2_pre.get("rowId") == a2_post.get("rowId") == "sr_alpha"
+            same_lane = abs(qy0 - py0) <= 0.5
+            same_width = abs((qx1 - qx0) - (px1 - px0)) <= 1.0
+            detail = (f"a2 rowId {a2_pre.get('rowId')}->{a2_post.get('rowId')} "
+                      f"x {px0:.1f}->{qx0:.1f} laneTop {py0:.1f}->{qy0:.1f} "
+                      f"w {px1 - px0:.1f}->{qx1 - qx0:.1f}")
+            passed = moved and same_row and same_lane and same_width
+        else:
+            detail, passed = "a2 missing from before/date-drag dumps", False
+        results.append({
+            "rule": "subrow_date_drag_keeps_row_and_lane",
+            "passed": passed,
+            "detail": detail,
+        })
+
+        # A date-only drag of ONE task must not relocate its row-mates' lanes.
+        churn = []
+        for tid in ("a1", "a3"):
+            pre, post = _task("before", tid), _task("date-drag", tid)
+            if not pre or not post:
+                churn.append(f"{tid}:missing")
+                continue
+            if abs(_rect(pre)[1] - _rect(post)[1]) > 0.5:
+                churn.append(f"{tid}:{_rect(pre)[1]:.1f}->{_rect(post)[1]:.1f}")
+        results.append({
+            "rule": "subrow_date_drag_no_rowmate_lane_churn",
+            "passed": not churn,
+            "detail": f"row-mates that changed lane during a2's date-only drag: {churn or 'none'}",
+        })
+
+        # Grabbing a bar's CENTRE must start a TaskBody drag (kind 1), not a
+        # TaskProgress drag (kind 4) -- at percent 50 the progress handle sits on
+        # the bar's centre and GanttHitTest step 1b outranks the body, which
+        # silently turns "move this task" into "set it to 100%".
+        # dragTargetRowId in the snapshot is the LAST COMMITTED target, so the
+        # resolved drop row is read from the post-commit step, not mid-flight.
+        mid = by_step.get("mid-row-drag") or {}
+        mid_kind = mid.get("dragKind")
+        committed_target = str((by_step.get("row-drag") or {}).get("dragTargetRowId") or "")
+        results.append({
+            "rule": "subrow_row_drag_latches_target_row",
+            "passed": bool(mid.get("hasDrag")) and mid_kind == 1
+                      and committed_target == "sr_gamma",
+            "detail": (
+                f"mid-drag hasDrag={mid.get('hasDrag')} dragKind={mid_kind} "
+                f"committed dragTargetRowId={committed_target!r} "
+                f"(want True, 1=TaskBody, 'sr_gamma')"
+            ),
+        })
+
+        # Dragging into a multi-lane row must land in THAT row, on a lane inside
+        # that row's lane stack, colliding with nothing (the collision half is
+        # covered by subrow_lane_bars_never_overlap above).
+        b1_post = _task("row-drag", "b1")
+        gamma = [e for e in _tasks("row-drag")
+                 if e.get("rowId") == "sr_gamma" and e.get("id") != "b1"]
+        if b1_post and gamma:
+            _, by0, _, by1 = _rect(b1_post)
+            g_top = min(_rect(e)[1] for e in gamma)
+            g_bot = max(_rect(e)[3] for e in gamma)
+            in_row = b1_post.get("rowId") == "sr_gamma"
+            # Allow one lane above/below the pre-existing gamma bars: b1 may
+            # legitimately open a new lane in the stack.
+            lane_h = max(1.0, (g_bot - g_top) / max(1, len(gamma)))
+            in_stack = by0 >= g_top - lane_h - 0.5 and by1 <= g_bot + lane_h + 0.5
+            passed = in_row and in_stack
+            detail = (f"b1 rowId={b1_post.get('rowId')} laneTop={by0:.1f} "
+                      f"gammaStack=[{g_top:.1f}..{g_bot:.1f}] laneH={lane_h:.1f}")
+        else:
+            passed = False
+            detail = f"b1 present={bool(b1_post)} gammaTasks={len(gamma)}"
+        results.append({
+            "rule": "subrow_drag_into_multilane_row_lands_in_lane",
+            "passed": passed,
+            "detail": detail,
+        })
+
     if profile == "entity-dump":
         by_step = {s.step: s.state for s in steps}
         before = ((by_step.get("before") or {}).get("entityDump") or {}).get("entities") or []
@@ -1697,6 +1849,143 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": f"hasDrag={has_drag} dragPillText={pill!r}",
         })
 
+    if profile == "window-expand":
+        # 2026-07-18 discoverability gate. The user reported that after placing
+        # tasks the window-expand arrows could not be found. Ground truth here
+        # comes only from the overlay dump + posted input: the pointer is parked
+        # far from the axis header for every assertion that claims the affordance
+        # exists at rest.
+        by_step = {s.step: s.state for s in steps}
+        pre = by_step.get("pre", {})
+        hover = by_step.get("hover", {})
+        click1 = by_step.get("click1", {})
+        click2 = by_step.get("click2", {})
+        final = by_step.get("+3", {})
+
+        def _valid_rect(value: Any) -> bool:
+            return (
+                isinstance(value, dict)
+                and value.get("right", 0) > value.get("left", 0)
+                and value.get("bottom", 0) > value.get("top", 0)
+            )
+
+        def _area(value: Any) -> int:
+            if not _valid_rect(value):
+                return 0
+            return (value["right"] - value["left"]) * (value["bottom"] - value["top"])
+
+        # 1) Laid out on a POPULATED chart with no hover at all.
+        populated = int(pre.get("rowCount") or 0) >= 3 and bool(pre.get("docDatesSignature"))
+        laid_out = (
+            populated
+            and _valid_rect(pre.get("windowHeaderBandRect"))
+            and _valid_rect(pre.get("windowPortLRect"))
+            and _valid_rect(pre.get("windowPortRRect"))
+            and pre.get("windowPortHover") in (None, "Outside")
+        )
+        results.append({
+            "rule": "window_ports_laid_out_without_hover",
+            "passed": laid_out,
+            "detail": (
+                f"rows={pre.get('rowCount')} hover={pre.get('windowPortHover')!r} "
+                f"portL={pre.get('windowPortLRect')} portR={pre.get('windowPortRRect')}"
+            ),
+        })
+
+        # 2) Hit-testable: inside the alpha capture layer AND the zone hit test
+        #    agrees at the published rect's centre.
+        hit_ok = bool(
+            pre.get("windowPortLHitTestable") is True
+            and pre.get("windowPortRHitTestable") is True
+        )
+        results.append({
+            "rule": "window_ports_hit_testable",
+            "passed": hit_ok,
+            "detail": (
+                f"L={pre.get('windowPortLHitTestable')} R={pre.get('windowPortRHitTestable')} "
+                f"chartRect={pre.get('chartRect')}"
+            ),
+        })
+
+        # 3) Discoverable size: a 14x14 edge dot is what the user could not find.
+        min_side = 18
+        sides_ok = all(
+            _valid_rect(r)
+            and (r["right"] - r["left"]) >= min_side
+            and (r["bottom"] - r["top"]) >= min_side
+            for r in (pre.get("windowPortLRect"), pre.get("windowPortRRect"))
+        )
+        results.append({
+            "rule": "window_ports_target_size",
+            "passed": sides_ok,
+            "detail": (
+                f"portL={_area(pre.get('windowPortLRect'))}px2 portR={_area(pre.get('windowPortRRect'))}px2 "
+                f"min_side={min_side}"
+            ),
+        })
+
+        # 4) Hover resolves to the LEFT port and is reported as such.
+        results.append({
+            "rule": "window_port_hover_resolves",
+            "passed": hover.get("windowPortHover") == "WindowPortL",
+            "detail": f"windowPortHover={hover.get('windowPortHover')!r}",
+        })
+
+        # 5) A plain CLICK (no drag) really widens the visible range, and does so
+        #    again on the second click — which also proves the ports were
+        #    re-laid-out after the first commit's rebuild.
+        def _end(state: dict) -> Any:
+            value = state.get("windowEnd")
+            try:
+                return date.fromisoformat(value) if value else None
+            except (TypeError, ValueError):
+                return None
+
+        end1, end2 = _end(click1), _end(click2)
+        widened = bool(end1 and end2 and end2 > end1)
+        results.append({
+            "rule": "window_click_widens_range",
+            "passed": widened,
+            "detail": (
+                f"pre=({pre.get('windowStart')},{pre.get('windowEnd')}) "
+                f"click1=({click1.get('windowStart')},{click1.get('windowEnd')}) "
+                f"click2=({click2.get('windowStart')},{click2.get('windowEnd')})"
+            ),
+        })
+
+        # 6) Survives the rebuild: with the pointer parked away again after two
+        #    real commits, the ports are still laid out and still hit-testable.
+        survives = bool(
+            _valid_rect(final.get("windowPortLRect"))
+            and _valid_rect(final.get("windowPortRRect"))
+            and final.get("windowPortLHitTestable") is True
+            and final.get("windowPortRHitTestable") is True
+            and final.get("windowPortHover") in (None, "Outside")
+        )
+        results.append({
+            "rule": "window_ports_survive_rebuild",
+            "passed": survives,
+            "detail": (
+                f"portL={final.get('windowPortLRect')} portR={final.get('windowPortRRect')} "
+                f"hitL={final.get('windowPortLHitTestable')} hitR={final.get('windowPortRHitTestable')} "
+                f"hover={final.get('windowPortHover')!r}"
+            ),
+        })
+
+        # 7) The axis really moved: PP_PROJ agrees with the committed window.
+        proj_ok = False
+        try:
+            proj = final.get("ppProj") or {}
+            start_day = (date.fromisoformat(final["windowStart"]) - date(1970, 1, 1)).days
+            proj_ok = int(proj.get("minDay")) == start_day and int(proj.get("pad")) == 0
+        except (KeyError, TypeError, ValueError):
+            proj_ok = False
+        results.append({
+            "rule": "window_expand_projection_follows",
+            "passed": proj_ok,
+            "detail": f"window=({final.get('windowStart')},{final.get('windowEnd')}) ppProj={final.get('ppProj')}",
+        })
+
     if profile == "window-edge-drag":
         # W2 is intentionally preview-only. All proof points come from the
         # overlay dump and header-only captures, never from a synthetic model
@@ -1710,18 +1999,23 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
         def _valid_rect(value: Any) -> bool:
             return isinstance(value, dict) and value.get("right", 0) > value.get("left", 0) and value.get("bottom", 0) > value.get("top", 0)
 
+        # 2026-07-18: this rule used to assert the ports were ABSENT until the
+        # pointer entered the axis header band. That gate was the defect (the
+        # band shrinks with row count until it is unhoverable), so the rule now
+        # asserts the opposite: the ports are laid out at rest, WITHOUT hover,
+        # and hover costs no idle repaint.
         idle_delta = pre.get("windowIdlePaintDelta")
-        ports_gated = (
+        ports_resting = (
             _valid_rect(pre.get("windowHeaderBandRect"))
-            and not _valid_rect(pre.get("windowPortLRect"))
-            and not _valid_rect(pre.get("windowPortRRect"))
+            and _valid_rect(pre.get("windowPortLRect"))
+            and _valid_rect(pre.get("windowPortRRect"))
             and _valid_rect(hover.get("windowPortLRect"))
             and _valid_rect(hover.get("windowPortRRect"))
             and idle_delta == 0
         )
         results.append({
-            "rule": "window_ports_hover_gated",
-            "passed": ports_gated,
+            "rule": "window_ports_persistently_laid_out",
+            "passed": ports_resting,
             "detail": f"prePorts=({pre.get('windowPortLRect')},{pre.get('windowPortRRect')}) hoverPorts=({hover.get('windowPortLRect')},{hover.get('windowPortRRect')}) idlePaintDelta={idle_delta}",
         })
 
@@ -2492,8 +2786,17 @@ if __name__ == "__main__":
         # item-selection continuity rules would be false failures).
         window_profile_rules = {
             "window-repair-lossless": None,
+            "window-expand": {
+                "window_ports_laid_out_without_hover",
+                "window_ports_hit_testable",
+                "window_ports_target_size",
+                "window_port_hover_resolves",
+                "window_click_widens_range",
+                "window_ports_survive_rebuild",
+                "window_expand_projection_follows",
+            },
             "window-edge-drag": {
-                "window_ports_hover_gated",
+                "window_ports_persistently_laid_out",
                 "window_pill_two_iso_dates",
                 "window_drag_snaps_and_clamps",
                 "window_preview_header_pixel_diff",
