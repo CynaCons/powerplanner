@@ -2090,9 +2090,9 @@ void EnsureEditorWindow() {
 	::RegisterClassExW(&wc);
 
 	g_editorHwnd = ::CreateWindowExW(
-		WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+		WS_EX_TOOLWINDOW,
 		kEditorClass, L"", WS_POPUP,
-		0, 0, 100, 24, NULL, NULL, g_inst, NULL);
+		0, 0, 100, 24, ::GetAncestor(g_pptHwnd, GA_ROOT), NULL, g_inst, NULL);
 	if (!g_editorHwnd) return;
 
 	g_editHwnd = ::CreateWindowExW(
@@ -2119,7 +2119,7 @@ void OpenInlineEditor(const EditRegion& region) {
 		NormalizeRect(rc);
 		int w = std::max(80, (int)(rc.right - rc.left));
 		int h = std::max(22, (int)(rc.bottom - rc.top));
-		::SetWindowPos(g_editorHwnd, (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST,
+		::SetWindowPos(g_editorHwnd, HWND_TOP,
 			rc.left, rc.top, w, h, SWP_SHOWWINDOW);
 		::MoveWindow(g_editHwnd, Scale(2), Scale(2), w - Scale(4), h - Scale(4), TRUE);
 		std::wstring text = Widen(value);
@@ -2331,9 +2331,9 @@ void EnsureCardWindow() {
 	::RegisterClassExW(&wc);
 
 	g_cardHwnd = ::CreateWindowExW(
-		WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+		WS_EX_TOOLWINDOW,
 		kCardClass, L"", WS_POPUP | WS_CLIPCHILDREN,
-		0, 0, Scale(kBaseCardW), 200, NULL, NULL, g_inst, NULL);
+		0, 0, Scale(kBaseCardW), 200, ::GetAncestor(g_pptHwnd, GA_ROOT), NULL, g_inst, NULL);
 	if (!g_cardHwnd) return;
 
 	auto makeEdit = [&](int id, DWORD extraStyle) {
@@ -2486,7 +2486,7 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 			if (y < mi.rcWork.top) y = mi.rcWork.top;
 		}
 
-		::SetWindowPos(g_cardHwnd, (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST,
+		::SetWindowPos(g_cardHwnd, HWND_TOP,
 			x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
 		::InvalidateRect(g_cardHwnd, NULL, TRUE);
 		::SetForegroundWindow(g_cardHwnd);
@@ -5866,10 +5866,18 @@ void EnsureWindow() {
 	// NOTE: no SetLayeredWindowAttributes here — the window is driven purely by
 	// UpdateLayeredWindow (per-pixel premultiplied alpha). A layered window
 	// without attributes stays invisible until the first RenderOverlay() push.
+	// No WS_EX_TOPMOST: the chrome is OWNED by PowerPoint's root window
+	// instead (see EnsureChromeOwner). An owned popup always sits above its
+	// owner and follows it when the owner is minimized or loses activation,
+	// which is what we actually want. Topmost-plus-unowned made the chrome
+	// float above unrelated applications whenever the 150ms Tick that hides
+	// it was delayed — it was observed over Chrome, and two earlier
+	// "overlay over a fullscreen game" reports were patched in the polling
+	// path rather than here.
 	g_hwnd = ::CreateWindowExW(
-		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
 		kClass, L"", WS_POPUP,
-		0, 0, 10, 10, NULL, NULL, g_inst, NULL);
+		0, 0, 10, 10, ::GetAncestor(g_pptHwnd, GA_ROOT), NULL, g_inst, NULL);
 	static bool themeMenuInited = false;
 	if (!themeMenuInited && g_gdiplusToken) {
 		ThemeMenu_Init(g_inst, g_gdiplusToken, Scale, RecEmitInput);
@@ -6785,7 +6793,7 @@ void ShowOverlayForChartRect(const RECT& chart) {
 		// or it paints over whatever the user is doing while a test run
 		// borrows the desktop (live report 2026-07-11: app bar over a
 		// fullscreen game). Production keeps TOPMOST (it hides via gating).
-		HWND insertAfter = (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST;
+		HWND insertAfter = HWND_TOP;
 		::SetWindowPos(g_hwnd, insertAfter, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		++g_overlaySwpCount;
 	}
@@ -7450,10 +7458,12 @@ void EnsureAppBarWindow() {
 	wc.hCursor = ::LoadCursor(NULL, IDC_ARROW);
 	wc.lpszClassName = kAppBarClass;
 	::RegisterClassExW(&wc);
+	// Owned by PowerPoint's root, not topmost — see the note at the overlay's
+	// CreateWindowExW.
 	g_appBarHwnd = ::CreateWindowExW(
-		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
 		kAppBarClass, L"", WS_POPUP,
-		0, 0, 10, 10, NULL, NULL, g_inst, NULL);
+		0, 0, 10, 10, ::GetAncestor(g_pptHwnd, GA_ROOT), NULL, g_inst, NULL);
 }
 
 void HideAppBar(bool keepGeomCache = false) {
@@ -7512,7 +7522,7 @@ void ShowAppBar(const RECT& chartScreenRect, const RECT& slideScreenRect) {
 	if (geomChanged || firstShow) {
 		// Same override rule as ShowOverlayForChartRect: harness runs bypass
 		// host-active gating, so their windows must never be TOPMOST.
-		HWND barInsertAfter = (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST;
+		HWND barInsertAfter = HWND_TOP;
 		::SetWindowPos(g_appBarHwnd, barInsertAfter, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		++g_appBarSwpCount;
 		g_appBarLastRect = want;
@@ -8996,6 +9006,22 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 // owned popup of the tracked PowerPoint root (GA_ROOTOWNER).
 //
 // Also requires ppRoot to be non-iconic (not minimized) and visible.
+// The chrome windows can be created before Tick has resolved g_pptHwnd, in
+// which case CreateWindowExW got a NULL owner. Without WS_EX_TOPMOST an
+// unowned popup would sink behind PowerPoint, so rebind the owner as soon as
+// the host HWND is known. Cheap and idempotent: GetWindow(GW_OWNER) is a
+// local lookup and the SetWindowLongPtr only fires when the owner actually
+// differs.
+static void EnsureChromeOwner(HWND ppRoot) {
+	if (!ppRoot || !::IsWindow(ppRoot)) return;
+	HWND wins[] = { g_hwnd, g_appBarHwnd, g_editorHwnd, g_cardHwnd };
+	for (HWND w : wins) {
+		if (!w || !::IsWindow(w)) continue;
+		if (::GetWindow(w, GW_OWNER) == ppRoot) continue;
+		::SetWindowLongPtrW(w, GWLP_HWNDPARENT, (LONG_PTR)ppRoot);
+	}
+}
+
 bool IsHostActiveForOverlayChrome(HWND ppRoot) {
 	// Harness override: bypass the real GetForegroundWindow-based logic
 	// entirely so the SCOPE stage (and any other stage relying on host-active
@@ -9151,6 +9177,7 @@ void Tick() {
 		// as the no-chart path below. Latency is bounded by one 150ms tick,
 		// which is acceptable per the task spec.
 		HWND ppRoot = ::GetAncestor(g_pptHwnd, GA_ROOT);
+		EnsureChromeOwner(ppRoot);
 		g_lastHostActive = IsHostActiveForOverlayChrome(ppRoot);
 		if (!g_lastHostActive) {
 			HideOverlay();
