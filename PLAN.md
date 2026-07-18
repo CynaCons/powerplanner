@@ -608,3 +608,4 @@ the existing Prim/PP_KIND model — NOT a renderer rewrite.
 - Installer MSI (v2.4.4) if not pulled forward by release needs
 
 See git for full historical web iterations (v0–v2).
+- **SR-SMO-09 gate is not a valid measurement** — `paint_cadence_min_hz` swings 1.59/7.33/7.48/10.41 Hz across four runs of *identical* code, with p95Ms 281→3141ms, while `paintCount` stays deterministic at 35. The gate measures machine scheduling jitter, not paint behaviour, so it can neither detect a regression nor validate a fix. Make the metric sound before doing any recorder-overhead optimisation work (currently task #10): either measure under controlled load, or gate on a deterministic quantity (work-per-paint / paints-per-gesture) instead of wall-clock Hz. Measured 2026-07-18.
