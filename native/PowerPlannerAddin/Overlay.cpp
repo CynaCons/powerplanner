@@ -1706,6 +1706,21 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 				scenePrims[{ prim.tagKind, prim.tagId }].push_back(&prim);
 		}
 
+		// The axis header band's HORIZONTAL extent is the PAINTED band's, not the
+		// chart shape's. The scene lays the band out as rect(MARGIN, chartTop -
+		// AXIS_H, chartW, AXIS_H) (GanttScene.h) where chartW is the CONTENT
+		// width; the chart SHAPE is wider, reserving a right gutter for labels
+		// and notes that overflow the timeline (e.g. a right-aligned TEXT note).
+		// Deriving the band from g_chartScreenRect therefore overshoots to the
+		// right by that gutter, and the window-expand chevron anchored to
+		// band.right lands in dead space outside the axis it operates on. Live
+		// recording 20260718-221333: painted band ended at x=2551 while the port
+		// sat at 2726..2766 — 175px adrift, visibly detached from the chart.
+		// Capture the real child rect; fall back to the chart rect only for
+		// charts built before HEADER_BAND existed.
+		RECT headerBandShapeRect = {};
+		bool haveHeaderBandShape = false;
+
 		for (long i = 1; i <= n; ++i) {
 			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
 			_bstr_t kind = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
@@ -1770,6 +1785,15 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 				g_entityCache.push_back(std::move(ent));
 				if (kindStr == "TASK" || kindStr == "TASK_PROGRESS" || kindStr == "TASK_LABEL")
 					g_recTaskEntityBindings.push_back({ g_entityCache.size() - 1, ch });
+			}
+
+			// Captured before the hit-test filter below drops HEADER_BAND: the
+			// band stays out of the semantic item walk (it must not compete with
+			// tasks/markers for a hit), but its rect is the only ground truth for
+			// where the axis actually ends. See headerBandShapeRect's declaration.
+			if (kindStr == "HEADER_BAND") {
+				headerBandShapeRect = rr;
+				haveHeaderBandShape = true;
 			}
 
 			// TASK_PROGRESS is the inner fill of a TASK bar — the TASK rect
@@ -1893,10 +1917,13 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 				for (const auto& entry : rowy.rows) firstTop = std::min(firstTop, entry.top);
 				const float headerTopPt = chartTopPt + (firstTop - kAxisHeaderHeightPt) * yScale;
 				const float headerBottomPt = chartTopPt + firstTop * yScale;
+				// Vertical extent stays model-derived (the first row lane, above);
+				// horizontal comes from the painted band so the expand chevrons
+				// anchor to the axis instead of the chart shape's label gutter.
 				g_headerBandScreenRect = {
-					g_chartScreenRect.left,
+					haveHeaderBandShape ? headerBandShapeRect.left : g_chartScreenRect.left,
 					win->PointsToScreenPixelsY(headerTopPt),
-					g_chartScreenRect.right,
+					haveHeaderBandShape ? headerBandShapeRect.right : g_chartScreenRect.right,
 					win->PointsToScreenPixelsY(headerBottomPt)
 				};
 				NormalizeRect(g_headerBandScreenRect);

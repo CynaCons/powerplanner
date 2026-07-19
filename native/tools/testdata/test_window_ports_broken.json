@@ -1,0 +1,7 @@
+{
+  "name": "test_window_ports_broken",
+  "description": "Test that the window_ports_inside_axis_header rule catches the broken header band defect",
+  "invariants": [
+    "window_ports_inside_axis_header"
+  ]
+}

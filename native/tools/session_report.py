@@ -939,11 +939,115 @@ def _rule_no_silent_errors(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+# Tolerance for alignment checks (pixels)
+WINDOW_PORT_TOLERANCE_PX = 4
+
+
+def _rule_window_ports_inside_axis_header(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Check that window expand ports (chevrons) lie horizontally inside the
+    axis header band, and that the chrome band rect matches the painted band entity.
+
+    This detects a defect where the band's horizontal extent was incorrectly taken
+    from the chart shape rect instead of the painted band, causing ports to render
+    outside the intended area.
+    """
+    snapshots = [e for e in events if e.get("type") == "snapshot"]
+
+    # Find snapshots with both chrome band and entity band
+    relevant = []
+    for snap in snapshots:
+        chrome = snap.get("chrome") or {}
+        band_rect = chrome.get("windowHeaderBandRect") or {}
+        entities = snap.get("entities") or []
+
+        # Find HEADER_BAND entity
+        header_band = None
+        for ent in entities:
+            if ent.get("kind") == "HEADER_BAND":
+                header_band = ent
+                break
+
+        if band_rect and header_band:
+            relevant.append((snap, chrome, band_rect, header_band))
+
+    if not relevant:
+        return {
+            "rule": "window_ports_inside_axis_header",
+            "passed": True,
+            "detail": "not applicable (no snapshot with both chrome band and HEADER_BAND entity)",
+        }
+
+    failures = []
+
+    for snap, chrome, band_rect, header_band in relevant:
+        chrome_left = band_rect.get("left", 0)
+        chrome_right = band_rect.get("right", 0)
+
+        # screenRect is [left, top, width, height]
+        screen_rect = header_band.get("screenRect") or []
+        if len(screen_rect) >= 4:
+            painted_left = screen_rect[0]
+            painted_width = screen_rect[2]
+            painted_right = painted_left + painted_width
+
+            # Check left alignment
+            left_delta = abs(chrome_left - painted_left)
+            if left_delta > WINDOW_PORT_TOLERANCE_PX:
+                failures.append(
+                    f"seq={snap.get('seq')} chrome left {chrome_left} vs painted left {painted_left} "
+                    f"(delta {left_delta}px)"
+                )
+
+            # Check right alignment
+            right_delta = abs(chrome_right - painted_right)
+            if right_delta > WINDOW_PORT_TOLERANCE_PX:
+                failures.append(
+                    f"seq={snap.get('seq')} chrome right {chrome_right} vs painted right {painted_right} "
+                    f"(delta {right_delta}px)"
+                )
+
+        # Check ports are inside band
+        port_l = chrome.get("windowPortLRect") or {}
+        port_r = chrome.get("windowPortRRect") or {}
+
+        if port_l:
+            port_l_left = port_l.get("left", 0)
+            port_l_right = port_l.get("right", 0)
+            if port_l_left < chrome_left or port_l_right > chrome_right:
+                failures.append(
+                    f"seq={snap.get('seq')} left port [{port_l_left}, {port_l_right}] outside "
+                    f"band [{chrome_left}, {chrome_right}]"
+                )
+
+        if port_r:
+            port_r_left = port_r.get("left", 0)
+            port_r_right = port_r.get("right", 0)
+            if port_r_left < chrome_left or port_r_right > chrome_right:
+                failures.append(
+                    f"seq={snap.get('seq')} right port [{port_r_left}, {port_r_right}] outside "
+                    f"band [{chrome_left}, {chrome_right}]"
+                )
+
+    if failures:
+        return {
+            "rule": "window_ports_inside_axis_header",
+            "passed": False,
+            "detail": "; ".join(failures),
+        }
+
+    return {
+        "rule": "window_ports_inside_axis_header",
+        "passed": True,
+        "detail": f"checked {len(relevant)} snapshot(s), all ports within header band",
+    }
+
+
 INVARIANT_RULES = {
     "task_label_selects_task_unit": _rule_task_label_selects_task_unit,
     "task_body_selects_same_unit": _rule_task_body_selects_same_unit,
     "gesture_commits_or_cancels": _rule_gesture_commits_or_cancels,
     "no_silent_errors": _rule_no_silent_errors,
+    "window_ports_inside_axis_header": _rule_window_ports_inside_axis_header,
 }
 
 
