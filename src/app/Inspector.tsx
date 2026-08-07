@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react';
+import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import type { TimeScale, ThemeName } from '../types/document';
@@ -20,7 +22,60 @@ const THEMES: { id: ThemeName; label: string }[] = [
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+const PANEL_KEY = 'powerplanner:inspector:panelCollapsed:v1';
+
+/**
+ * Collapses the whole panel to a thin rail.
+ *
+ * Section-level collapse reclaims vertical space but the column keeps its
+ * 320px, which on a dense chart is the binding constraint on legibility — the
+ * chart had 580px for 18 months. Collapsing the panel hands that width back.
+ */
 export function Inspector() {
+  const [panelCollapsed, setPanelCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(PANEL_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const togglePanel = () => {
+    const next = !panelCollapsed;
+    setPanelCollapsed(next);
+    try {
+      localStorage.setItem(PANEL_KEY, next ? '1' : '0');
+    } catch {
+      /* non-fatal */
+    }
+    // The grid column width lives in CSS; drive it from a document-level class
+    // so the chart column actually reflows.
+    document.querySelector('.app-shell')?.classList.toggle('app-shell--inspector-collapsed', next);
+  };
+
+  useEffect(() => {
+    document.querySelector('.app-shell')?.classList.toggle('app-shell--inspector-collapsed', panelCollapsed);
+  }, [panelCollapsed]);
+
+  if (panelCollapsed) {
+    return (
+      <aside className="inspector inspector--collapsed">
+        <button
+          onClick={togglePanel}
+          aria-expanded={false}
+          title="Show inspector"
+          className="inspector__rail-btn"
+        >
+          <ChevronLeft size={14} strokeWidth={2} style={{ transform: 'rotate(180deg)' }} />
+        </button>
+      </aside>
+    );
+  }
+
+  return <InspectorBody onCollapsePanel={togglePanel} />;
+}
+
+function InspectorBody({ onCollapsePanel }: { onCollapsePanel: () => void }) {
   const scale = useDocumentStore((s) => s.doc.calendar.scale);
   const setScale = useDocumentStore((s) => s.setScale);
   const fiscalYearStart = useDocumentStore((s) => s.doc.calendar.fiscalYearStart);
@@ -33,6 +88,7 @@ export function Inspector() {
   if (selection.length > 0) {
     return (
       <aside className="inspector">
+        <PanelCollapseBar onCollapse={onCollapsePanel} />
         <SelectionInspector />
       </aside>
     );
@@ -61,6 +117,7 @@ export function Inspector() {
 
   return (
     <aside className="inspector">
+      <PanelCollapseBar onCollapse={onCollapsePanel} />
       <Section title="Document">
         <Field label="Scale">
           <Segmented
@@ -143,7 +200,56 @@ export function Inspector() {
 /* primitives                                                          */
 /* ------------------------------------------------------------------ */
 
+/** Hide-the-whole-panel control, so the chart can take the 320px back. */
+function PanelCollapseBar({ onCollapse }: { onCollapse: () => void }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+      <button
+        onClick={onCollapse}
+        aria-expanded={true}
+        title="Hide inspector (give the width to the chart)"
+        className="inspector__rail-btn"
+      >
+        <ChevronLeft size={14} strokeWidth={2} />
+      </button>
+    </div>
+  );
+}
+
+const COLLAPSE_KEY = 'powerplanner:inspector:collapsed:v1';
+
+function readCollapsed(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}') as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function writeCollapsed(state: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(COLLAPSE_KEY, JSON.stringify(state));
+  } catch {
+    // Quota / private mode — collapsing still works for this session.
+  }
+}
+
+/**
+ * A collapsible inspector panel.
+ *
+ * The panel occupies a fixed 320px of a viewport the chart also needs; on a
+ * dense chart that is most of the reading area. Collapsed state persists so the
+ * choice survives a reload (PLAN.md v2.12.1).
+ */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const [collapsed, setCollapsed] = useState(() => readCollapsed()[title] ?? false);
+
+  const toggle = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    writeCollapsed({ ...readCollapsed(), [title]: next });
+  };
+
   return (
     <section
       style={{
@@ -151,7 +257,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         background: 'var(--color-bg-elev)',
         border: '1px solid var(--color-border-hairline)',
         borderRadius: 'var(--radius-lg)',
-        padding: '14px 14px 12px',
+        padding: collapsed ? '10px 14px' : '14px 14px 12px',
         marginBottom: 12,
         boxShadow: 'var(--shadow-1)',
       }}
@@ -170,10 +276,42 @@ function Section({ title, children }: { title: string; children: React.ReactNode
           pointerEvents: 'none',
         }}
       />
-      <h3 style={{ margin: '0 0 12px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.9, textTransform: 'uppercase', color: 'var(--color-text-dim)' }}>
+      <button
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        title={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          width: '100%',
+          margin: 0,
+          marginBottom: collapsed ? 0 : 12,
+          padding: 0,
+          border: 'none',
+          background: 'transparent',
+          fontSize: 10.5,
+          fontWeight: 600,
+          letterSpacing: 0.9,
+          textTransform: 'uppercase',
+          color: 'var(--color-text-dim)',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <ChevronRight
+          size={12}
+          strokeWidth={2}
+          aria-hidden="true"
+          style={{
+            transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+            transition: 'transform 120ms ease',
+            flexShrink: 0,
+          }}
+        />
         {title}
-      </h3>
-      {children}
+      </button>
+      {!collapsed && children}
     </section>
   );
 }

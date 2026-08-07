@@ -242,6 +242,36 @@ kbd {
 }
 .app-shell--compact .inspector { display: none; }
 
+/* Inspector collapsed to a rail — the chart column reclaims the width.
+   This is the single biggest legibility lever on a dense chart. */
+.app-shell--inspector-collapsed {
+  --inspector-w: 34px;
+}
+.inspector--collapsed {
+  padding: 8px 4px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  overflow: hidden;
+}
+.inspector__rail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius);
+  color: var(--color-text-dim);
+  background: var(--color-bg-elev);
+  flex-shrink: 0;
+}
+.inspector__rail-btn:hover {
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+}
+
 .app-header {
   grid-area: header;
   display: flex;

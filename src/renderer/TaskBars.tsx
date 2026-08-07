@@ -9,6 +9,7 @@ import { dateToX } from '../layout/timeAxis';
 import type { DragPreviewMap } from '../app/useChartInteractions';
 import { InlineLabel } from '../app/InlineLabel';
 import { computeCriticalPath } from '../layout/criticalPath';
+import { computeSpaceRight, fitLabel, type Placement } from './labelFit';
 
 interface Props {
   layout: LayoutResult;
@@ -16,6 +17,8 @@ interface Props {
 }
 
 const HANDLE_W = 5;
+/** Half-width of a milestone diamond — must match SIZE in Milestones.tsx. */
+const MILESTONE_HALF = 11;
 
 export function TaskBars({ layout, dragPreview }: Props) {
   const viewStart = useViewportStore((s) => s.startDate);
@@ -31,6 +34,42 @@ export function TaskBars({ layout, dragPreview }: Props) {
     () => (showCritical ? computeCriticalPath(doc).criticalTaskIds : new Set<string>()),
     [showCritical, doc],
   );
+
+  // How much free space each bar has before the next bar in its own lane.
+  // A label may only spill right into space that is actually empty — otherwise
+  // it lands on the neighbour's label, which is what made dense charts
+  // unreadable (PLAN.md v2.12.0 / L0a).
+  const spaceRight = useMemo(() => {
+    // Milestones share the lane with tasks, so a diamond (and its own label) is
+    // just as much of an obstacle as the next bar. Leaving them out is what
+    // left task↔milestone collisions after the first pass at this fix.
+    const geo = [
+      ...layout.tasks.map((lt) => {
+        const preview = dragPreview?.tasks.get(lt.task.id);
+        const x = dateToX(preview?.start ?? lt.task.start, viewStart, pxPerDay);
+        const endX = dateToX(preview?.end ?? lt.task.end, viewStart, pxPerDay);
+        return {
+          id: lt.task.id,
+          x,
+          right: x + Math.max(2, endX - x + pxPerDay),
+          lane: `${lt.task.rowId}#${lt.subRow ?? 0}`,
+        };
+      }),
+      ...layout.milestones.map((lm) => {
+        const cx = dateToX(lm.milestone.date, viewStart, pxPerDay) + pxPerDay / 2;
+        return {
+          id: `__ms:${lm.milestone.id}`,
+          x: cx - MILESTONE_HALF,
+          right: cx + MILESTONE_HALF,
+          lane: `${lm.milestone.rowId}#${lm.subRow ?? 0}`,
+        };
+      }),
+    ];
+    const spaced = computeSpaceRight(geo);
+    const byId = new Map<string, number>();
+    for (const [item, space] of spaced) byId.set(item.id, space);
+    return byId;
+  }, [layout.tasks, layout.milestones, dragPreview, viewStart, pxPerDay]);
 
   return (
     <g>
@@ -183,6 +222,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
                   barWidth={width}
                   barHeight={h}
                   placement={t.labelPlacement ?? 'on-bar'}
+                  spaceRight={spaceRight.get(t.id) ?? Infinity}
                 />
               </g>
             )}
@@ -199,58 +239,59 @@ interface LabelProps {
   y: number;
   barWidth: number;
   barHeight: number;
-  placement: 'on-bar' | 'left' | 'right' | 'above' | 'below' | 'hidden';
+  placement: Placement;
+  /** Free space before the next bar in this lane; Infinity if nothing follows. */
+  spaceRight: number;
 }
 
-function LabelText({ text, x, y, barWidth, barHeight, placement }: LabelProps) {
-  if (placement === 'hidden') return null;
+function LabelText({ text, x, y, barWidth, barHeight, placement, spaceRight }: LabelProps) {
+  const fit = fitLabel({ text, requested: placement, barWidth, spaceRight });
+  if (fit.placement === 'hidden') return null;
+
   const baseProps = {
     fontSize: 11,
     fill: 'var(--color-text)',
     pointerEvents: 'none' as const,
   };
-  // Estimate text width (very rough: ~6.5px per char at 11px)
-  const estimatedTextWidth = text.length * 6.5;
-  // If on-bar requested but doesn't fit, fall back to right placement
-  const effective = placement === 'on-bar' && estimatedTextWidth > barWidth - 16 ? 'right' : placement;
-  placement = effective;
-  if (placement === 'left') {
+  // A shortened label must stay discoverable — hover reveals the full text.
+  const title = fit.truncated ? <title>{text}</title> : null;
+
+  if (fit.placement === 'left') {
     return (
       <text x={x - 6} y={y + barHeight / 2 + 4} textAnchor="end" {...baseProps}>
-        {text}
+        {title}
+        {fit.text}
       </text>
     );
   }
-  if (placement === 'right') {
+  if (fit.placement === 'right') {
     return (
       <text x={x + barWidth + 6} y={y + barHeight / 2 + 4} {...baseProps}>
-        {text}
+        {title}
+        {fit.text}
       </text>
     );
   }
-  if (placement === 'above') {
+  if (fit.placement === 'above') {
     return (
       <text x={x + 4} y={y - 4} {...baseProps}>
-        {text}
+        {title}
+        {fit.text}
       </text>
     );
   }
-  if (placement === 'below') {
+  if (fit.placement === 'below') {
     return (
       <text x={x + 4} y={y + barHeight + 12} {...baseProps}>
-        {text}
+        {title}
+        {fit.text}
       </text>
     );
   }
-  // on-bar
   return (
-    <text
-      x={x + 8}
-      y={y + barHeight / 2 + 4}
-      {...baseProps}
-      fill="white"
-    >
-      <tspan>{text}</tspan>
+    <text x={x + 8} y={y + barHeight / 2 + 4} {...baseProps} fill="white">
+      {title}
+      <tspan>{fit.text}</tspan>
     </text>
   );
 }

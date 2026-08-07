@@ -702,6 +702,38 @@ the renderer places bars.
 - [ ] B6d: open PR, review, merge to `main`
 - [ ] B6e: tag + GitHub release with notes covering the new web agent surface
 
+# Phase 15: Web chart legibility & inspector density (user report 2026-08-07)
+
+**Report:** after the agent bridge authored a real 32-task / 7-milestone roadmap
+into the live app, the user's verdict was *"it's not usable, we cannot read
+anything"* — and separately, that the inspector's DOCUMENT / APPEARANCE /
+STATISTICS sections should collapse.
+
+**Process note:** the agent (me) declared the demo working **without ever
+looking at it**. The screenshot tool had failed earlier because the browser pane
+was not displayed, and instead of resolving that, the result was reported as
+good on the strength of counts and revision numbers. The chart data was correct
+and the render was unreadable at the same time. Counts are not a rendering gate.
+
+### v2.12.0 — L0: On-bar label collision
+**Goal:** A dense chart stays readable — a label never overlaps another label or a neighbouring bar.
+- [x] L0a: **Root cause** — `src/renderer/TaskBars.tsx:215` falls back from `on-bar` to `right` whenever the text is wider than the bar, with **no check that the space to the right is free**. At 0.59 px/day every bar is a sliver, so every label spills right and lands on top of the next bar's label. "Doesn't fit" is currently turned into "overlap the neighbour" instead of "don't draw it"
+- [x] L0b: compute per-lane horizontal space available to each task (gap to the next item in the same row+subRow) and choose placement from it: on-bar if it fits inside, else right if the gap fits, else truncate to the available width, else hide
+- [x] L0c: truncation with ellipsis + full text on hover, so a hidden label is still discoverable rather than silently lost
+- [x] L0d: same treatment for milestone labels (`src/renderer/Milestones.tsx` defaults to `right` unconditionally and collides with task labels in the same lane)
+- [x] L0e: unit tests for the placement decision at several pxPerDay values, **red-checked** against the current renderer
+- [x] L0f: verified at the reported density (32 tasks / 7 rows / 18 months) by measuring rendered `getBoundingClientRect()` of every chart label and counting pairwise overlaps: **7 → 0**. Two rounds were needed — the first left task↔milestone collisions because `TaskBars` only put tasks in the occupancy list, and milestone labels defaulted to `'right'`, which the fitter read as an explicit user choice and passed through unfitted. A *default* is not a choice
+- [ ] L0g (open): **axis tick labels still overlap** — 9 pairs ("Sep 2026" over "Nov 2026"). Separate defect in the time-axis tier selection, not the task-label fitter; surfaced by the same measurement
+- [ ] L0h (open): at 0.59 px/day, 14 of 39 item labels are hidden rather than truncated because nothing legible fits. Correct behaviour, but a chart that hides a third of its labels wants a different answer — row-gutter labels, a legend, or a density warning
+
+### v2.12.1 — L1: Inspector density
+**Goal:** The left panel earns its 31 % of the viewport, or gives it back.
+- [x] L1a: make `Section` (DOCUMENT / APPEARANCE / STATISTICS) collapsible with a disclosure control
+- [x] L1b: persist collapsed state across reloads
+- [x] L1c: keyboard accessible + correct `aria-expanded`
+- [x] L1d: measured expanded vs collapsed — section 179px → 36px; **whole-panel** collapse added because section collapse alone reclaims only vertical space while the 320px column (35% of the window) was the binding constraint. Chart width 580 → 777px (+34%), restores cleanly
+- [ ] L1e (open): the user has not yet seen either fix on screen. Verified by measured geometry, not by looking — the browser pane was not displayed. **Not self-closable**, same rule as the other user visual gates
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
