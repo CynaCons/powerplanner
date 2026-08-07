@@ -4,6 +4,7 @@
 #include "GanttJson.h"
 #include "GanttOps.h"
 #include "GanttHitTest.h"
+#include "EntityDump.h"
 #include "GanttAxisLayout.h"
 #include "GanttAppBar.h"
 #include "GanttCommandRegistry.h"
@@ -31,6 +32,9 @@
 #endif
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -149,6 +153,14 @@ static bool g_lastHostActive = true;
 static bool g_lastViewOk = true;
 static long g_overlayPaintCount = 0, g_appBarPaintCount = 0;
 static long g_overlaySwpCount = 0, g_appBarSwpCount = 0;
+// Phase 13 v2.8.1: continuous paint cadence sample (SR-SMO-09..12).
+// Ring of paint timestamps (GetTickCount64 ms) while sampling is active.
+static constexpr int kPaintTsCap = 512;
+static ULONGLONG g_paintTsMs[kPaintTsCap];
+static int g_paintTsCount = 0;
+static int g_paintTsWrite = 0;
+static bool g_paintSampleActive = false;
+static ULONGLONG g_paintSampleStartMs = 0;
 ULONG_PTR g_gdiplusToken = 0;
 
 // ---- bottom app bar (second layered chrome window) -------------------------
@@ -336,6 +348,9 @@ RECT g_chartScreenRect = {};
 // derives this screen rect from the first PP_ROWY lane top minus scaled AXIS_H.
 RECT g_headerBandScreenRect = {};
 bool g_windowHeaderHover = false;
+// Which window port (if any) the pointer is over. Drives the emphasized paint
+// state and the "click or drag to widen" hint; NOT a visibility gate.
+HtZone g_windowPortHoverZone = HtZone::Outside;
 static float g_chartLeftPt = 0.0f;
 static float g_chartWidthPt = 0.0f;
 RECT g_selScreenRect = {};
@@ -367,6 +382,61 @@ RECT g_hitCacheChartRect = {};
 long g_hitCacheChildCount = -1;
 std::string g_hitCacheChartRowY;
 std::string g_hitCacheChartProj;
+// R1a entity dump (SR-ENT-05/08): rebuilt with the hit snapshot in BuildRowBands.
+// Geometry/kind/id are cached; flags are filled at dump time from live globals.
+// Scene signature reuses hit-cache key inputs for future snapshot dedupe (SR-ENT-06).
+std::vector<PpEntity> g_entityCache;
+struct RecTaskEntityBinding {
+	size_t entityIndex = 0;
+	PowerPoint::ShapePtr shape;
+};
+std::vector<RecTaskEntityBinding> g_recTaskEntityBindings;
+ULONGLONG g_recLastTaskGeometryRefreshMs = 0;
+std::string g_entityDumpJson = "{\"entities\":[]}";
+std::string g_entitySceneSig;
+
+// ---- session recorder (R1b-core + R1b-taps / SR-REC-01..14) -----------------
+// Off by default (SR-REC-01): every hook checks g_recActive first. Structured
+// sink is SEPARATE from powerplanner-addin.log (never write events there).
+// Toggle UI is R1c; this slice adds input/gesture/op/paint/frame taps.
+bool g_recActive = false;
+OverlaySessionRecordStateChanged g_recStateChanged = nullptr;
+void* g_recStateChangedContext = nullptr;
+wchar_t g_recSessionDir[MAX_PATH] = {};
+FILE* g_recEventsFile = nullptr;
+char g_recEventsBuffer[64 * 1024] = {};
+unsigned long long g_recSeq = 0;
+ULONGLONG g_recT0 = 0;
+ULONGLONG g_recLastFlushMs = 0;
+std::string g_recLastSnapEntitySig; // entity-body dedupe key (SR-ENT-06)
+std::string g_recLastNonEmptyEntityJson; // survives transient post-rebuild cache invalidation
+std::string g_recLastNativeKey;     // nativeSel transition dedupe (Tick is 150ms)
+// ChildShapeRange detail (Connect/Tick → nativeSel + entity flags, SR-REC-06).
+bool g_recNativeHasChild = false;
+std::string g_recNativeChildKind;
+std::string g_recNativeChildId;
+// Throttle / dedupe state for R1b taps (zero cost when !g_recActive).
+ULONGLONG g_recLastInputMoveMs = 0;
+std::string g_recLastInputHitKey; // zone|kind|id of last emitted move
+ULONGLONG g_recLastGestureUpdateMs = 0;
+ULONGLONG g_recLastPaintOverlayMs = 0;
+ULONGLONG g_recLastPaintAppBarMs = 0;
+ULONGLONG g_recLastFrameMs = 0;
+ULONGLONG g_recLastIdleSnapshotMs = 0;
+unsigned long long g_recFrameSeq = 0;
+std::string g_recPendingFrameTrigger;
+ULONGLONG g_recPendingFrameDueMs = 0;
+wchar_t g_recActiveMarkerPath[MAX_PATH] = {};
+// Monotonic gesture-instance id (SR-REC gesture lifecycle). Start allocates a
+// new "g"; update/commit/cancel reuse it. Matching on kind/id alone is wrong:
+// Create start id="" vs commit id=newId, WindowEdgeL start vs "WindowEdge" commit.
+long g_recGestureSeq = 0;
+long g_recCurGestureId = 0;
+// LBUTTONUP sets this around ReleaseCapture so CAPTURECHANGED's CancelDragGesture
+// does not emit a spurious "cancel" when a commit (or explicit cancel) follows.
+bool g_recSkipGestureCancel = false;
+bool g_recIndicatorPainted = false;
+
 // Last semantic hit from a mouse-down on the overlay. The selection-model unit
 // will consume this; for now it is only stored (and logged on change).
 HtHit g_lastHit;
@@ -384,6 +454,16 @@ bool g_gripHover = false;
 
 std::string g_hoverRowId;
 RECT g_hoverBandRect = {};
+// Task-level hover (v2.10.x): the task bar unit currently under the cursor and
+// its SCREEN rect, so PaintOverlay can outline exactly the bar the pointer is
+// over. Row hover (above) stays coarse — it washes the whole band — whereas
+// this names ONE task. Set only from UpdateHoverFromCursor, only while no drag
+// gesture is in flight, and cleared by ClearHoverState (which the hide path
+// calls), so a hidden overlay never keeps a stale highlight.
+// TASK_LABEL / TASK_PROGRESS / TASK_PCT hits resolve to HtZone::TaskBody with
+// the task's own id (SR-TASK-UNIT-01), so hovering a label highlights its bar.
+std::string g_hoverTaskId;
+RECT g_hoverTaskRect = {};
 RECT g_hoverInsertRect = {};
 bool g_hoverInsertValid = false;
 RECT g_rowBoundaryInsertRects[2] = {};
@@ -533,6 +613,26 @@ void HandleToolbarButton(int button);
 void HandleHoverQuickAddTask();
 void RebuildChart(PpDocument& doc, const std::string& selectId);
 void OvLog(const wchar_t* msg);
+void RecEvent(const char* type, const std::string& payloadBody);
+void RecError(const char* where, long hr, const char* msg);
+void RecEmitSnapshot();
+void RecEmitDoc();
+void RecEmitInput(const char* surface, UINT msg, HWND hwnd, WPARAM wp, LPARAM lp);
+void RecEmitGestureStart(const char* kind, const std::string& id, const std::string& rowId, POINT anchorClient);
+void RecEmitGestureUpdate();
+void RecEmitGestureCommit(const char* kind, const std::string& id, const char* result, long hr,
+	const std::string& payloadExtra = {});
+void RecEmitGestureCancel(const char* kind, const std::string& id);
+void RecEmitPaint(const char* surface, long count);
+void RecCaptureFrames(const char* trigger);
+void RecCapturePendingFrame();
+void SessionRecordStart();
+void SessionRecordStop();
+static const char* RecDragKindName(DragKind k);
+static const char* RecHtZoneName(HtZone z);
+static const char* RecHtItemKindName(HtItemKind k);
+static std::string RecModsString(WPARAM mk = 0);
+static std::string RecAppBarCmdLabel(int cmd);
 void StartNewUndoEntryIfPossible();
 void OpenInlineEditor(const EditRegion& region);
 void CommitInlineEdit();
@@ -723,6 +823,12 @@ void ClearOwnSelection() {
 		g_appBarLastMeasuredContentW = 0;
 		g_appBarLastMeasuredContentH = 0;
 		g_appBarGeomValid = false;
+		// R1b: ownSel transition at ClearOwnSelection choke point (SR-REC-07).
+		if (g_recActive) {
+			RecEvent("ownSel", "\"kind\":\"\",\"id\":\"\",\"reason\":\"ClearOwnSelection\"");
+			RecEmitSnapshot();
+			RecCaptureFrames("sel");
+		}
 	}
 }
 
@@ -781,6 +887,19 @@ static void SetOwnSelectionPrimary(const std::string& kind, const std::string& i
 	const bool multiNow = HasMultiSelection();
 	if (prevKind != kind || prevId != id || prevMulti != multiNow) {
 		InvalidateAppBarForSelectionChange();
+		// R1b: ownSel transition at SetOwnSelection choke point (SR-REC-07).
+		if (g_recActive) {
+			std::string body;
+			body.reserve(64 + kind.size() + id.size());
+			body += "\"kind\":\"";
+			EntityJsonAppendEscaped(body, kind);
+			body += "\",\"id\":\"";
+			EntityJsonAppendEscaped(body, id);
+			body += "\",\"reason\":\"SetOwnSelection\"";
+			RecEvent("ownSel", body);
+			RecEmitSnapshot();
+			RecCaptureFrames("sel");
+		}
 	}
 
 	if (IsItemOwnSelKind(kind)) {
@@ -905,6 +1024,11 @@ void InvalidateHitSnapshot() {
 	g_hitCacheChildCount = -1;
 	g_hitCacheChartRowY.clear();
 	g_hitCacheChartProj.clear();
+	g_entityCache.clear();
+	g_recTaskEntityBindings.clear();
+	g_recLastTaskGeometryRefreshMs = 0;
+	g_entityDumpJson = "{\"entities\":[]}";
+	g_entitySceneSig.clear();
 }
 
 // Scale a 96-DPI ("100%") chrome pixel constant to the overlay's current DPI
@@ -974,6 +1098,8 @@ bool UpdateDpiForWindow(HWND hwnd) {
 void ClearHoverState() {
 	g_hoverRowId.clear();
 	::SetRectEmpty(&g_hoverBandRect);
+	g_hoverTaskId.clear();
+	::SetRectEmpty(&g_hoverTaskRect);
 	::SetRectEmpty(&g_hoverInsertRect);
 	g_hoverInsertValid = false;
 	for (int i = 0; i < 2; ++i) {
@@ -1121,24 +1247,72 @@ static bool IsWindowEdgeDragActive() {
 	return g_gestureActive && IsWindowEdgeDragKind(g_dragKind);
 }
 
+// Discoverability fix (2026-07-18). The ports USED to be gated on
+// g_windowHeaderHover, i.e. on the pointer already being inside the axis header
+// band. That band's PIXEL height is kAxisHeaderHeightPt * yScale, and
+// yScale = chartHeightPt / PP_ROWY.naturalH (see BuildRowBands): every row the
+// user adds grows naturalH while the fitted chart frame stays put, so the
+// reveal target shrinks monotonically as the chart fills up. On an empty/near
+// empty chart the band is tall enough to stumble into; after "placing tasks" it
+// collapses to a few pixels and the affordance becomes unreachable — exactly
+// the reported "couldn't find the arrow buttons". Live recordings agree: the
+// port rects are {} in every snapshot of 9/10 sessions, and in the tenth they
+// blink on for 2.7s (one header traversal) with the selection unchanged.
+//
+// The ports are now laid out and painted whenever the header band exists.
+// Hover only promotes them from resting to emphasized; it no longer decides
+// whether they exist at all.
 static bool ShouldShowWindowPorts() {
-	return !::IsRectEmpty(&g_headerBandScreenRect)
-		&& (g_windowHeaderHover || IsWindowEdgeDragActive());
+	if (::IsRectEmpty(&g_headerBandScreenRect)) return false;
+	if (g_linkMode || IsEditSessionActive()) return false;
+	// A non-window gesture (task drag, create, link) owns the pointer; the
+	// ports would only compete with its ghost/pill chrome.
+	if (g_gestureActive && !IsWindowEdgeDragKind(g_dragKind)) return false;
+	return true;
 }
 
+// Resting affordance geometry. The old target was a LINK_PORT_RADIUS circle
+// (14x14 px in the recordings) pinned to the chart edge; that is below the
+// threshold at which a control reads as a control. This is a chevron pill
+// sized off the header band, floored so it never degrades with row count.
 static RECT WindowPortHitRectScreen(bool rightPort) {
 	if (!ShouldShowWindowPorts()) return {};
-	const int hitRadius = LINK_PORT_RADIUS + Scale(2);
+	const int w = std::max(Scale(20), LINK_PORT_RADIUS * 2 + Scale(8));
+	const int bandH = g_headerBandScreenRect.bottom - g_headerBandScreenRect.top;
+	const int h = std::max(Scale(20), std::min(w + Scale(6), bandH - Scale(2)));
 	const int cx = rightPort
-		? g_headerBandScreenRect.right - hitRadius
-		: g_headerBandScreenRect.left + hitRadius;
+		? g_headerBandScreenRect.right - w / 2 - Scale(1)
+		: g_headerBandScreenRect.left + w / 2 + Scale(1);
 	const int cy = (g_headerBandScreenRect.top + g_headerBandScreenRect.bottom) / 2;
-	return { cx - hitRadius, cy - hitRadius, cx + hitRadius, cy + hitRadius };
+	RECT r = { cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2 };
+	// Every pixel must stay inside the chart rect. The overlay is a layered
+	// window hit-tested against its PER-PIXEL ALPHA, and only the chart rect
+	// carries the capture-layer fill, so a port that spilled outside would be
+	// click-through even while visibly painted.
+	if (r.top < g_chartScreenRect.top) {
+		r.bottom += g_chartScreenRect.top - r.top;
+		r.top = g_chartScreenRect.top;
+	}
+	if (r.bottom > g_chartScreenRect.bottom) {
+		r.top -= r.bottom - g_chartScreenRect.bottom;
+		r.bottom = g_chartScreenRect.bottom;
+	}
+	if (r.left < g_chartScreenRect.left) {
+		r.right += g_chartScreenRect.left - r.left;
+		r.left = g_chartScreenRect.left;
+	}
+	if (r.right > g_chartScreenRect.right) {
+		r.left -= r.right - g_chartScreenRect.right;
+		r.right = g_chartScreenRect.right;
+	}
+	if (r.right <= r.left || r.bottom <= r.top) return {};
+	return r;
 }
 
-static HtZone HitTestWindowPortAtClient(POINT clientPt) {
-	if (!ShouldShowWindowPorts() || g_linkMode || IsEditSessionActive()) return HtZone::Outside;
-	const POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
+// Pointer-over-port state, refreshed by UpdateHoverFromCursor so a hover
+// transition is a repaint TRIGGER (SR-SMO-04) rather than something the paint
+// path re-derives from the live cursor.
+static HtZone WindowPortUnderPoint(POINT screenPt) {
 	const RECT left = WindowPortHitRectScreen(false);
 	const RECT right = WindowPortHitRectScreen(true);
 	if (::PtInRect(&left, screenPt)) return HtZone::WindowPortL;
@@ -1146,34 +1320,96 @@ static HtZone HitTestWindowPortAtClient(POINT clientPt) {
 	return HtZone::Outside;
 }
 
+static HtZone HitTestWindowPortAtClient(POINT clientPt) {
+	if (!ShouldShowWindowPorts()) return HtZone::Outside;
+	const POINT screenPt = { clientPt.x + g_windowOriginX, clientPt.y + g_windowOriginY };
+	return WindowPortUnderPoint(screenPt);
+}
+
+// Resting chevron button. Painted at every repaint the ports are laid out for,
+// so the control is FINDABLE: a bordered pill with an outward double chevron
+// ("widen the visible range this way"), not an invisible 14px hotspot.
 static void PaintWindowPort(Gdiplus::Graphics& g, const RECT& hitScreen, bool rightPort, bool highlighted) {
 	if (::IsRectEmpty(&hitScreen)) return;
-	POINT center = {
-		(hitScreen.left + hitScreen.right) / 2 - g_windowOriginX,
-		(hitScreen.top + hitScreen.bottom) / 2 - g_windowOriginY
-	};
-	PaintLinkPortChip(g, center, highlighted);
-	const int d = std::max(3, LINK_PORT_RADIUS / 2);
-	Gdiplus::Point arrow[3] = {};
-	if (rightPort) {
-		arrow[0] = { center.x - d / 2, center.y - d };
-		arrow[1] = { center.x - d / 2, center.y + d };
-		arrow[2] = { center.x + d, center.y };
-	} else {
-		arrow[0] = { center.x + d / 2, center.y - d };
-		arrow[1] = { center.x + d / 2, center.y + d };
-		arrow[2] = { center.x - d, center.y };
+	const Gdiplus::REAL x = (Gdiplus::REAL)(hitScreen.left - g_windowOriginX);
+	const Gdiplus::REAL y = (Gdiplus::REAL)(hitScreen.top - g_windowOriginY);
+	const Gdiplus::REAL w = (Gdiplus::REAL)(hitScreen.right - hitScreen.left);
+	const Gdiplus::REAL h = (Gdiplus::REAL)(hitScreen.bottom - hitScreen.top);
+	Gdiplus::GraphicsPath path;
+	AddRoundRect(path, x, y, w, h, ScaleF(3.0f));
+	Gdiplus::SolidBrush fill(GpToken(highlighted ? 255 : 232, gt::surface));
+	g.FillPath(&fill, &path);
+	Gdiplus::Pen edge(GpToken(highlighted ? 255 : 200, gt::primary),
+		highlighted ? ScaleF(2.0f) : ScaleF(1.0f));
+	g.DrawPath(&edge, &path);
+
+	const int cx = (hitScreen.left + hitScreen.right) / 2 - g_windowOriginX;
+	const int cy = (hitScreen.top + hitScreen.bottom) / 2 - g_windowOriginY;
+	const int arm = std::max(2, (int)(h / 5));
+	const int gap = std::max(2, arm);
+	const int dir = rightPort ? 1 : -1;
+	Gdiplus::Pen glyph(GpToken(255, gt::primary), ScaleF(highlighted ? 2.0f : 1.6f));
+	glyph.SetStartCap(Gdiplus::LineCapRound);
+	glyph.SetEndCap(Gdiplus::LineCapRound);
+	glyph.SetLineJoin(Gdiplus::LineJoinRound);
+	for (int i = 0; i < 2; ++i) {
+		const int tipX = cx + dir * (gap / 2 + i * gap);
+		Gdiplus::Point chevron[3] = {
+			{ tipX - dir * arm, cy - arm },
+			{ tipX, cy },
+			{ tipX - dir * arm, cy + arm }
+		};
+		g.DrawLines(&glyph, chevron, 3);
 	}
-	Gdiplus::SolidBrush glyph(GpToken(255, gt::primary));
-	g.FillPolygon(&glyph, arrow, 3);
+}
+
+// Hover hint. The affordance is now visible at rest, but "what does this do"
+// still has to be answerable without a manual — so name the gesture the moment
+// the pointer lands on it.
+static void PaintWindowPortHint(Gdiplus::Graphics& g, const RECT& hitScreen, bool rightPort) {
+	if (::IsRectEmpty(&hitScreen)) return;
+	const wchar_t* text = L"Click or drag to widen";
+	Gdiplus::Font font(L"Segoe UI", ScaleF(10.0f), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+	Gdiplus::RectF measured;
+	g.MeasureString(text, -1, &font, Gdiplus::PointF(0.0f, 0.0f), &measured);
+	const Gdiplus::REAL padX = ScaleF(6.0f), padY = ScaleF(3.0f);
+	const Gdiplus::REAL w = measured.Width + padX * 2.0f;
+	const Gdiplus::REAL h = measured.Height + padY * 2.0f;
+	Gdiplus::REAL x = rightPort
+		? (Gdiplus::REAL)(hitScreen.left - g_windowOriginX) - w - ScaleF(4.0f)
+		: (Gdiplus::REAL)(hitScreen.right - g_windowOriginX) + ScaleF(4.0f);
+	const Gdiplus::REAL y = (Gdiplus::REAL)(hitScreen.top - g_windowOriginY);
+	const Gdiplus::REAL chartLeft = (Gdiplus::REAL)(g_chartScreenRect.left - g_windowOriginX);
+	const Gdiplus::REAL chartRight = (Gdiplus::REAL)(g_chartScreenRect.right - g_windowOriginX);
+	if (x < chartLeft) x = chartLeft;
+	if (x + w > chartRight) x = chartRight - w;
+	if (x < chartLeft) return; // chart narrower than the hint: skip rather than spill
+	Gdiplus::GraphicsPath path;
+	AddRoundRect(path, x, y, w, h, ScaleF(3.0f));
+	Gdiplus::SolidBrush fill(GpToken(240, gt::ink));
+	g.FillPath(&fill, &path);
+	Gdiplus::SolidBrush ink(GpToken(255, gt::surface));
+	Gdiplus::StringFormat sf;
+	sf.SetAlignment(Gdiplus::StringAlignmentCenter);
+	sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+	sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+	g.DrawString(text, -1, &font, Gdiplus::RectF(x, y, w, h), &sf, &ink);
 }
 
 static void PaintWindowPorts(Gdiplus::Graphics& g) {
 	if (!ShouldShowWindowPorts()) return;
-	PaintWindowPort(g, WindowPortHitRectScreen(false), false,
-		IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeL);
-	PaintWindowPort(g, WindowPortHitRectScreen(true), true,
-		IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeR);
+	const RECT left = WindowPortHitRectScreen(false);
+	const RECT right = WindowPortHitRectScreen(true);
+	const bool dragL = IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeL;
+	const bool dragR = IsWindowEdgeDragActive() && g_dragKind == DragKind::WindowEdgeR;
+	const bool hoverL = g_windowPortHoverZone == HtZone::WindowPortL;
+	const bool hoverR = g_windowPortHoverZone == HtZone::WindowPortR;
+	PaintWindowPort(g, left, false, dragL || hoverL);
+	PaintWindowPort(g, right, true, dragR || hoverR);
+	if (!IsWindowEdgeDragActive()) {
+		if (hoverL) PaintWindowPortHint(g, left, false);
+		else if (hoverR) PaintWindowPortHint(g, right, true);
+	}
 }
 
 // W2's two-phase renderer: paint the candidate axis only into the header
@@ -1406,6 +1642,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_editRegions.clear();
 		::SetRectEmpty(&g_headerBandScreenRect);
 		g_windowHeaderHover = false;
+		g_windowPortHoverZone = HtZone::Outside;
 		InvalidateHitSnapshot();
 		return;
 	}
@@ -1416,16 +1653,22 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			g_editRegions.clear();
 			::SetRectEmpty(&g_headerBandScreenRect);
 			g_windowHeaderHover = false;
+			g_windowPortHoverZone = HtZone::Outside;
 			InvalidateHitSnapshot();
 			return;
 		}
 		long n = items->GetCount();
 		if (n == g_hitCacheChildCount && SameRect(g_chartScreenRect, g_hitCacheChartRect)
 			&& g_chartRowY == g_hitCacheChartRowY && g_chartProj == g_hitCacheChartProj) {
-			return; // cache hit: reuse g_rowBands / g_editRegions / g_hitSnapshot
+			return; // cache hit: reuse g_rowBands / g_editRegions / g_hitSnapshot / g_entityCache
 		}
 		g_rowBands.clear();
 		g_editRegions.clear();
+		g_entityCache.clear();
+		g_recTaskEntityBindings.clear();
+		g_recLastTaskGeometryRefreshMs = 0;
+		g_entityDumpJson = "{\"entities\":[]}";
+		g_entitySceneSig.clear();
 		::SetRectEmpty(&g_headerBandScreenRect);
 		g_hitSnapshot = HtSnapshot{};
 		g_hitSnapshot.chartRect = ToHtRect(g_chartScreenRect);
@@ -1450,12 +1693,109 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 			}
 		}
 		const std::vector<PpMarker>& markers = chartDoc.markers;
+		// The builder cache is the semantic visual truth. Match its prims to the
+		// live group children by stable (PP_KIND, PP_ID, ordinal), preserving the
+		// COM-derived live rectangles while sourcing text/style/clip metadata from
+		// the pure scene (SR-ENT-01..05).
+		Scene cachedScene;
+		const bool haveScene = Gantt_TryPeekCachedScene(&cachedScene);
+		std::map<std::pair<std::string, std::string>, std::vector<const Prim*>> scenePrims;
+		std::map<std::pair<std::string, std::string>, size_t> sceneOrdinals;
+		if (haveScene) {
+			for (const Prim& prim : cachedScene.prims)
+				scenePrims[{ prim.tagKind, prim.tagId }].push_back(&prim);
+		}
+
+		// The axis header band's HORIZONTAL extent is the PAINTED band's, not the
+		// chart shape's. The scene lays the band out as rect(MARGIN, chartTop -
+		// AXIS_H, chartW, AXIS_H) (GanttScene.h) where chartW is the CONTENT
+		// width; the chart SHAPE is wider, reserving a right gutter for labels
+		// and notes that overflow the timeline (e.g. a right-aligned TEXT note).
+		// Deriving the band from g_chartScreenRect therefore overshoots to the
+		// right by that gutter, and the window-expand chevron anchored to
+		// band.right lands in dead space outside the axis it operates on. Live
+		// recording 20260718-221333: painted band ended at x=2551 while the port
+		// sat at 2726..2766 — 175px adrift, visibly detached from the chart.
+		// Capture the real child rect; fall back to the chart rect only for
+		// charts built before HEADER_BAND existed.
+		RECT headerBandShapeRect = {};
+		bool haveHeaderBandShape = false;
 
 		for (long i = 1; i <= n; ++i) {
 			PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
 			_bstr_t kind = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
 			if (!kind.length()) continue;
 			std::string kindStr = Narrow((const wchar_t*)kind);
+
+			// R1a: collect a PpEntity for EVERY PP_KIND child (axis, rails, title,
+			// markers, progress fills — not only hit-testable ones).
+			_bstr_t idTag = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+			std::string idStr = idTag.length() ? Narrow((const wchar_t*)idTag) : "";
+			float left = ch->GetLeft(), top = ch->GetTop(), w = ch->GetWidth(), h = ch->GetHeight();
+			RECT rr = {
+				win->PointsToScreenPixelsX(left),
+				win->PointsToScreenPixelsY(top),
+				win->PointsToScreenPixelsX(left + w),
+				win->PointsToScreenPixelsY(top + h)
+			};
+			NormalizeRect(rr);
+			{
+				PpEntity ent;
+				ent.id = idStr;
+				ent.kind = kindStr;
+				ent.parentId = EntityParentId(kindStr, idStr);
+				if (kindStr == "ROW_LABEL") {
+					ent.rowId = idStr;
+				} else if (haveDoc && !idStr.empty()) {
+					for (const auto& t : chartDoc.tasks) {
+						if (t.id == idStr) { ent.rowId = t.rowId; break; }
+					}
+					if (ent.rowId.empty()) {
+						for (const auto& m : chartDoc.milestones) {
+							if (m.id == idStr) { ent.rowId = m.rowId; break; }
+						}
+					}
+				}
+				ent.slideRect = { (double)left, (double)top, (double)w, (double)h };
+				ent.screenRect = {
+					(double)rr.left, (double)rr.top,
+					(double)(rr.right - rr.left), (double)(rr.bottom - rr.top)
+				};
+				ent.z = (int)g_entityCache.size();
+				const auto key = std::make_pair(kindStr, idStr);
+				const size_t ordinal = sceneOrdinals[key]++;
+				auto sceneIt = scenePrims.find(key);
+				if (sceneIt != scenePrims.end() && ordinal < sceneIt->second.size()) {
+					const Prim& prim = *sceneIt->second[ordinal];
+					ent.text = prim.text.empty() ? "" : Narrow(prim.text.c_str());
+					ent.style.fillArgb = prim.style.fill
+						? EntityRgbFromBgr(prim.style.fillBgr) : 0;
+					ent.style.strokeArgb = prim.style.line
+						? EntityRgbFromBgr(prim.style.lineBgr)
+						: EntityRgbFromBgr(prim.style.textBgr);
+					ent.style.strokeW = prim.style.line ? prim.style.lineWeight : 0.0;
+					if (prim.kind == PrimKind::Text && prim.style.fontSize > 0.0f) {
+						const int x0 = win->PointsToScreenPixelsX(0.0f);
+						const int xf = win->PointsToScreenPixelsX(prim.style.fontSize);
+						ent.style.fontPx = (double)std::abs(xf - x0);
+					}
+					ent.flags.clipped = prim.clippedL || prim.clippedR;
+				}
+				ent.flags.visible = true;
+				g_entityCache.push_back(std::move(ent));
+				if (kindStr == "TASK" || kindStr == "TASK_PROGRESS" || kindStr == "TASK_LABEL")
+					g_recTaskEntityBindings.push_back({ g_entityCache.size() - 1, ch });
+			}
+
+			// Captured before the hit-test filter below drops HEADER_BAND: the
+			// band stays out of the semantic item walk (it must not compete with
+			// tasks/markers for a hit), but its rect is the only ground truth for
+			// where the axis actually ends. See headerBandShapeRect's declaration.
+			if (kindStr == "HEADER_BAND") {
+				headerBandShapeRect = rr;
+				haveHeaderBandShape = true;
+			}
+
 			// TASK_PROGRESS is the inner fill of a TASK bar — the TASK rect
 			// already covers it, so it does not participate in hit-testing.
 			// TODAY_LABEL/DEADLINE_LABEL/CUSTOM_MARKER_LABEL are the marker's
@@ -1474,8 +1814,6 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 				// didn't parse or the marker's date isn't found in PP_DOC (doc/
 				// tags out of sync mid-rebuild), skip rather than guess.
 				if (!haveProj) continue;
-				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
-				std::string idStr = Narrow((const wchar_t*)id);
 				if (idStr.empty()) continue;
 				const PpMarker* mk = nullptr;
 				for (const auto& m : markers) if (m.id == idStr) { mk = &m; break; }
@@ -1488,25 +1826,22 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 				g_hitSnapshot.items.push_back({ HtItemKind::Marker, idStr, ToHtRect(mr) });
 				continue;
 			}
-			float left = ch->GetLeft(), top = ch->GetTop(), w = ch->GetWidth(), h = ch->GetHeight();
-			RECT rr = {
-				win->PointsToScreenPixelsX(left),
-				win->PointsToScreenPixelsY(top),
-				win->PointsToScreenPixelsX(left + w),
-				win->PointsToScreenPixelsY(top + h)
-			};
-			NormalizeRect(rr);
 			if (rr.bottom <= rr.top) continue;
 			if (kindStr == "TITLE") {
 				g_editRegions.push_back({ "TITLE", "", rr });
 				g_hitSnapshot.items.push_back({ HtItemKind::Title, "", ToHtRect(rr) });
 				continue;
 			}
-			_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
-			std::string idStr = Narrow((const wchar_t*)id);
 			if (idStr.empty()) continue;
 			if (isTaskLabel) {
+				// Edit region (inline rename) + hit unit: TASK_LABEL is part of
+				// the task bar, not a separate selectable object (SR-TASK-UNIT).
+				// RAIL_TASKLBL stays edit-only so the rail still selects the ROW
+				// via RowBand; only graph-side TASK_LABEL participates in hits.
 				g_editRegions.push_back({ "TASK", idStr, rr });
+				if (kindStr == "TASK_LABEL") {
+					g_hitSnapshot.items.push_back({ HtItemKind::TaskLabel, idStr, ToHtRect(rr) });
+				}
 				continue;
 			}
 			if (isMilestoneLabel) {
@@ -1582,10 +1917,13 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 				for (const auto& entry : rowy.rows) firstTop = std::min(firstTop, entry.top);
 				const float headerTopPt = chartTopPt + (firstTop - kAxisHeaderHeightPt) * yScale;
 				const float headerBottomPt = chartTopPt + firstTop * yScale;
+				// Vertical extent stays model-derived (the first row lane, above);
+				// horizontal comes from the painted band so the expand chevrons
+				// anchor to the axis instead of the chart shape's label gutter.
 				g_headerBandScreenRect = {
-					g_chartScreenRect.left,
+					haveHeaderBandShape ? headerBandShapeRect.left : g_chartScreenRect.left,
 					win->PointsToScreenPixelsY(headerTopPt),
-					g_chartScreenRect.right,
+					haveHeaderBandShape ? headerBandShapeRect.right : g_chartScreenRect.right,
 					win->PointsToScreenPixelsY(headerBottomPt)
 				};
 				NormalizeRect(g_headerBandScreenRect);
@@ -1644,6 +1982,17 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_hitCacheChildCount = n;
 		g_hitCacheChartRowY = g_chartRowY;
 		g_hitCacheChartProj = g_chartProj;
+		// R1a: scene signature from the same inputs as the hit-snapshot cache key
+		// (SR-ENT-05/06). Flags are re-applied at dump time; cache holds geometry.
+		{
+			char rectBuf[96];
+			::snprintf(rectBuf, sizeof(rectBuf), "%ld,%ld,%ld,%ld|%ld",
+				g_chartScreenRect.left, g_chartScreenRect.top,
+				g_chartScreenRect.right, g_chartScreenRect.bottom, n);
+			g_entitySceneSig = std::string(rectBuf) + "|" + g_chartRowY + "|" + g_chartProj;
+		}
+		g_entityDumpJson = EntityDumpToJson(g_entityCache);
+		g_entitySceneSig = g_entityDumpJson;
 		if (g_rowBands.empty()) {
 			wchar_t buf[96];
 			::swprintf_s(buf, 96, L"BuildRowBands: 0 bands (children=%ld rowY=%zu chars)", n, g_chartRowY.size());
@@ -1658,6 +2007,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_editRegions.clear();
 		::SetRectEmpty(&g_headerBandScreenRect);
 		g_windowHeaderHover = false;
+		g_windowPortHoverZone = HtZone::Outside;
 		InvalidateHitSnapshot();
 	}
 	catch (const std::exception&) {
@@ -1669,6 +2019,7 @@ void BuildRowBands(PowerPoint::ShapePtr chart, PowerPoint::DocumentWindowPtr win
 		g_editRegions.clear();
 		::SetRectEmpty(&g_headerBandScreenRect);
 		g_windowHeaderHover = false;
+		g_windowPortHoverZone = HtZone::Outside;
 		InvalidateHitSnapshot();
 	}
 }
@@ -1735,17 +2086,30 @@ void SyncSelectionChromeFromOwnSelection() {
 bool UpdateHoverFromCursor() {
 	std::string oldId = g_hoverRowId;
 	RECT oldRect = g_hoverBandRect;
+	const std::string oldTaskId = g_hoverTaskId;
+	const RECT oldTaskRect = g_hoverTaskRect;
 	const bool oldWindowHeaderHover = g_windowHeaderHover;
+	const HtZone oldWindowPortHover = g_windowPortHoverZone;
 	ClearHoverState();
 	g_windowHeaderHover = false;
+	g_windowPortHoverZone = HtZone::Outside;
+
+	// SR-SMO-04: hover is a repaint TRIGGER, so "changed" must be exact —
+	// returning true on an unchanged target would repaint on every WM_MOUSEMOVE.
+	auto changed = [&]() {
+		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
+			|| oldTaskId != g_hoverTaskId || !SameRect(oldTaskRect, g_hoverTaskRect)
+			|| oldWindowHeaderHover != g_windowHeaderHover
+			|| oldWindowPortHover != g_windowPortHoverZone;
+	};
 
 	POINT pt = {};
 	if (!OverlayGetCursorPos(&pt) || !::PtInRect(&g_chartScreenRect, pt)) {
-		return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
-			|| oldWindowHeaderHover != g_windowHeaderHover;
+		return changed();
 	}
 	if (!::IsRectEmpty(&g_headerBandScreenRect) && ::PtInRect(&g_headerBandScreenRect, pt))
 		g_windowHeaderHover = true;
+	g_windowPortHoverZone = ShouldShowWindowPorts() ? WindowPortUnderPoint(pt) : HtZone::Outside;
 
 	for (const auto& band : g_rowBands) {
 		if (pt.y >= band.screenRect.top && pt.y <= band.screenRect.bottom) {
@@ -1757,9 +2121,27 @@ bool UpdateHoverFromCursor() {
 			break;
 		}
 	}
+
+	// Task-bar hover. Suppressed for the whole duration of a drag gesture: a
+	// highlight that tracked the pointer mid-drag would compete with the drag
+	// ghost and force extra paints on the hottest path in the app.
+	if (!g_gestureActive && !g_dragActive && g_dragKind == DragKind::None) {
+		const HtHit hit = GanttHitTestPoint(g_hitSnapshot, pt.x, pt.y);
+		if (hit.zone == HtZone::TaskBody && !hit.id.empty()) {
+			// Resolve to the TASK body rect even when the pointer is over the
+			// label/progress/pct geometry — those hit-test as TaskBody carrying
+			// the task's id, and the bar is the thing we outline.
+			for (const auto& item : g_hitSnapshot.items) {
+				if (item.kind != HtItemKind::Task || item.id != hit.id) continue;
+				g_hoverTaskId = hit.id;
+				g_hoverTaskRect = { item.rect.left, item.rect.top, item.rect.right, item.rect.bottom };
+				break;
+			}
+		}
+	}
+
 	LayoutHoverInsertHotspot();
-	return oldId != g_hoverRowId || !SameRect(oldRect, g_hoverBandRect)
-		|| oldWindowHeaderHover != g_windowHeaderHover;
+	return changed();
 }
 
 // Single repaint entry point: everything that wants pixels on screen goes
@@ -1895,9 +2277,9 @@ void EnsureEditorWindow() {
 	::RegisterClassExW(&wc);
 
 	g_editorHwnd = ::CreateWindowExW(
-		WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+		WS_EX_TOOLWINDOW,
 		kEditorClass, L"", WS_POPUP,
-		0, 0, 100, 24, NULL, NULL, g_inst, NULL);
+		0, 0, 100, 24, ::GetAncestor(g_pptHwnd, GA_ROOT), NULL, g_inst, NULL);
 	if (!g_editorHwnd) return;
 
 	g_editHwnd = ::CreateWindowExW(
@@ -1924,7 +2306,7 @@ void OpenInlineEditor(const EditRegion& region) {
 		NormalizeRect(rc);
 		int w = std::max(80, (int)(rc.right - rc.left));
 		int h = std::max(22, (int)(rc.bottom - rc.top));
-		::SetWindowPos(g_editorHwnd, (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST,
+		::SetWindowPos(g_editorHwnd, HWND_TOP,
 			rc.left, rc.top, w, h, SWP_SHOWWINDOW);
 		::MoveWindow(g_editHwnd, Scale(2), Scale(2), w - Scale(4), h - Scale(4), TRUE);
 		std::wstring text = Widen(value);
@@ -2136,9 +2518,9 @@ void EnsureCardWindow() {
 	::RegisterClassExW(&wc);
 
 	g_cardHwnd = ::CreateWindowExW(
-		WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+		WS_EX_TOOLWINDOW,
 		kCardClass, L"", WS_POPUP | WS_CLIPCHILDREN,
-		0, 0, Scale(kBaseCardW), 200, NULL, NULL, g_inst, NULL);
+		0, 0, Scale(kBaseCardW), 200, ::GetAncestor(g_pptHwnd, GA_ROOT), NULL, g_inst, NULL);
 	if (!g_cardHwnd) return;
 
 	auto makeEdit = [&](int id, DWORD extraStyle) {
@@ -2291,7 +2673,7 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 			if (y < mi.rcWork.top) y = mi.rcWork.top;
 		}
 
-		::SetWindowPos(g_cardHwnd, (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST,
+		::SetWindowPos(g_cardHwnd, HWND_TOP,
 			x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
 		::InvalidateRect(g_cardHwnd, NULL, TRUE);
 		::SetForegroundWindow(g_cardHwnd);
@@ -2299,16 +2681,19 @@ void OpenCardEditor(const std::string& kind, const std::string& id, const RECT& 
 		g_cardFocusHwnd = g_cardLabelHwnd;
 		::SendMessageW(g_cardLabelHwnd, EM_SETSEL, 0, -1);
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
 		OvLog(L"COM error opening card editor");
+		RecError("OpenCardEditor", (long)e.Error(), "COM error");
 		CloseCardEditor();
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
 		OvLog(L"document error opening card editor");
+		RecError("OpenCardEditor", (long)E_FAIL, e.what());
 		CloseCardEditor();
 	}
 	catch (...) {
 		OvLog(L"unknown error opening card editor");
+		RecError("OpenCardEditor", (long)E_FAIL, "unknown error");
 		CloseCardEditor();
 	}
 }
@@ -2560,6 +2945,839 @@ void OvLog(const wchar_t* msg) {
 	::swprintf_s(pidBuf, 48, L"[overlay %lu @%lu] ", ::GetCurrentProcessId(), ::GetTickCount());
 	std::wstring line = std::wstring(pidBuf) + msg + L"\r\n";
 	DWORD w = 0; ::WriteFile(s_log, line.c_str(), (DWORD)(line.size() * sizeof(wchar_t)), &w, NULL);
+}
+
+// ---- session recorder writer (R1b-core) ------------------------------------
+// Structured JSONL sink held open like OvLog, but NEVER writes to
+// powerplanner-addin.log. fflush every event for crash-robustness (v1).
+
+void RecEvent(const char* type, const std::string& payloadBody) {
+	if (!g_recActive || !g_recEventsFile || !type) return;
+	const ULONGLONG t = ::GetTickCount64() - g_recT0;
+	++g_recSeq;
+	std::string line;
+	line.reserve(payloadBody.size() + 80);
+	line += "{\"t\":";
+	line += std::to_string((unsigned long long)t);
+	line += ",\"seq\":";
+	line += std::to_string(g_recSeq);
+	line += ",\"type\":\"";
+	line += type;
+	line += "\"";
+	if (!payloadBody.empty()) {
+		line += ",";
+		line += payloadBody;
+	}
+	line += "}\n";
+	::fwrite(line.data(), 1, line.size(), g_recEventsFile);
+	// High-frequency input/gesture-update/paint rows stay buffered. Flush all
+	// state transitions immediately and bound streaming loss to 250 ms, avoiding
+	// dozens of stdio flushes per second during direct manipulation (SR-REC-15).
+	const ULONGLONG now = ::GetTickCount64();
+	const bool urgent = ::strcmp(type, "error") == 0
+		|| ::strcmp(type, "snapshot") == 0 || ::strcmp(type, "doc") == 0
+		|| ::strcmp(type, "frame") == 0 || ::strcmp(type, "nativeSel") == 0
+		|| ::strcmp(type, "ownSel") == 0 || ::strcmp(type, "op") == 0
+		|| (::strcmp(type, "gesture") == 0
+			&& payloadBody.find("\"phase\":\"update\"") == std::string::npos);
+	if (urgent || g_recLastFlushMs == 0 || now - g_recLastFlushMs >= 250) {
+		::fflush(g_recEventsFile);
+		g_recLastFlushMs = now;
+	}
+}
+
+void RecError(const char* where, long hr, const char* msg) {
+	if (!g_recActive) return;
+	std::string body;
+	body.reserve(128);
+	body += "\"where\":\"";
+	EntityJsonAppendEscaped(body, where ? where : "");
+	body += "\",\"hr\":";
+	body += std::to_string(hr);
+	body += ",\"msg\":\"";
+	EntityJsonAppendEscaped(body, msg ? msg : "");
+	body += "\"";
+	RecEvent("error", body);
+}
+
+void RecRefreshTaskEntityGeometry() {
+	const ULONGLONG now = ::GetTickCount64();
+	if (!g_app || g_dragKind != DragKind::None || g_recTaskEntityBindings.empty()
+		|| (g_recLastTaskGeometryRefreshMs != 0 && now - g_recLastTaskGeometryRefreshMs < 250))
+		return;
+	g_recLastTaskGeometryRefreshMs = now;
+	try {
+		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
+		if (!win) return;
+		for (const RecTaskEntityBinding& binding : g_recTaskEntityBindings) {
+			if (!binding.shape || binding.entityIndex >= g_entityCache.size()) continue;
+			try {
+				const float left = binding.shape->GetLeft();
+				const float top = binding.shape->GetTop();
+				const float width = binding.shape->GetWidth();
+				const float height = binding.shape->GetHeight();
+				RECT rr = {
+					win->PointsToScreenPixelsX(left),
+					win->PointsToScreenPixelsY(top),
+					win->PointsToScreenPixelsX(left + width),
+					win->PointsToScreenPixelsY(top + height)
+				};
+				NormalizeRect(rr);
+				PpEntity& ent = g_entityCache[binding.entityIndex];
+				ent.slideRect = { (double)left, (double)top, (double)width, (double)height };
+				ent.screenRect = {
+					(double)rr.left, (double)rr.top,
+					(double)(rr.right - rr.left), (double)(rr.bottom - rr.top)
+				};
+			} catch (const _com_error&) {
+				// A rebuild can invalidate a cached child between ticks. The next
+				// BuildRowBands refresh replaces all bindings.
+			}
+		}
+	} catch (const _com_error&) {
+		// No active window while PowerPoint is transitioning; keep last geometry.
+	}
+}
+
+void RecEmitSnapshot() {
+	if (!g_recActive) return;
+	// Cached task-component handles make independent native child movement
+	// visible without a full chart COM walk on every recorder snapshot.
+	RecRefreshTaskEntityGeometry();
+	// chrome = full DumpChromeState JSON object; entities = array or null when
+	// scene signature unchanged since last snapshot (SR-REC-11 / SR-ENT-06).
+	const char* chrome = Overlay_DumpChromeStateForTest();
+	std::string body;
+	body.reserve(4096);
+	body += "\"chrome\":";
+	body += chrome ? chrome : "{}";
+	body += ",\"entities\":";
+	const char* entFullRaw = Overlay_DumpEntitiesForTest();
+	std::string entityJson = entFullRaw ? entFullRaw : "{\"entities\":[]}";
+	if (entityJson == "{\"entities\":[]}" && !g_recLastNonEmptyEntityJson.empty()) {
+		// RebuildChart invalidates the overlay cache before the next Tick repopulates
+		// it. A chart with a valid CHART_ROOT cannot have zero scene prims, so keep
+		// the prior graph rather than recording a false full-scene removal.
+		entityJson = g_recLastNonEmptyEntityJson;
+	} else if (entityJson != "{\"entities\":[]}") {
+		g_recLastNonEmptyEntityJson = entityJson;
+	}
+	const char* entFull = entityJson.c_str();
+	const bool dedupe = !g_recLastSnapEntitySig.empty()
+		&& g_recLastSnapEntitySig == entityJson;
+	if (dedupe) {
+		body += "null";
+	} else {
+		if (entFull && entFull[0] == '{') {
+			const char* arr = ::strchr(entFull, '[');
+			if (arr) {
+				const size_t n = ::strlen(arr);
+				// Drop the wrapping object's final '}' so we keep only the array.
+				if (n >= 2 && arr[n - 1] == '}')
+					body.append(arr, n - 1);
+				else
+					body += arr;
+			} else {
+				body += "null";
+			}
+		} else {
+			body += "null";
+		}
+		g_recLastSnapEntitySig = entityJson;
+	}
+	RecEvent("snapshot", body);
+}
+
+void RecEmitDoc() {
+	if (!g_recActive) return;
+	int taskCount = 0, rowCount = 0, milestoneCount = 0;
+	std::string docDatesSignature;
+	PpDocument cached;
+	if (Gantt_TryPeekCachedDoc(&cached)) {
+		taskCount = (int)cached.tasks.size();
+		rowCount = (int)cached.rows.size();
+		milestoneCount = (int)cached.milestones.size();
+		for (const auto& task : cached.tasks)
+			docDatesSignature += task.id + ":" + task.start + ":" + task.end + ";";
+		for (const auto& ms : cached.milestones)
+			docDatesSignature += ms.id + ":" + ms.date + ";";
+	} else {
+		rowCount = (int)g_rowBands.size();
+	}
+	std::string body;
+	body.reserve(64 + docDatesSignature.size());
+	body += "\"taskCount\":";
+	body += std::to_string(taskCount);
+	body += ",\"rowCount\":";
+	body += std::to_string(rowCount);
+	body += ",\"milestoneCount\":";
+	body += std::to_string(milestoneCount);
+	body += ",\"docDatesSignature\":\"";
+	EntityJsonAppendEscaped(body, docDatesSignature);
+	body += "\"";
+	RecEvent("doc", body);
+}
+
+// ---- R1b taps: string tables, input/gesture/paint/frame emitters -----------
+
+static const char* RecDragKindName(DragKind k) {
+	switch (k) {
+	case DragKind::TaskBody: return "TaskBody";
+	case DragKind::TaskEdgeL: return "TaskEdgeL";
+	case DragKind::TaskEdgeR: return "TaskEdgeR";
+	case DragKind::TaskProgress: return "TaskProgress";
+	case DragKind::Milestone: return "Milestone";
+	case DragKind::Create: return "Create";
+	case DragKind::Marker: return "Marker";
+	case DragKind::Text: return "Text";
+	case DragKind::LinkPort: return "LinkPort";
+	case DragKind::WindowEdgeL: return "WindowEdgeL";
+	case DragKind::WindowEdgeR: return "WindowEdgeR";
+	default: return "None";
+	}
+}
+
+static const char* RecHtZoneName(HtZone z) {
+	switch (z) {
+	case HtZone::Outside: return "Outside";
+	case HtZone::WindowPortL: return "WindowPortL";
+	case HtZone::WindowPortR: return "WindowPortR";
+	case HtZone::TaskBody: return "TaskBody";
+	case HtZone::TaskEdgeL: return "TaskEdgeL";
+	case HtZone::TaskEdgeR: return "TaskEdgeR";
+	case HtZone::TaskProgressEdge: return "TaskProgressEdge";
+	case HtZone::Milestone: return "Milestone";
+	case HtZone::Label: return "Label";
+	case HtZone::Marker: return "Marker";
+	case HtZone::Text: return "Text";
+	case HtZone::Dependency: return "Dependency";
+	case HtZone::RowBand: return "RowBand";
+	case HtZone::EmptyCell: return "EmptyCell";
+	default: return "Outside";
+	}
+}
+
+static const char* RecHtItemKindName(HtItemKind k) {
+	switch (k) {
+	case HtItemKind::Task: return "TASK";
+	case HtItemKind::TaskLabel: return "TASK_LABEL";
+	case HtItemKind::Milestone: return "MILESTONE";
+	case HtItemKind::RowLabel: return "ROW_LABEL";
+	case HtItemKind::Title: return "TITLE";
+	case HtItemKind::Marker: return "MARKER";
+	case HtItemKind::Text: return "TEXT";
+	case HtItemKind::Dependency: return "DEP";
+	default: return "";
+	}
+}
+
+static const char* RecMsgName(UINT msg) {
+	switch (msg) {
+	case WM_LBUTTONDOWN: return "WM_LBUTTONDOWN";
+	case WM_LBUTTONUP: return "WM_LBUTTONUP";
+	case WM_RBUTTONDOWN: return "WM_RBUTTONDOWN";
+	case WM_RBUTTONUP: return "WM_RBUTTONUP";
+	case WM_LBUTTONDBLCLK: return "WM_LBUTTONDBLCLK";
+	case WM_MOUSEMOVE: return "WM_MOUSEMOVE";
+	case WM_HOTKEY: return "WM_HOTKEY";
+	default: return "WM_OTHER";
+	}
+}
+
+static std::string RecModsJson(WPARAM mk) {
+	// Prefer message key-state bits when present; fall back to GetAsyncKeyState
+	// so HOTKEY / synthetic posts still get a useful mods string. Async, not
+	// GetKeyState: this string is recorder ground truth, and GetKeyState only
+	// reflects state as of the last message dequeued by this thread.
+	const bool ctrl = ((mk & MK_CONTROL) != 0) || ((::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+	const bool shift = ((mk & MK_SHIFT) != 0) || ((::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+	const bool alt = ((::GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
+	std::string m = "[";
+	bool first = true;
+	auto append = [&](const char* name) {
+		if (!first) m += ',';
+		m += '\"'; m += name; m += '\"'; first = false;
+	};
+	if (ctrl) append("ctrl");
+	if (shift) append("shift");
+	if (alt) append("alt");
+	m += ']';
+	return m;
+}
+
+static std::string RecAppBarCmdLabel(int cmd) {
+	if (cmd == 0) return {};
+	for (const auto& group : g_appBarLayout.groups) {
+		for (const auto& item : group.items) {
+			if (item.cmd == cmd) return item.label;
+		}
+	}
+	return {};
+}
+
+static int RecPngEncoderClsid(CLSID* clsid) {
+	UINT num = 0, size = 0;
+	Gdiplus::GetImageEncodersSize(&num, &size);
+	if (size == 0) return -1;
+	std::vector<BYTE> buf(size);
+	auto* codecs = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buf.data());
+	Gdiplus::GetImageEncoders(num, size, codecs);
+	for (UINT i = 0; i < num; ++i) {
+		if (::wcscmp(codecs[i].MimeType, L"image/png") == 0) {
+			*clsid = codecs[i].Clsid;
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+// Port of appbar-shot CaptureWindowToPng (PrintWindow + GDI+ PNG). Failures
+// never throw; callers emit RecError. Layered ULW windows need PW_RENDERFULLCONTENT.
+static bool RecCaptureWindowToPng(HWND hwnd, const wchar_t* path) {
+	if (!hwnd || !::IsWindow(hwnd) || !path || !*path) return false;
+	RECT r{};
+	if (!::GetWindowRect(hwnd, &r)) return false;
+	const int w = r.right - r.left, h = r.bottom - r.top;
+	if (w <= 0 || h <= 0) return false;
+	HDC screen = ::GetDC(NULL);
+	if (!screen) return false;
+	HDC mem = ::CreateCompatibleDC(screen);
+	HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
+	if (!mem || !bmp) {
+		if (bmp) ::DeleteObject(bmp);
+		if (mem) ::DeleteDC(mem);
+		::ReleaseDC(NULL, screen);
+		return false;
+	}
+	HGDIOBJ old = ::SelectObject(mem, bmp);
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 0x00000002
+#endif
+	const BOOL printed = ::PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
+	::SelectObject(mem, old);
+	bool ok = false;
+	if (printed) {
+		Gdiplus::Bitmap bitmap(bmp, NULL);
+		CLSID pngClsid;
+		if (RecPngEncoderClsid(&pngClsid) >= 0)
+			ok = (bitmap.Save(path, &pngClsid, NULL) == Gdiplus::Ok);
+	}
+	::DeleteObject(bmp);
+	::DeleteDC(mem);
+	::ReleaseDC(NULL, screen);
+	return ok;
+}
+
+static bool RecCaptureScreenRectToPng(const RECT& rect, const wchar_t* path) {
+	if (!path || !*path) return false;
+	const int w = rect.right - rect.left, h = rect.bottom - rect.top;
+	if (w <= 0 || h <= 0) return false;
+	HDC screen = ::GetDC(NULL);
+	if (!screen) return false;
+	HDC mem = ::CreateCompatibleDC(screen);
+	HBITMAP bmp = ::CreateCompatibleBitmap(screen, w, h);
+	if (!mem || !bmp) {
+		if (bmp) ::DeleteObject(bmp);
+		if (mem) ::DeleteDC(mem);
+		::ReleaseDC(NULL, screen);
+		return false;
+	}
+	HGDIOBJ old = ::SelectObject(mem, bmp);
+	const BOOL copied = ::BitBlt(mem, 0, 0, w, h, screen, rect.left, rect.top,
+		SRCCOPY | CAPTUREBLT);
+	::SelectObject(mem, old);
+	bool ok = false;
+	if (copied) {
+		Gdiplus::Bitmap bitmap(bmp, NULL);
+		CLSID pngClsid;
+		if (RecPngEncoderClsid(&pngClsid) >= 0)
+			ok = (bitmap.Save(path, &pngClsid, NULL) == Gdiplus::Ok);
+	}
+	::DeleteObject(bmp);
+	::DeleteDC(mem);
+	::ReleaseDC(NULL, screen);
+	return ok;
+}
+
+void RecEmitInput(const char* surface, UINT msg, HWND hwnd, WPARAM wp, LPARAM lp) {
+	if (!g_recActive || !surface) return;
+	// Only the SR-REC-05 message set; everything else is a no-op (cheap).
+	switch (msg) {
+	case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_RBUTTONDOWN: case WM_RBUTTONUP:
+	case WM_LBUTTONDBLCLK: case WM_MOUSEMOVE: case WM_HOTKEY:
+		break;
+	default:
+		return;
+	}
+
+	POINT client = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+	POINT screen = client;
+	if (msg == WM_HOTKEY) {
+		// HOTKEY has no point payload — use current cursor (override-aware).
+		POINT cur{};
+		if (OverlayGetCursorPos(&cur)) {
+			screen = cur;
+			client = cur;
+			if (hwnd) ::ScreenToClient(hwnd, &client);
+		} else {
+			screen = {};
+			client = {};
+		}
+	} else if (hwnd) {
+		::ClientToScreen(hwnd, &screen);
+	}
+
+	// Hit annotation (overlay: semantic hit-test; appbar: button cmd if cheap).
+	std::string hitZone, hitKind, hitId;
+	bool haveHit = false;
+	if (::strcmp(surface, "overlay") == 0 && msg != WM_HOTKEY) {
+		const HtHit hit = HitTestClientPoint(client);
+		hitZone = RecHtZoneName(hit.zone);
+		hitKind = RecHtItemKindName(hit.kind);
+		hitId = hit.id.empty() ? hit.rowId : hit.id;
+		haveHit = true;
+	} else if (::strcmp(surface, "appbar") == 0 && msg != WM_HOTKEY) {
+		int cmd = 0;
+		for (const auto& h : g_appBarHits) {
+			if (h.enabled && ::PtInRect(&h.rc, client)) { cmd = h.cmd; break; }
+		}
+		if (cmd != 0) {
+			hitZone = "button";
+			hitKind = "cmd";
+			hitId = std::to_string(cmd);
+			haveHit = true;
+		}
+	}
+
+	if (msg == WM_MOUSEMOVE) {
+		std::string hitKey;
+		if (haveHit) {
+			hitKey.reserve(hitZone.size() + hitKind.size() + hitId.size() + 2);
+			hitKey += hitZone; hitKey += '|'; hitKey += hitKind; hitKey += '|'; hitKey += hitId;
+		}
+		const ULONGLONG now = ::GetTickCount64();
+		const bool hitChanged = (hitKey != g_recLastInputHitKey);
+		if (!hitChanged && (now - g_recLastInputMoveMs) < 50)
+			return; // ~20 Hz + always-on-hit-change (SR-REC-05)
+		g_recLastInputMoveMs = now;
+		g_recLastInputHitKey = hitKey;
+	}
+
+	std::string body;
+	body.reserve(160 + hitZone.size() + hitKind.size() + hitId.size());
+	body += "\"surface\":\"";
+	body += surface;
+	body += "\",\"msg\":\"";
+	body += RecMsgName(msg);
+	body += "\",\"pt\":[";
+	body += std::to_string(screen.x);
+	body += ",";
+	body += std::to_string(screen.y);
+	body += "],\"client\":[";
+	body += std::to_string(client.x);
+	body += ",";
+	body += std::to_string(client.y);
+	body += "],\"mods\":";
+	body += RecModsJson(wp);
+	if (msg == WM_HOTKEY) {
+		body += ",\"hotkeyId\":";
+		body += std::to_string((int)wp);
+	}
+	if (haveHit) {
+		body += ",\"hit\":{\"zone\":\"";
+		EntityJsonAppendEscaped(body, hitZone);
+		body += "\",\"kind\":\"";
+		EntityJsonAppendEscaped(body, hitKind);
+		body += "\",\"id\":\"";
+		EntityJsonAppendEscaped(body, hitId);
+		body += "\"}";
+	}
+	RecEvent("input", body);
+}
+
+void RecEmitGestureStart(const char* kind, const std::string& id, const std::string& rowId, POINT anchorClient) {
+	if (!g_recActive || !kind) return;
+	g_recLastGestureUpdateMs = 0;
+	++g_recGestureSeq;
+	g_recCurGestureId = g_recGestureSeq;
+	std::string body;
+	body.reserve(112 + id.size() + rowId.size());
+	body += "\"phase\":\"start\",\"g\":";
+	body += std::to_string(g_recCurGestureId);
+	body += ",\"kind\":\"";
+	EntityJsonAppendEscaped(body, kind);
+	body += "\",\"id\":\"";
+	EntityJsonAppendEscaped(body, id);
+	body += "\",\"rowId\":\"";
+	EntityJsonAppendEscaped(body, rowId);
+	body += "\",\"anchor\":[";
+	body += std::to_string(anchorClient.x);
+	body += ",";
+	body += std::to_string(anchorClient.y);
+	body += "]";
+	RecEvent("gesture", body);
+	RecEmitSnapshot();
+}
+
+void RecEmitGestureUpdate() {
+	if (!g_recActive || !g_gestureActive) return;
+	const ULONGLONG now = ::GetTickCount64();
+	if (g_recLastGestureUpdateMs != 0 && (now - g_recLastGestureUpdateMs) < 100)
+		return; // 10 Hz max (SR-REC-08 update throttle)
+	g_recLastGestureUpdateMs = now;
+
+	std::string body;
+	body.reserve(176);
+	body += "\"phase\":\"update\",\"g\":";
+	body += std::to_string(g_recCurGestureId);
+	body += ",\"kind\":\"";
+	EntityJsonAppendEscaped(body, RecDragKindName(g_dragKind));
+	body += "\",\"id\":\"";
+	EntityJsonAppendEscaped(body, g_dragId.empty() ? g_createRowId : g_dragId);
+	body += "\"";
+	if (g_dragKind == DragKind::Create) {
+		body += ",\"rowId\":\"";
+		EntityJsonAppendEscaped(body, g_createRowId);
+		body += "\",\"anchorDay\":";
+		body += std::to_string(g_createAnchorDay);
+		body += ",\"currentDay\":";
+		body += std::to_string(g_createCurrentDay);
+	} else if (g_dragKind == DragKind::TaskProgress) {
+		body += ",\"percent\":";
+		body += std::to_string(g_dragCandidatePercent);
+	} else if (IsWindowEdgeDragKind(g_dragKind)) {
+		body += ",\"candidateStart\":\"";
+		EntityJsonAppendEscaped(body, g_windowCandidateStart);
+		body += "\",\"candidateEnd\":\"";
+		EntityJsonAppendEscaped(body, g_windowCandidateEnd);
+		body += "\"";
+	} else {
+		body += ",\"deltaDays\":";
+		body += std::to_string(g_dragDeltaDays);
+		if (!g_dragTargetRowId.empty()) {
+			body += ",\"rowId\":\"";
+			EntityJsonAppendEscaped(body, g_dragTargetRowId);
+			body += "\"";
+		}
+		if (!g_dragOrigStart.empty()) {
+			std::string cs, ce;
+			ComputeDragCandidateDates(g_dragKind, g_dragOrigStart, g_dragOrigEnd, g_dragDeltaDays, cs, ce);
+			body += ",\"candidateStart\":\"";
+			EntityJsonAppendEscaped(body, cs);
+			body += "\",\"candidateEnd\":\"";
+			EntityJsonAppendEscaped(body, ce);
+			body += "\"";
+		}
+	}
+	RecEvent("gesture", body);
+}
+
+void RecEmitGestureCommit(const char* kind, const std::string& id, const char* result, long hr,
+	const std::string& payloadExtra) {
+	if (!g_recActive || !kind) return;
+	std::string body;
+	body.reserve(112 + id.size() + payloadExtra.size());
+	body += "\"phase\":\"commit\",\"g\":";
+	body += std::to_string(g_recCurGestureId);
+	body += ",\"kind\":\"";
+	EntityJsonAppendEscaped(body, kind);
+	body += "\",\"id\":\"";
+	EntityJsonAppendEscaped(body, id);
+	body += "\",\"result\":\"";
+	body += (result && *result) ? result : "ok";
+	body += "\",\"hr\":";
+	body += std::to_string(hr);
+	if (!payloadExtra.empty()) {
+		body += ",";
+		body += payloadExtra;
+	}
+	RecEvent("gesture", body);
+	RecEmitSnapshot();
+	RecEmitDoc();
+	RecCaptureFrames("commit");
+}
+
+void RecEmitGestureCancel(const char* kind, const std::string& id) {
+	if (!g_recActive || !kind) return;
+	std::string body;
+	body.reserve(80 + id.size());
+	body += "\"phase\":\"cancel\",\"g\":";
+	body += std::to_string(g_recCurGestureId);
+	body += ",\"kind\":\"";
+	EntityJsonAppendEscaped(body, kind);
+	body += "\",\"id\":\"";
+	EntityJsonAppendEscaped(body, id);
+	body += "\"";
+	RecEvent("gesture", body);
+	RecEmitSnapshot();
+}
+
+void RecEmitPaint(const char* surface, long count) {
+	if (!g_recActive || !surface) return;
+	const ULONGLONG now = ::GetTickCount64();
+	ULONGLONG* last = nullptr;
+	if (::strcmp(surface, "overlay") == 0) last = &g_recLastPaintOverlayMs;
+	else if (::strcmp(surface, "appbar") == 0) last = &g_recLastPaintAppBarMs;
+	else return;
+	if (*last != 0 && (now - *last) < 250) return; // max 1/250ms (SR-REC-10)
+	*last = now;
+	std::string body;
+	body.reserve(64);
+	body += "\"surface\":\"";
+	body += surface;
+	body += "\",\"count\":";
+	body += std::to_string(count);
+	body += ",\"tMs\":";
+	body += std::to_string((unsigned long long)(now - g_recT0));
+	RecEvent("paint", body);
+}
+
+void RecCaptureFrames(const char* trigger) {
+	if (!g_recActive || !trigger || g_recSessionDir[0] == L'\0') return;
+	const ULONGLONG now = ::GetTickCount64();
+	g_recPendingFrameTrigger = trigger;
+	g_recPendingFrameDueMs = now + 75; // next settled paint, not pre-transition pixels
+	if (g_recLastFrameMs != 0 && g_recPendingFrameDueMs < g_recLastFrameMs + 500)
+		g_recPendingFrameDueMs = g_recLastFrameMs + 500;
+}
+
+void RecCapturePendingFrame() {
+	if (!g_recActive || g_recPendingFrameTrigger.empty()) return;
+	const ULONGLONG now = ::GetTickCount64();
+	if (now < g_recPendingFrameDueMs) return;
+	if (g_hwnd && ::IsWindow(g_hwnd)) ::UpdateWindow(g_hwnd);
+	if (g_appBarHwnd && ::IsWindow(g_appBarHwnd)) ::UpdateWindow(g_appBarHwnd);
+
+	RECT capture = g_chartScreenRect;
+	if (::IsRectEmpty(&capture) && g_hwnd) ::GetWindowRect(g_hwnd, &capture);
+	RECT appBar{};
+	if (g_appBarHwnd && ::IsWindowVisible(g_appBarHwnd) && ::GetWindowRect(g_appBarHwnd, &appBar)) {
+		capture.left = (std::min)(capture.left, appBar.left);
+		capture.top = (std::min)(capture.top, appBar.top);
+		capture.right = (std::max)(capture.right, appBar.right);
+		capture.bottom = (std::max)(capture.bottom, appBar.bottom);
+	}
+	::InflateRect(&capture, 8, 8);
+	const int vx = ::GetSystemMetrics(SM_XVIRTUALSCREEN);
+	const int vy = ::GetSystemMetrics(SM_YVIRTUALSCREEN);
+	const int vr = vx + ::GetSystemMetrics(SM_CXVIRTUALSCREEN);
+	const int vb = vy + ::GetSystemMetrics(SM_CYVIRTUALSCREEN);
+	capture.left = (std::max)(capture.left, (LONG)vx);
+	capture.top = (std::max)(capture.top, (LONG)vy);
+	capture.right = (std::min)(capture.right, (LONG)vr);
+	capture.bottom = (std::min)(capture.bottom, (LONG)vb);
+
+	++g_recFrameSeq;
+	wchar_t absPath[MAX_PATH];
+	::swprintf_s(absPath, MAX_PATH, L"%s\\frames\\%04llu-%hs.png", g_recSessionDir,
+		(unsigned long long)g_recFrameSeq, g_recPendingFrameTrigger.c_str());
+	bool ok = false;
+	try { ok = RecCaptureScreenRectToPng(capture, absPath); }
+	catch (...) { ok = false; }
+	if (!ok) {
+		RecError("RecCaptureFrames/composited", (long)E_FAIL,
+			"screen composition PNG capture failed");
+	} else {
+		char rel[96];
+		::snprintf(rel, sizeof(rel), "frames/%04llu-%s.png",
+			(unsigned long long)g_recFrameSeq, g_recPendingFrameTrigger.c_str());
+		std::string body = "\"file\":\"";
+		EntityJsonAppendEscaped(body, rel);
+		body += "\",\"surface\":\"composited\",\"trigger\":\"";
+		EntityJsonAppendEscaped(body, g_recPendingFrameTrigger);
+		body += "\",\"screenRect\":[" + std::to_string(capture.left) + "," +
+			std::to_string(capture.top) + "," + std::to_string(capture.right) + "," +
+			std::to_string(capture.bottom) + "]";
+		RecEvent("frame", body);
+		g_recLastFrameMs = now;
+	}
+	g_recPendingFrameTrigger.clear();
+	g_recPendingFrameDueMs = 0;
+}
+
+void SessionRecordStop() {
+	const bool wasActive = g_recActive;
+	if (g_recEventsFile) {
+		::fflush(g_recEventsFile);
+		::fclose(g_recEventsFile);
+		g_recEventsFile = nullptr;
+	}
+	g_recActive = false;
+	g_recSeq = 0;
+	g_recT0 = 0;
+	g_recLastFlushMs = 0;
+	g_recLastSnapEntitySig.clear();
+	g_recLastNonEmptyEntityJson.clear();
+	g_recLastNativeKey.clear();
+	g_recLastInputMoveMs = 0;
+	g_recLastInputHitKey.clear();
+	g_recLastGestureUpdateMs = 0;
+	g_recLastPaintOverlayMs = 0;
+	g_recLastPaintAppBarMs = 0;
+	g_recLastFrameMs = 0;
+	g_recLastIdleSnapshotMs = 0;
+	g_recFrameSeq = 0;
+	g_recPendingFrameTrigger.clear();
+	g_recPendingFrameDueMs = 0;
+	g_recSkipGestureCancel = false;
+	if (g_recActiveMarkerPath[0]) {
+		::DeleteFileW(g_recActiveMarkerPath);
+		g_recActiveMarkerPath[0] = L'\0';
+	}
+	if (wasActive && g_recStateChanged)
+		g_recStateChanged(false, g_recStateChangedContext);
+	// Keep g_recSessionDir so Overlay_GetSessionDirForTest can report the last session.
+}
+
+void SessionRecordStart() {
+	if (g_recActive) SessionRecordStop();
+
+	SYSTEMTIME local{};
+	::GetLocalTime(&local);
+	wchar_t stamp[40];
+	::swprintf_s(stamp, 40, L"%04u%02u%02u-%02u%02u%02u-%03u-%lu",
+		(unsigned)local.wYear, (unsigned)local.wMonth, (unsigned)local.wDay,
+		(unsigned)local.wHour, (unsigned)local.wMinute, (unsigned)local.wSecond,
+		(unsigned)local.wMilliseconds, ::GetCurrentProcessId());
+
+	wchar_t sessionsRoot[MAX_PATH] = {};
+	{
+		std::filesystem::path root;
+		wchar_t overridePath[MAX_PATH] = {};
+		DWORD overrideLen = ::GetEnvironmentVariableW(
+			L"POWERPLANNER_RECORDS_DIR", overridePath, MAX_PATH);
+		if (overrideLen > 0 && overrideLen < MAX_PATH) {
+			root = overridePath;
+		} else {
+			HMODULE module = NULL;
+			wchar_t modulePath[MAX_PATH] = {};
+			if (::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+				GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCWSTR>(&SessionRecordStart), &module) &&
+				::GetModuleFileNameW(module, modulePath, MAX_PATH)) {
+				std::filesystem::path moduleDir = std::filesystem::path(modulePath).parent_path();
+				if (_wcsicmp(moduleDir.filename().c_str(), L"build") == 0)
+					root = moduleDir.parent_path() / L"records";
+			}
+			if (root.empty()) {
+				wchar_t localAppData[MAX_PATH] = {};
+				DWORD localLen = ::GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
+				if (localLen > 0 && localLen < MAX_PATH)
+					root = std::filesystem::path(localAppData) / L"PowerPlanner" / L"records";
+			}
+		}
+		if (root.empty()) return;
+		std::error_code ec;
+		std::filesystem::create_directories(root, ec);
+		if (ec || root.native().size() >= MAX_PATH) return;
+		::wcscpy_s(sessionsRoot, root.c_str());
+	}
+
+	::swprintf_s(g_recSessionDir, MAX_PATH, L"%s\\%s", sessionsRoot, stamp);
+	if (!::CreateDirectoryW(g_recSessionDir, NULL) && ::GetLastError() != ERROR_ALREADY_EXISTS) {
+		g_recSessionDir[0] = L'\0';
+		return;
+	}
+	wchar_t framesDir[MAX_PATH];
+	::swprintf_s(framesDir, MAX_PATH, L"%s\\frames", g_recSessionDir);
+	::CreateDirectoryW(framesDir, NULL);
+
+	// meta.json — host context for agents (SR-REC-03).
+	std::string pptxName;
+	std::string chartId;
+	if (g_app) {
+		try {
+			PowerPoint::_PresentationPtr pres = g_app->GetActivePresentation();
+			if (pres) {
+				_bstr_t name = pres->GetName();
+				if (name.length()) pptxName = Narrow((const wchar_t*)name);
+			}
+			PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
+			PowerPoint::_SlidePtr slide = win ? win->GetView()->GetSlide() : nullptr;
+			PowerPoint::ShapePtr root = FindChartRoot(slide);
+			if (root) chartId = std::to_string(root->GetId());
+		} catch (...) {}
+	}
+	SYSTEMTIME utc{};
+	::GetSystemTime(&utc);
+	char isoStart[40];
+	::snprintf(isoStart, sizeof(isoStart), "%04u-%02u-%02uT%02u:%02u:%02uZ",
+		(unsigned)utc.wYear, (unsigned)utc.wMonth, (unsigned)utc.wDay,
+		(unsigned)utc.wHour, (unsigned)utc.wMinute, (unsigned)utc.wSecond);
+	const int screenW = ::GetSystemMetrics(SM_CXSCREEN);
+	const int screenH = ::GetSystemMetrics(SM_CYSCREEN);
+
+	std::string meta;
+	meta.reserve(512);
+	meta += "{\n";
+	meta += "  \"dllVersion\":\"2.10.0-dev\",\n";
+	meta += "  \"build\":\"" __DATE__ " " __TIME__ "\",\n";
+	meta += "  \"pptxName\":\"";
+	EntityJsonAppendEscaped(meta, pptxName);
+	meta += "\",\n";
+	meta += "  \"chartId\":\"";
+	EntityJsonAppendEscaped(meta, chartId);
+	meta += "\",\n";
+	meta += "  \"startTime\":\"";
+	meta += isoStart;
+	meta += "\",\n";
+	meta += "  \"screen\":{\"w\":";
+	meta += std::to_string(screenW);
+	meta += ",\"h\":";
+	meta += std::to_string(screenH);
+	meta += ",\"dpi\":";
+	meta += std::to_string(g_dpi);
+	meta += "},\n";
+	meta += "  \"chartRect\":{\"left\":";
+	meta += std::to_string(g_chartScreenRect.left);
+	meta += ",\"top\":";
+	meta += std::to_string(g_chartScreenRect.top);
+	meta += ",\"right\":";
+	meta += std::to_string(g_chartScreenRect.right);
+	meta += ",\"bottom\":";
+	meta += std::to_string(g_chartScreenRect.bottom);
+	meta += "}\n";
+	meta += "}\n";
+
+	wchar_t metaPath[MAX_PATH];
+	::swprintf_s(metaPath, MAX_PATH, L"%s\\meta.json", g_recSessionDir);
+	FILE* metaFile = nullptr;
+	if (::_wfopen_s(&metaFile, metaPath, L"wb") == 0 && metaFile) {
+		::fwrite(meta.data(), 1, meta.size(), metaFile);
+		::fclose(metaFile);
+	}
+
+	wchar_t eventsPath[MAX_PATH];
+	::swprintf_s(eventsPath, MAX_PATH, L"%s\\events.jsonl", g_recSessionDir);
+	FILE* eventsFile = nullptr;
+	if (::_wfopen_s(&eventsFile, eventsPath, L"wb") != 0 || !eventsFile) {
+		g_recSessionDir[0] = L'\0';
+		return;
+	}
+
+	g_recEventsFile = eventsFile;
+	::setvbuf(g_recEventsFile, g_recEventsBuffer, _IOFBF, sizeof(g_recEventsBuffer));
+	g_recSeq = 0;
+	g_recT0 = ::GetTickCount64();
+	g_recLastFlushMs = g_recT0;
+	g_recLastSnapEntitySig.clear();
+	g_recLastNonEmptyEntityJson.clear();
+	g_recLastNativeKey.clear();
+	g_recLastIdleSnapshotMs = g_recT0;
+	g_recActive = true;
+	::swprintf_s(g_recActiveMarkerPath, MAX_PATH, L"%s\\.active", g_recSessionDir);
+	FILE* activeFile = nullptr;
+	if (::_wfopen_s(&activeFile, g_recActiveMarkerPath, L"wb") == 0 && activeFile) {
+		::fprintf(activeFile, "pid=%lu\n", ::GetCurrentProcessId());
+		::fclose(activeFile);
+	}
+	if (g_recStateChanged)
+		g_recStateChanged(true, g_recStateChangedContext);
+
+	// Initial doc + snapshot so a session is never an empty events file.
+	RecEmitDoc();
+	RecEmitSnapshot();
+	OvLog(L"session recorder: started");
 }
 
 // Select the CHART_ROOT group natively (used by the 'move chart' grip) so the
@@ -2994,6 +4212,33 @@ static void ComputeWindowEdgeCandidate(DragKind kind, const std::string& baselin
 	*outEnd = DaysToDate(endDay);
 }
 
+// Click-to-widen (2026-07-18 discoverability fix). Before this, a window port
+// only did anything if the press turned into a threshold-crossing DRAG: a plain
+// click fell through to the zero-delta no-op and the user got no feedback at
+// all, which is indistinguishable from "this is not a button". A click now
+// steps the pressed edge outward by one visible unit; drag remains the precise
+// gesture. Snap/clamp go through the same pure helpers as the drag path so a
+// click can never produce a window the commit would reject.
+static void ComputeWindowExpandStep(DragKind kind, const std::string& baselineStart,
+	const std::string& baselineEnd, const std::string& scale,
+	std::string* outStart, std::string* outEnd) {
+	if (!outStart || !outEnd) return;
+	long startDay = DateToDays(baselineStart);
+	long endDay = DateToDays(baselineEnd);
+	const std::string& edgeIso = (kind == DragKind::WindowEdgeL) ? baselineStart : baselineEnd;
+	long step = MinimumWindowSpanDays(edgeIso, scale);
+	// At "day" scale one unit is one day — a step the user would read as
+	// "nothing happened". A week is the smallest legible increment.
+	if (step < 7) step = 7;
+	long candidateDay = (kind == DragKind::WindowEdgeL) ? startDay - step : endDay + step;
+	candidateDay = SnapDayToScale(candidateDay, scale);
+	candidateDay = ClampWindowEdgeDay(kind, candidateDay, startDay, endDay, scale);
+	if (kind == DragKind::WindowEdgeL) startDay = candidateDay;
+	else if (kind == DragKind::WindowEdgeR) endDay = candidateDay;
+	*outStart = DaysToDate(startDay);
+	*outEnd = DaysToDate(endDay);
+}
+
 static void UpdateWindowEdgeDragCandidate(long dx) {
 	std::string candidateStart, candidateEnd;
 	ComputeWindowEdgeCandidate(g_dragKind, g_dragOrigStart, g_dragOrigEnd, g_dragPxPerDay,
@@ -3053,6 +4298,8 @@ static void StartWindowEdgeDrag(HtZone zone, POINT downPt) {
 	g_dragLastPt = downPt;
 	g_dragAnchorRect = WindowPortHitRectScreen(zone == HtZone::WindowPortR);
 	g_gestureActive = true;
+	if (g_recActive)
+		RecEmitGestureStart(RecDragKindName(g_dragKind), "", "", downPt);
 }
 
 // W3 real commit (SR-WIN-23/27/28). Reads ONLY its snapshot parameters — the
@@ -3074,6 +4321,8 @@ static void CommitWindowGesture(const std::string& startISO, const std::string& 
 	}
 	if (startISO == baselineStartISO && endISO == baselineEndISO) {
 		OvLog(L"window commit: zero-delta release - no-op (m9)");
+		if (g_recActive)
+			RecEmitGestureCommit("WindowEdge", "", "ok", 0, "\"delta\":\"zero\"");
 		RequestOverlayRepaint();
 		return;
 	}
@@ -3082,6 +4331,8 @@ static void CommitWindowGesture(const std::string& startISO, const std::string& 
 		return;
 	}
 	g_mutating = true;
+	const char* result = "fail";
+	long hr = 0;
 	try {
 		PpDocument doc;
 		if (ReadGanttDocFromSlide(g_app, &doc)) {
@@ -3089,6 +4340,7 @@ static void CommitWindowGesture(const std::string& startISO, const std::string& 
 			// baseline must never force a no-change rebuild into undo).
 			if (doc.windowStart == startISO && doc.windowEnd == endISO) {
 				OvLog(L"window commit: candidate equals document window - no-op (m9)");
+				result = "ok";
 			} else if (SetTimeWindow(doc, startISO, endISO)) {
 				wchar_t msg[160];
 				::swprintf_s(msg, 160, L"window commit: %hs -> %hs", startISO.c_str(), endISO.c_str());
@@ -3097,21 +4349,36 @@ static void CommitWindowGesture(const std::string& startISO, const std::string& 
 				// W1's cache-key/fast-path refusal makes this a full reconcile;
 				// RebuildChart's M4 choke point resets a now-hidden selection.
 				RebuildChart(doc, "");
+				result = "ok";
 			} else {
 				OvLog(L"window commit: SetTimeWindow rejected candidate");
 			}
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
+		hr = (long)e.Error();
 		OvLog(L"COM error committing window gesture");
+		RecError("CommitWindowGesture", hr, "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
+		hr = (long)E_FAIL;
 		OvLog(L"document error committing window gesture");
+		RecError("CommitWindowGesture", hr, e.what());
 	}
 	catch (...) {
+		hr = (long)E_FAIL;
 		OvLog(L"unknown error committing window gesture");
+		RecError("CommitWindowGesture", hr, "unknown error");
 	}
 	g_mutating = false;
+	if (g_recActive) {
+		std::string extra = "\"start\":\"";
+		EntityJsonAppendEscaped(extra, startISO);
+		extra += "\",\"end\":\"";
+		EntityJsonAppendEscaped(extra, endISO);
+		extra += "\"";
+		RecEmitGestureCommit("WindowEdge", "", result, hr, extra);
+	}
 	RequestOverlayRepaint();
 }
 
@@ -3359,6 +4626,8 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 		g_dragLastPt = downPt;
 		g_dragDeltaDays = 0;
 		g_gestureActive = true;
+		if (g_recActive)
+			RecEmitGestureStart(RecDragKindName(g_dragKind), g_dragId, g_dragOrigRowId, downPt);
 		return;
 	}
 
@@ -3425,6 +4694,8 @@ void StartDragGesture(const HtHit& hit, POINT downPt) {
 	g_dragLastPt = downPt;
 	g_dragDeltaDays = 0;
 	g_gestureActive = true;
+	if (g_recActive)
+		RecEmitGestureStart(RecDragKindName(g_dragKind), g_dragId, g_dragOrigRowId, downPt);
 }
 
 // px-per-day for a CREATE gesture anchored on an EmptyCell (no task rect to
@@ -3464,6 +4735,8 @@ void StartCreateGesture(const HtHit& hit, POINT downPt) {
 	}
 	g_dragLastPt = downPt;
 	g_gestureActive = true;
+	if (g_recActive)
+		RecEmitGestureStart("Create", "", g_createRowId, downPt);
 	// Note: g_dragActive latches later, in UpdateDragGesture, exactly like the
 	// move/resize path — a create gesture that never crosses the threshold is
 	// still a plain click (no task created), per ApplyClickSelection's
@@ -3545,6 +4818,7 @@ void UpdateDragGesture(POINT pt) {
 	if (IsWindowEdgeDragKind(g_dragKind)) {
 		UpdateWindowEdgeDragCandidate(dx);
 		RequestOverlayRepaint(); // preview-only: no document/shape write on move
+		if (g_recActive) RecEmitGestureUpdate();
 		return;
 	}
 
@@ -3552,12 +4826,14 @@ void UpdateDragGesture(POINT pt) {
 		long newDay = g_createAnchorDay + (long)::lround((double)dx / (double)g_dragPxPerDay);
 		g_createCurrentDay = newDay;
 		RequestOverlayRepaint();
+		if (g_recActive) RecEmitGestureUpdate();
 		return;
 	}
 
 	if (g_dragKind == DragKind::LinkPort) {
 		UpdateLinkDragHover(pt);
 		RequestOverlayRepaint();
+		if (g_recActive) RecEmitGestureUpdate();
 		return;
 	}
 
@@ -3569,6 +4845,7 @@ void UpdateDragGesture(POINT pt) {
 			g_dragCandidatePercent = std::max(0, std::min(100, pct));
 		}
 		RequestOverlayRepaint();
+		if (g_recActive) RecEmitGestureUpdate();
 		return;
 	}
 
@@ -3591,6 +4868,7 @@ void UpdateDragGesture(POINT pt) {
 			LatchDragTargetRow(pt.y + g_windowOriginY);
 		}
 		RequestOverlayRepaint();
+		if (g_recActive) RecEmitGestureUpdate();
 		return;
 	}
 
@@ -3604,6 +4882,7 @@ void UpdateDragGesture(POINT pt) {
 	}
 
 	RequestOverlayRepaint(); // A2/task spec: repaint on each move (cheap)
+	if (g_recActive) RecEmitGestureUpdate();
 }
 
 // Compute the candidate dates for a gesture (original dates shifted by the
@@ -3649,6 +4928,11 @@ void ComputeDragCandidateDates(std::string& outStart, std::string& outEnd) {
 // untouched.
 void CancelDragGesture() {
 	if (!g_gestureActive) return;
+	if (g_recActive && !g_recSkipGestureCancel) {
+		const char* kind = RecDragKindName(g_dragKind);
+		const std::string id = g_dragId.empty() ? g_createRowId : g_dragId;
+		RecEmitGestureCancel(kind, id);
+	}
 	ResetDragGestureState();
 	RequestOverlayRepaint();
 }
@@ -3678,10 +4962,16 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 	if (!commitTargetRowId.empty() && !IsValidTaskDropRow(commitTargetRowId))
 		commitTargetRowId.clear();
 	bool rowChangeRequested = (kind == DragKind::TaskBody || kind == DragKind::Text) && !commitTargetRowId.empty();
-	if (kind != DragKind::Text && deltaDays == 0 && !rowChangeRequested) return;
+	if (kind != DragKind::Text && deltaDays == 0 && !rowChangeRequested) {
+		if (g_recActive)
+			RecEmitGestureCommit(RecDragKindName(kind), id, "ok", 0, "\"delta\":\"zero\"");
+		return;
+	}
 	if (!g_app || g_mutating) return;
 
 	g_mutating = true;
+	const char* result = "fail";
+	long hr = 0;
 	try {
 		PpDocument doc;
 		if (ReadGanttDocFromSlide(g_app, &doc)) {
@@ -3792,27 +5082,47 @@ void CommitDragGesture(DragKind kind, const std::string& id, long deltaDays, con
 				// exactly like the existing HandleToolbarButton commit pattern.
 				SetOwnSelection(selKind, id);
 				RequestOverlayRepaint();
+				result = "ok";
 			} else {
 				ClearDragCommitEcho();
+				result = "ok"; // no-op mutation is not a failure
 			}
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
+		hr = (long)e.Error();
 		OvLog(L"COM error committing drag gesture");
+		RecError("CommitDragGesture", hr, "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
+		hr = (long)E_FAIL;
 		OvLog(L"document error committing drag gesture");
+		RecError("CommitDragGesture", hr, e.what());
 	}
 	catch (...) {
+		hr = (long)E_FAIL;
 		OvLog(L"unknown error committing drag gesture");
+		RecError("CommitDragGesture", hr, "unknown error");
 	}
 	g_mutating = false;
+	if (g_recActive) {
+		std::string extra = "\"deltaDays\":";
+		extra += std::to_string(deltaDays);
+		if (!commitTargetRowId.empty()) {
+			extra += ",\"rowId\":\"";
+			EntityJsonAppendEscaped(extra, commitTargetRowId);
+			extra += "\"";
+		}
+		RecEmitGestureCommit(RecDragKindName(kind), id, result, hr, extra);
+	}
 }
 
 void CommitProgressGesture(const std::string& id, int percent) {
 	if (id.empty() || !g_app || g_mutating) return;
 	percent = std::max(0, std::min(100, percent));
 	g_mutating = true;
+	const char* result = "fail";
+	long hr = 0;
 	try {
 		PpDocument doc;
 		if (ReadGanttDocFromSlide(g_app, &doc)) {
@@ -3820,19 +5130,31 @@ void CommitProgressGesture(const std::string& id, int percent) {
 				RebuildChart(doc, id);
 				SetOwnSelection("TASK", id);
 				RequestOverlayRepaint();
+				result = "ok";
 			}
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
+		hr = (long)e.Error();
 		OvLog(L"COM error committing progress drag");
+		RecError("CommitProgressGesture", hr, "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
+		hr = (long)E_FAIL;
 		OvLog(L"document error committing progress drag");
+		RecError("CommitProgressGesture", hr, e.what());
 	}
 	catch (...) {
+		hr = (long)E_FAIL;
 		OvLog(L"unknown error committing progress drag");
+		RecError("CommitProgressGesture", hr, "unknown error");
 	}
 	g_mutating = false;
+	if (g_recActive) {
+		std::string extra = "\"percent\":";
+		extra += std::to_string(percent);
+		RecEmitGestureCommit("TaskProgress", id, result, hr, extra);
+	}
 }
 
 // Commit a CREATE gesture on WM_LBUTTONUP: adds a new task spanning
@@ -3842,12 +5164,15 @@ void CommitProgressGesture(const std::string& id, int percent) {
 void CommitCreateGesture(const std::string& rowId, long startDay, long endDay) {
 	if (rowId.empty() || !g_app || g_mutating) return;
 	g_mutating = true;
+	const char* result = "fail";
+	long hr = 0;
+	std::string newId;
 	try {
 		PpDocument doc;
 		if (ReadGanttDocFromSlide(g_app, &doc)) {
 			std::string startISO = DaysToDate(startDay);
 			std::string endISO = DaysToDate(endDay);
-			std::string newId = AddTask(doc, rowId, "New task", startISO, endISO);
+			newId = AddTask(doc, rowId, "New task", startISO, endISO);
 			if (!newId.empty()) {
 				RebuildChart(doc, newId);
 				// A2, same reasoning as CommitDragGesture: set synchronously,
@@ -3855,21 +5180,37 @@ void CommitCreateGesture(const std::string& rowId, long startDay, long endDay) {
 				SetOwnSelection("TASK", newId);
 				g_creationFailHint.clear();
 				RequestOverlayRepaint();
+				result = "ok";
 			} else {
 				g_creationFailHint = L"Cannot create task";
 			}
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
+		hr = (long)e.Error();
 		OvLog(L"COM error committing create gesture");
+		RecError("CommitCreateGesture", hr, "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
+		hr = (long)E_FAIL;
 		OvLog(L"document error committing create gesture");
+		RecError("CommitCreateGesture", hr, e.what());
 	}
 	catch (...) {
+		hr = (long)E_FAIL;
 		OvLog(L"unknown error committing create gesture");
+		RecError("CommitCreateGesture", hr, "unknown error");
 	}
 	g_mutating = false;
+	if (g_recActive) {
+		std::string extra = "\"rowId\":\"";
+		EntityJsonAppendEscaped(extra, rowId);
+		extra += "\",\"startDay\":";
+		extra += std::to_string(startDay);
+		extra += ",\"endDay\":";
+		extra += std::to_string(endDay);
+		RecEmitGestureCommit("Create", newId, result, hr, extra);
+	}
 }
 
 // The overlay's HTCLIENT region swallows WM_MOUSEWHEEL/WM_MOUSEHWHEEL (they
@@ -3902,16 +5243,18 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	// only an actual throw is redirected here, falling through to the same
 	// DefWindowProcW passthrough used for unhandled messages.
 	try {
+	// R1b: input tap at TOP (SR-REC-05). g_recActive fast-check inside.
+	if (g_recActive) RecEmitInput("overlay", msg, hwnd, wp, lp);
 	if (msg == WM_NCHITTEST) {
-		// Alt = escape hatch: let PowerPoint see the mouse so the user can
-		// natively select/move the whole group under the overlay. In harness
-		// runs (g_cursorOverrideEnabled), physical Alt keystate is irrelevant
-		// by design (see Overlay_SetCursorPosOverrideForTest) — consult the
-		// override's altDown flag instead of the real GetKeyState so a stray
-		// physical Alt held by the user running the harness in the background
-		// can never change gesture routing.
-		bool altDown = g_cursorOverrideEnabled ? g_cursorOverrideAltDown : (::GetKeyState(VK_MENU) < 0);
-		if (altDown) return HTTRANSPARENT;
+		// NOTE: there used to be an Alt escape hatch here returning
+		// HTTRANSPARENT so PowerPoint could see the mouse. It was removed:
+		// GetKeyState reports keyboard state as of the last message the thread
+		// pulled off its queue, and WM_NCHITTEST arrives via SendMessage, so the
+		// read could be arbitrarily stale. Alt+Tab latched it (the shell eats
+		// the Alt-up, so the thread never retrieves it) and the overlay went
+		// permanently transparent to input while still painting — a live
+		// recording caught five clicks vanishing with zero events logged. See
+		// docs/native-overlay-input-loss-analysis.md.
 		POINT screenPt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
 		// The overlay captures ALL mouse input over the chart area; PowerPoint
 		// never sees chart clicks. Outside the chart, only the chrome widgets
@@ -4117,9 +5460,13 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 				dragCandidatePercent = std::max(0, std::min(100, dragCandidatePercent));
 			}
 		}
+		// Suppress CAPTURECHANGED cancel while we still own the gesture snapshot;
+		// commit helpers emit "commit", click/cancel paths emit "cancel" below.
 		if (g_captureActive) {
 			g_captureActive = false;
+			if (wasGestureActive) g_recSkipGestureCancel = true;
 			::ReleaseCapture();
+			g_recSkipGestureCancel = false;
 		}
 		if (GripFromClientPoint(pt)) {
 			try {
@@ -4161,6 +5508,23 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 		// from these up/down endpoints) commits via GanttOps; otherwise this
 		// is a plain click and selects exactly as before.
 		if (wasCaptureActive) {
+			if (wasGestureActive && !wasDragActive && IsWindowEdgeDragKind(dragKind)) {
+				// Plain click on a window port: step this edge outward one unit.
+				// Snapshot locals only (Reset/release already ran, see above).
+				ResetDragGestureState();
+				std::string stepStart = dragOrigStart, stepEnd = dragOrigEnd;
+				ComputeWindowExpandStep(dragKind, dragOrigStart, dragOrigEnd,
+					windowScale, &stepStart, &stepEnd);
+				OvLog(dragKind == DragKind::WindowEdgeL
+					? L"WINDOWPORT left click -> widen" : L"WINDOWPORT right click -> widen");
+				try {
+					CommitWindowGesture(stepStart, stepEnd, dragOrigStart, dragOrigEnd);
+				} catch (...) {
+					OvLog(L"window port click commit failed");
+					RecError("CommitWindowGesture/click", (long)E_FAIL, "exception");
+				}
+				return 0;
+			}
 			if (wasGestureActive && wasDragActive && IsWindowEdgeDragKind(dragKind)) {
 				// Snapshot locals above are the sole source after Reset/release.
 				// dragOrigStart/End carry the gesture BASELINE (StartWindowEdgeDrag
@@ -4172,6 +5536,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 						dragOrigStart, dragOrigEnd);
 				} catch (...) {
 					OvLog(L"window gesture commit failed");
+					RecError("CommitWindowGesture/call", (long)E_FAIL, "exception");
 				}
 			} else if (wasGestureActive && wasDragActive && dragKind == DragKind::Create) {
 				// Create-drag: span < 0.5 day is treated as a click (no task
@@ -4186,6 +5551,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 				bool isClick = (dayDx > -0.5 && dayDx < 0.5);
 				ResetDragGestureState();
 				if (isClick) {
+					if (g_recActive)
+						RecEmitGestureCancel("Create", createRowId);
 					HtHit hit = HitTestClientPoint(g_mouseDownPt);
 					const bool ctrlDown = ((g_mouseDownMk & MK_CONTROL) != 0) ||
 						((::GetKeyState(VK_CONTROL) & 0x8000) != 0);
@@ -4201,6 +5568,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 						CommitCreateGesture(createRowId, startDay, endDay);
 					} catch (...) {
 						OvLog(L"create gesture commit failed");
+						RecError("CommitCreateGesture/call", (long)E_FAIL, "exception");
 					}
 				}
 			} else if (wasGestureActive && wasDragActive && dragKind == DragKind::LinkPort) {
@@ -4212,14 +5580,18 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 					CommitLinkPortDrop(dragId, linkFromKind, linkDropTargetId);
 				} catch (...) {
 					OvLog(L"link-port drag commit failed");
+					RecError("CommitLinkPortDrop/call", (long)E_FAIL, "exception");
 				}
 			} else if (wasGestureActive && wasDragActive && dragKind == DragKind::TaskProgress) {
 				try {
 					if (dragCandidatePercent != dragOrigPercent) {
 						CommitProgressGesture(dragId, dragCandidatePercent);
+					} else if (g_recActive) {
+						RecEmitGestureCommit("TaskProgress", dragId, "ok", 0, "\"delta\":\"zero\"");
 					}
 				} catch (...) {
 					OvLog(L"progress drag commit failed");
+					RecError("CommitProgressGesture/call", (long)E_FAIL, "exception");
 				}
 				ResetDragGestureState();
 			} else if (wasGestureActive && wasDragActive) {
@@ -4234,9 +5606,14 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 				} catch (...) {
 					OvLog(L"drag gesture commit failed");
 					ClearDragCommitEcho();
+					RecError("CommitDragGesture/call", (long)E_FAIL, "exception");
 				}
 				ResetDragGestureState();
 			} else {
+				// Gesture started but never crossed drag threshold: cancel (not commit).
+				if (g_recActive && wasGestureActive)
+					RecEmitGestureCancel(RecDragKindName(dragKind),
+						dragId.empty() ? createRowId : dragId);
 				ResetDragGestureState();
 				long dx = pt.x - g_mouseDownPt.x;
 				long dy = pt.y - g_mouseDownPt.y;
@@ -4358,8 +5735,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 			return 0;
 		}
 		if (hit.zone == HtZone::EmptyCell && !hit.rowId.empty()) {
-			const bool altDown = ((::GetKeyState(VK_MENU) & 0x8000) != 0) ||
-				((::GetKeyState(VK_CONTROL) & 0x8000) != 0 && (::GetKeyState(VK_SHIFT) & 0x8000) != 0);
+			// Async keystate: GetKeyState is only current as of the last message
+			// this thread dequeued, which made the modifier read unreliable.
+			const bool altDown = ((::GetAsyncKeyState(VK_MENU) & 0x8000) != 0) ||
+				((::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 && (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
 			HtMenuOp op{};
 			op.opKind = altDown ? HtOpKind::AddMilestoneAtPoint : HtOpKind::AddTaskAtPoint;
 			try {
@@ -4520,6 +5899,7 @@ LRESULT CALLBACK CardFieldProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 LRESULT CALLBACK CardWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	if (g_recActive) RecEmitInput("card", msg, hwnd, wp, lp);
 	if (msg == WM_CLOSE) {
 		CancelCardEdit();
 		return 0;
@@ -4717,13 +6097,21 @@ void EnsureWindow() {
 	// NOTE: no SetLayeredWindowAttributes here — the window is driven purely by
 	// UpdateLayeredWindow (per-pixel premultiplied alpha). A layered window
 	// without attributes stays invisible until the first RenderOverlay() push.
+	// No WS_EX_TOPMOST: the chrome is OWNED by PowerPoint's root window
+	// instead (see EnsureChromeOwner). An owned popup always sits above its
+	// owner and follows it when the owner is minimized or loses activation,
+	// which is what we actually want. Topmost-plus-unowned made the chrome
+	// float above unrelated applications whenever the 150ms Tick that hides
+	// it was delayed — it was observed over Chrome, and two earlier
+	// "overlay over a fullscreen game" reports were patched in the polling
+	// path rather than here.
 	g_hwnd = ::CreateWindowExW(
-		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
 		kClass, L"", WS_POPUP,
-		0, 0, 10, 10, NULL, NULL, g_inst, NULL);
+		0, 0, 10, 10, ::GetAncestor(g_pptHwnd, GA_ROOT), NULL, g_inst, NULL);
 	static bool themeMenuInited = false;
 	if (!themeMenuInited && g_gdiplusToken) {
-		ThemeMenu_Init(g_inst, g_gdiplusToken, Scale);
+		ThemeMenu_Init(g_inst, g_gdiplusToken, Scale, RecEmitInput);
 		themeMenuInited = true;
 	}
 }
@@ -4882,8 +6270,31 @@ static void PaintOwnSelItemFrame(Gdiplus::Graphics& g, const std::string& kind, 
 }
 
 void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
+	g_recIndicatorPainted = false;
 	using namespace Gdiplus;
-	// Background stays fully transparent (alpha 0) — the caller cleared it.
+	// Mouse-capture layer over the chart.
+	//
+	// The caller clears to alpha 0, and a layered window pushed with ULW_ALPHA
+	// is hit-tested against its per-pixel alpha: where alpha is 0 the window is
+	// click-through and never receives the message at all — WM_NCHITTEST is not
+	// even sent. That made the overlay interactive ONLY where it happened to
+	// paint something (the left rail), while the whole plot area fell through to
+	// the PowerPoint shapes underneath, contradicting the hit-test's own
+	// contract ("the overlay captures ALL mouse input over the chart area").
+	// Reported live 2026-07-18: hover worked only over the left panel, and
+	// clicks anywhere else selected the native shape or its text.
+	//
+	// Alpha 1 is the lowest value that keeps the pixel hit-testable and is
+	// visually indistinguishable from fully transparent. RGB must stay 0 for
+	// PixelFormat32bppPARGB (premultiplied: channels must not exceed alpha).
+	if (!::IsRectEmpty(&g_chartScreenRect)) {
+		const int cl = g_chartScreenRect.left - g_windowOriginX;
+		const int ct = g_chartScreenRect.top - g_windowOriginY;
+		const int cw = g_chartScreenRect.right - g_chartScreenRect.left;
+		const int ch = g_chartScreenRect.bottom - g_chartScreenRect.top;
+		SolidBrush capture(Color(1, 0, 0, 0));
+		g.FillRectangle(&capture, cl, ct, cw, ch);
+	}
 
 	LayoutToolbarButtons(W, H);
 	LayoutHoverInsertHotspot();
@@ -5289,6 +6700,24 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 		}
 	}
 
+	// Task-bar hover outline. Mirrors PaintOwnSelItemFrame's geometry (same
+	// screen->client shift, same 1px chromeItemFramePx stroke) but strokes in
+	// gt::primaryDim instead of gt::primary, so a hovered bar reads as "under
+	// the cursor" while a selected bar keeps the stronger accent frame. Drawn
+	// BEFORE the selection chrome below so selection always wins on the same
+	// bar; skipped entirely mid-drag and when the hovered bar is the selected
+	// one (a second frame in a paler color would only muddy the selection).
+	if (!g_hoverTaskId.empty() && !::IsRectEmpty(&g_hoverTaskRect)
+		&& !g_gestureActive && !g_dragActive
+		&& !(g_ownSelKind == "TASK" && g_ownSelId == g_hoverTaskId)) {
+		const REAL hx = (REAL)(g_hoverTaskRect.left - g_windowOriginX);
+		const REAL hy = (REAL)(g_hoverTaskRect.top - g_windowOriginY);
+		const REAL hw = (REAL)(g_hoverTaskRect.right - g_hoverTaskRect.left);
+		const REAL hh = (REAL)(g_hoverTaskRect.bottom - g_hoverTaskRect.top);
+		Pen hoverPen(GpToken(255, gt::primaryDim), ScaleF(gt::chromeItemFramePx));
+		g.DrawRectangle(&hoverPen, (INT)hx, (INT)hy, (INT)hw, (INT)hh);
+	}
+
 	for (const auto& extra : g_ownSelExtra) {
 		if (extra.kind == "ROW") PaintRowBandSelectionWash(g, extra.id);
 		else PaintOwnSelItemFrame(g, extra.kind, extra.id);
@@ -5302,6 +6731,26 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 	}
 	if (!g_gestureActive || IsWindowEdgeDragKind(g_dragKind)) {
 		PaintWindowPorts(g);
+	}
+
+	// Persistent recording disclosure (SR-REC-16). This must precede every
+	// selection-specific early return so recording is visible with no ownSel.
+	if (g_recActive) {
+		const int x = std::max(Scale(8), (int)(g_chartScreenRect.left - g_windowOriginX + Scale(8)));
+		const int y = std::max(Scale(8), (int)(g_chartScreenRect.top - g_windowOriginY + Scale(8)));
+		const int w = Scale(38), h = Scale(20);
+		GraphicsPath path;
+		AddRoundRect(path, (REAL)x, (REAL)y, (REAL)w, (REAL)h, ScaleF(4.0f));
+		SolidBrush fill(GpToken(245, gt::deadline));
+		g.FillPath(&fill, &path);
+		Gdiplus::Font font(L"Segoe UI", ScaleF(10.0f), FontStyleBold, UnitPixel);
+		StringFormat format;
+		format.SetAlignment(StringAlignmentCenter);
+		format.SetLineAlignment(StringAlignmentCenter);
+		SolidBrush text(GpToken(255, gt::surface));
+		g.DrawString(L"REC", -1, &font,
+			RectF((REAL)x, (REAL)y, (REAL)w, (REAL)h), &format, &text);
+		g_recIndicatorPainted = true;
 	}
 
 	if (!g_hasSelectionChrome || ::IsRectEmpty(&g_frameRect)) return;
@@ -5418,6 +6867,7 @@ void PaintOverlay(Gdiplus::Graphics& g, int W, int H) {
 				&sf, &textBrush);
 		}
 	}
+
 }
 
 // ---- back buffer + UpdateLayeredWindow push --------------------------------
@@ -5503,14 +6953,24 @@ void RenderOverlay() {
 		POINT src = { 0, 0 };
 		SIZE  size = { w, h };
 		BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-		if (::UpdateLayeredWindow(g_hwnd, NULL, &dst, &size, g_bufDc, &src, 0, &bf, ULW_ALPHA))
+		if (::UpdateLayeredWindow(g_hwnd, NULL, &dst, &size, g_bufDc, &src, 0, &bf, ULW_ALPHA)) {
 			++g_overlayPaintCount;
+			if (g_paintSampleActive) {
+				const ULONGLONG now = ::GetTickCount64();
+				g_paintTsMs[g_paintTsWrite % kPaintTsCap] = now;
+				g_paintTsWrite = (g_paintTsWrite + 1) % kPaintTsCap;
+				if (g_paintTsCount < kPaintTsCap) ++g_paintTsCount;
+			}
+			if (g_recActive) RecEmitPaint("overlay", g_overlayPaintCount);
+		}
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
 		OvLog(L"overlay render failed (std::exception)");
+		RecError("PaintOverlay", (long)E_FAIL, e.what());
 	}
 	catch (...) {
 		OvLog(L"overlay render failed");
+		RecError("PaintOverlay", (long)E_FAIL, "unknown error");
 	}
 }
 
@@ -5553,6 +7013,27 @@ void HideOverlay() {
 void ShowOverlayForChartRect(const RECT& chart) {
 	EnsureWindow();
 	if (!g_hwnd) return;
+	// Live trigger: PP_RECORD=1 starts the flight recorder once per process
+	// without UI (agent/meta-test launch path). Checked only on first overlay
+	// show so subsequent reposition ticks are free.
+	{
+		static bool s_ppRecordChecked = false;
+		if (!s_ppRecordChecked) {
+			s_ppRecordChecked = true;
+			wchar_t env[16] = {};
+			DWORD n = ::GetEnvironmentVariableW(L"PP_RECORD", env, 16);
+			if (n > 0 && n < 16 && ::wcscmp(env, L"1") == 0) {
+				SessionRecordStart();
+				if (g_recActive) {
+					wchar_t msg[MAX_PATH + 96];
+					::swprintf_s(msg, MAX_PATH + 96,
+						L"session recording auto-started (PP_RECORD=1) dir=%s",
+						g_recSessionDir);
+					OvLog(msg);
+				}
+			}
+		}
+	}
 	// Re-probe DPI on every (re)position: the overlay can be dragged to a
 	// different-DPI monitor, or the user can change scaling live, between
 	// ticks. A change invalidates the hit snapshot + forces a relayout/repaint
@@ -5578,12 +7059,11 @@ void ShowOverlayForChartRect(const RECT& chart) {
 	bool resized = hadWindow && (oldWindow.right - oldWindow.left != ww || oldWindow.bottom - oldWindow.top != wh);
 	bool needUpdate = dpiChanged || !wasShown || !hadWindow || moved || resized;
 	if (needUpdate) {
-		// Under harness override the gating that would hide this window when
-		// another app is foreground is bypassed — so it must NOT be TOPMOST,
-		// or it paints over whatever the user is doing while a test run
-		// borrows the desktop (live report 2026-07-11: app bar over a
-		// fullscreen game). Production keeps TOPMOST (it hides via gating).
-		HWND insertAfter = (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST;
+		// Neither harness nor production uses TOPMOST any more: the chrome is
+		// owned by PowerPoint's root window, so it sits above its owner and
+		// follows it without a topmost bit. HWND_TOP keeps it at the front of
+		// its own z-order band. See EnsureChromeOwner.
+		HWND insertAfter = HWND_TOP;
 		::SetWindowPos(g_hwnd, insertAfter, wx, wy, ww, wh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		++g_overlaySwpCount;
 	}
@@ -5639,7 +7119,7 @@ void RebuildAppBarModelFromSlide() {
 			PpDocument doc = DocumentFromJson(json);
 			const bool isMulti = HasMultiSelection();
 			AppBarSel sel = isMulti ? AppBarSel::Multi : AppBarSelFromKind(g_ownSelKind);
-			g_appBar = BuildAppBar(sel, doc, g_ownSelId, OwnSelCount());
+			g_appBar = BuildAppBar(sel, doc, g_ownSelId, OwnSelCount(), g_recActive);
 			const bool selContextChanged =
 				g_appBarSelKindBuilt != g_ownSelKind || g_appBarSelIdBuilt != g_ownSelId ||
 				g_appBarIsMultiBuilt != isMulti;
@@ -5661,14 +7141,17 @@ void RebuildAppBarModelFromSlide() {
 			}
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
 		OvLog(L"COM error rebuilding app-bar model");
+		RecError("RebuildAppBarModel", (long)e.Error(), "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
 		OvLog(L"document error rebuilding app-bar model");
+		RecError("RebuildAppBarModel", (long)E_FAIL, e.what());
 	}
 	catch (...) {
 		OvLog(L"unknown error rebuilding app-bar model");
+		RecError("RebuildAppBarModel", (long)E_FAIL, "unknown error");
 	}
 	g_mutating = false;
 }
@@ -6150,6 +7633,7 @@ void RenderAppBar() {
 		BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
 		if (::UpdateLayeredWindow(g_appBarHwnd, NULL, &dst, &size, g_abDc, &src, 0, &bf, ULW_ALPHA)) {
 			++g_appBarPaintCount;
+			if (g_recActive) RecEmitPaint("appbar", g_appBarPaintCount);
 			wchar_t okBuf[200];
 			::swprintf_s(okBuf, 200, L"RenderAppBar OK %dx%d name=%hs groups=%d barWindows=%d hwnd=%p",
 				w, h, g_appBarLayout.name.c_str(), (int)g_appBarLayout.groups.size(),
@@ -6175,6 +7659,8 @@ void HandleAppBarCommand(int cmd, POINT clientPt = { 0, 0 });
 
 LRESULT CALLBACK AppBarWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	try {
+		// R1b: input tap at TOP (SR-REC-05). g_recActive fast-check inside.
+		if (g_recActive) RecEmitInput("appbar", msg, hwnd, wp, lp);
 		if (msg == WM_NCHITTEST) return HTCLIENT;
 		if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
 		if (msg == WM_MOUSEMOVE) {
@@ -6242,10 +7728,12 @@ void EnsureAppBarWindow() {
 	wc.hCursor = ::LoadCursor(NULL, IDC_ARROW);
 	wc.lpszClassName = kAppBarClass;
 	::RegisterClassExW(&wc);
+	// Owned by PowerPoint's root, not topmost — see the note at the overlay's
+	// CreateWindowExW.
 	g_appBarHwnd = ::CreateWindowExW(
-		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+		WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
 		kAppBarClass, L"", WS_POPUP,
-		0, 0, 10, 10, NULL, NULL, g_inst, NULL);
+		0, 0, 10, 10, ::GetAncestor(g_pptHwnd, GA_ROOT), NULL, g_inst, NULL);
 }
 
 void HideAppBar(bool keepGeomCache = false) {
@@ -6304,7 +7792,7 @@ void ShowAppBar(const RECT& chartScreenRect, const RECT& slideScreenRect) {
 	if (geomChanged || firstShow) {
 		// Same override rule as ShowOverlayForChartRect: harness runs bypass
 		// host-active gating, so their windows must never be TOPMOST.
-		HWND barInsertAfter = (g_hostActiveOverrideMode >= 0) ? HWND_NOTOPMOST : HWND_TOPMOST;
+		HWND barInsertAfter = HWND_TOP;
 		::SetWindowPos(g_appBarHwnd, barInsertAfter, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		++g_appBarSwpCount;
 		g_appBarLastRect = want;
@@ -6365,12 +7853,50 @@ struct OpDispatchTimer {
 
 void HandleAppBarCommand(int cmd, POINT clientPt) {
 	OpDispatchTimer _opDispatchTimer;
+	// R1b op event (SR-REC-09): emit after the command body returns.
+	struct RecOpEmitter {
+		int cmd = 0;
+		ULONGLONG t0 = ::GetTickCount64();
+		long hr = 0;
+		~RecOpEmitter() {
+			if (!g_recActive) return;
+			const unsigned long long dispatchMs =
+				(unsigned long long)(::GetTickCount64() - t0);
+			std::string label = RecAppBarCmdLabel(cmd);
+			char phaseBuf[512];
+			phaseBuf[0] = 0;
+			const int phaseLen = Gantt_GetLastOpPhasesForTest(phaseBuf, (int)sizeof(phaseBuf));
+			std::string body;
+			body.reserve(64 + label.size() + (phaseLen > 0 ? (size_t)phaseLen : 2));
+			body += "\"cmd\":";
+			body += std::to_string(cmd);
+			body += ",\"label\":\"";
+			EntityJsonAppendEscaped(body, label);
+			body += "\",\"dispatchMs\":";
+			body += std::to_string(dispatchMs);
+			body += ",\"hr\":";
+			body += std::to_string(hr);
+			body += ",\"phases\":";
+			if (phaseLen > 0) body += phaseBuf;
+			else body += "null";
+			RecEvent("op", body);
+		}
+	} _recOp{ cmd };
 	if (cmd == kAppBarInsertMenuCmd) {
 		ShowAppBarInsertMenu(clientPt);
 		return;
 	}
 	if (cmd == HtCmd_Settings) {
 		ShowAppBarSettingsMenu(clientPt);
+		return;
+	}
+	if (cmd == HtCmd_RecordSession) {
+		if (g_recActive) SessionRecordStop();
+		else SessionRecordStart();
+		g_appBarValid = false;
+		g_appBarModelDirty = true;
+		RequestOverlayRepaint();
+		if (g_appBarHwnd) ::InvalidateRect(g_appBarHwnd, NULL, FALSE);
 		return;
 	}
 	if ((cmd == HtCmd_ToggleRailLabels || cmd == HtCmd_CycleGrid ||
@@ -6413,12 +7939,15 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 					if (!keepId.empty() && !keepKind.empty()) SetOwnSelection(keepKind, keepId);
 				}
 			}
-		} catch (const _com_error&) {
+		} catch (const _com_error& e) {
 			OvLog(L"COM error changing component settings");
-		} catch (const std::exception&) {
+			RecError("HandleAppBarCommand/settings", (long)e.Error(), "COM error");
+		} catch (const std::exception& e) {
 			OvLog(L"document error changing component settings");
+			RecError("HandleAppBarCommand/settings", (long)E_FAIL, e.what());
 		} catch (...) {
 			OvLog(L"unknown error changing component settings");
+			RecError("HandleAppBarCommand/settings", (long)E_FAIL, "unknown error");
 		}
 		g_mutating = false;
 		g_appBarValid = false;
@@ -6439,14 +7968,17 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 				}
 			}
 		}
-		catch (const _com_error&) {
+		catch (const _com_error& e) {
 			OvLog(L"COM error inserting marker");
+			RecError("HandleAppBarCommand/InsertMarker", (long)e.Error(), "COM error");
 		}
-		catch (const std::exception&) {
+		catch (const std::exception& e) {
 			OvLog(L"document error inserting marker");
+			RecError("HandleAppBarCommand/InsertMarker", (long)E_FAIL, e.what());
 		}
 		catch (...) {
 			OvLog(L"unknown error inserting marker");
+			RecError("HandleAppBarCommand/InsertMarker", (long)E_FAIL, "unknown error");
 		}
 		g_mutating = false;
 		g_appBarValid = false;
@@ -6483,6 +8015,7 @@ void HandleAppBarCommand(int cmd, POINT clientPt) {
 				DeleteOwnSelectionsInDocument();
 			} catch (...) {
 				OvLog(L"appbar multi-delete failed");
+				RecError("HandleAppBarCommand/multi-delete", (long)E_FAIL, "exception");
 			}
 			g_mutating = false;
 			g_appBarValid = false;
@@ -6660,18 +8193,28 @@ void CommitLinkPortDrop(const std::string& fromIdIn, const std::string& fromKind
 		g_creationFailHint = L"Cannot link a task to itself";
 		SetOwnSelection(fromKind, fromId);
 		RequestOverlayRepaint();
+		if (g_recActive)
+			RecEmitGestureCommit("LinkPort", fromId, "fail", 0, "\"reason\":\"self_or_empty\"");
 		return;
 	}
 	g_mutating = true;
+	const char* result = "fail";
+	long hr = 0;
 	try {
 		PpDocument doc;
-		if (!ReadGanttDocFromSlide(g_app, &doc)) { g_mutating = false; return; }
+		if (!ReadGanttDocFromSlide(g_app, &doc)) {
+			g_mutating = false;
+			if (g_recActive)
+				RecEmitGestureCommit("LinkPort", fromId, "fail", 0, "\"reason\":\"doc_read\"");
+			return;
+		}
 		const std::string depId = AddDependency(doc, fromId, targetId);
 		if (!depId.empty()) {
 			RebuildChart(doc, fromId);
 			SetOwnSelection(fromKind, fromId);
 			g_creationFailHint.clear();
 			RequestOverlayRepaint();
+			result = "ok";
 		} else {
 			SetOwnSelection(fromKind, fromId);
 			g_creationFailHint = (fromId == targetId)
@@ -6679,16 +8222,28 @@ void CommitLinkPortDrop(const std::string& fromIdIn, const std::string& fromKind
 				: L"Already linked or invalid target";
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
+		hr = (long)e.Error();
 		OvLog(L"COM error during port-link commit");
+		RecError("CommitLinkPortDrop", hr, "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
+		hr = (long)E_FAIL;
 		OvLog(L"document error during port-link commit");
+		RecError("CommitLinkPortDrop", hr, e.what());
 	}
 	catch (...) {
+		hr = (long)E_FAIL;
 		OvLog(L"unknown error during port-link commit");
+		RecError("CommitLinkPortDrop", hr, "unknown error");
 	}
 	g_mutating = false;
+	if (g_recActive) {
+		std::string extra = "\"targetId\":\"";
+		EntityJsonAppendEscaped(extra, targetId);
+		extra += "\"";
+		RecEmitGestureCommit("LinkPort", fromId, result, hr, extra);
+	}
 }
 
 static void StartLinkPortDrag(const std::string& id, const std::string& kind, bool fromRight, POINT downPt) {
@@ -6706,6 +8261,8 @@ static void StartLinkPortDrag(const std::string& id, const std::string& kind, bo
 			break;
 		}
 	}
+	if (g_recActive)
+		RecEmitGestureStart("LinkPort", id, "", downPt);
 }
 
 void CommitLinkTarget(const std::string& targetId) {
@@ -6731,14 +8288,17 @@ void CommitLinkTarget(const std::string& targetId) {
 			}
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
 		OvLog(L"COM error during link commit");
+		RecError("CommitLinkGesture", (long)e.Error(), "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
 		OvLog(L"document error during link commit");
+		RecError("CommitLinkGesture", (long)E_FAIL, e.what());
 	}
 	catch (...) {
 		OvLog(L"unknown error during link commit");
+		RecError("CommitLinkGesture", (long)E_FAIL, "unknown error");
 	}
 	g_mutating = false;
 }
@@ -6894,14 +8454,17 @@ void HandleHotkeyDelete() {
 			OvLog(buf);
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
 		OvLog(L"COM error during hotkey delete");
+		RecError("HandleHotkeyDelete", (long)e.Error(), "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
 		OvLog(L"document error during hotkey delete");
+		RecError("HandleHotkeyDelete", (long)E_FAIL, e.what());
 	}
 	catch (...) {
 		OvLog(L"unknown error during hotkey delete");
+		RecError("HandleHotkeyDelete", (long)E_FAIL, "unknown error");
 	}
 	g_mutating = false;
 }
@@ -6941,14 +8504,17 @@ void HandleHotkeyNudge(long deltaDays) {
 			}
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
 		OvLog(L"COM error during hotkey nudge");
+		RecError("HandleHotkeyNudge", (long)e.Error(), "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
 		OvLog(L"document error during hotkey nudge");
+		RecError("HandleHotkeyNudge", (long)E_FAIL, e.what());
 	}
 	catch (...) {
 		OvLog(L"unknown error during hotkey nudge");
+		RecError("HandleHotkeyNudge", (long)E_FAIL, "unknown error");
 	}
 	g_mutating = false;
 }
@@ -7149,14 +8715,17 @@ void HandleToolbarButton(int button) {
 			OvLog(buf);
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
 		OvLog(L"COM error during toolbar edit");
+		RecError("HandleToolbarButton", (long)e.Error(), "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
 		OvLog(L"document error during toolbar edit");
+		RecError("HandleToolbarButton", (long)E_FAIL, e.what());
 	}
 	catch (...) {
 		OvLog(L"unknown error during toolbar edit");
+		RecError("HandleToolbarButton", (long)E_FAIL, "unknown error");
 	}
 	g_mutating = false;
 }
@@ -7575,14 +9144,17 @@ void HandleContextMenuCommand(const HtMenuOp& op, const HtHit& hit, POINT client
 			OvLog(buf);
 		}
 	}
-	catch (const _com_error&) {
+	catch (const _com_error& e) {
 		OvLog(L"COM error during context menu command");
+		RecError("HandleContextMenuCommand", (long)e.Error(), "COM error");
 	}
-	catch (const std::exception&) {
+	catch (const std::exception& e) {
 		OvLog(L"document error during context menu command");
+		RecError("HandleContextMenuCommand", (long)E_FAIL, e.what());
 	}
 	catch (...) {
 		OvLog(L"unknown error during context menu command");
+		RecError("HandleContextMenuCommand", (long)E_FAIL, "unknown error");
 	}
 	g_mutating = false;
 }
@@ -7606,7 +9178,15 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 			if (!json.empty()) doc = DocumentFromJson(json);
 		}
 	}
-	catch (...) {}
+	catch (const _com_error& e) {
+		RecError("ShowContextMenuForHit/read", (long)e.Error(), "COM error");
+	}
+	catch (const std::exception& e) {
+		RecError("ShowContextMenuForHit/read", (long)E_FAIL, e.what());
+	}
+	catch (...) {
+		RecError("ShowContextMenuForHit/read", (long)E_FAIL, "unknown error");
+	}
 
 	if (hit.zone == HtZone::TaskBody || hit.zone == HtZone::TaskEdgeL || hit.zone == HtZone::TaskEdgeR
 		|| hit.zone == HtZone::TaskProgressEdge
@@ -7696,6 +9276,22 @@ void ShowContextMenuForHit(const HtHit& hit, POINT clientPt) {
 // owned popup of the tracked PowerPoint root (GA_ROOTOWNER).
 //
 // Also requires ppRoot to be non-iconic (not minimized) and visible.
+// The chrome windows can be created before Tick has resolved g_pptHwnd, in
+// which case CreateWindowExW got a NULL owner. Without WS_EX_TOPMOST an
+// unowned popup would sink behind PowerPoint, so rebind the owner as soon as
+// the host HWND is known. Cheap and idempotent: GetWindow(GW_OWNER) is a
+// local lookup and the SetWindowLongPtr only fires when the owner actually
+// differs.
+static void EnsureChromeOwner(HWND ppRoot) {
+	if (!ppRoot || !::IsWindow(ppRoot)) return;
+	HWND wins[] = { g_hwnd, g_appBarHwnd, g_editorHwnd, g_cardHwnd };
+	for (HWND w : wins) {
+		if (!w || !::IsWindow(w)) continue;
+		if (::GetWindow(w, GW_OWNER) == ppRoot) continue;
+		::SetWindowLongPtrW(w, GWLP_HWNDPARENT, (LONG_PTR)ppRoot);
+	}
+}
+
 bool IsHostActiveForOverlayChrome(HWND ppRoot) {
 	// Harness override: bypass the real GetForegroundWindow-based logic
 	// entirely so the SCOPE stage (and any other stage relying on host-active
@@ -7851,6 +9447,7 @@ void Tick() {
 		// as the no-chart path below. Latency is bounded by one 150ms tick,
 		// which is acceptable per the task spec.
 		HWND ppRoot = ::GetAncestor(g_pptHwnd, GA_ROOT);
+		EnsureChromeOwner(ppRoot);
 		g_lastHostActive = IsHostActiveForOverlayChrome(ppRoot);
 		if (!g_lastHostActive) {
 			HideOverlay();
@@ -7951,6 +9548,9 @@ void Tick() {
 		bool hasShapeSel = false;
 		std::string firstKind, firstId;
 		PowerPoint::ShapePtr firstShape;
+		// ChildShapeRange detail for the recorder (SR-REC-06); Note before handler.
+		bool hasChildShapeRange = false;
+		std::string childKind, childId;
 		PowerPoint::SelectionPtr sel = win->GetSelection();
 		if (sel && sel->GetType() == PowerPoint::ppSelectionShapes) {
 			PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
@@ -7962,14 +9562,35 @@ void Tick() {
 				_bstr_t id = firstShape->GetTags()->Item(_bstr_t(L"PP_ID"));
 				firstId = id.length() ? Narrow((const wchar_t*)id) : "";
 			}
+			// HasChildShapeRange is the live-vs-harness blind spot (2026-07-18 #1).
+			try {
+				if (sel->GetHasChildShapeRange() == VARIANT_TRUE) {
+					hasChildShapeRange = true;
+					PowerPoint::ShapeRangePtr csr = sel->GetChildShapeRange();
+					if (csr && csr->GetCount() >= 1) {
+						PowerPoint::ShapePtr csh = csr->Item(_variant_t(1L));
+						_bstr_t ck = csh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+						childKind = ck.length() ? Narrow((const wchar_t*)ck) : "";
+						_bstr_t ci = csh->GetTags()->Item(_bstr_t(L"PP_ID"));
+						childId = ci.length() ? Narrow((const wchar_t*)ci) : "";
+					}
+				}
+			} catch (...) {
+				// Property unavailable / COM fail — leave child detail empty.
+			}
 		}
-
-		int nativeAction = Overlay_OnNativeSelectionChanged(firstKind.c_str(), firstId.c_str(), hasShapeSel);
+		int nativeAction = Overlay_OnNativeSelectionChangedWithChild(
+			firstKind.c_str(), firstId.c_str(), hasShapeSel,
+			hasChildShapeRange, childKind.c_str(), childId.c_str());
 		if (nativeAction == OVERLAY_NATIVE_SEL_SUPPRESS_CHILD) {
 			try {
 				win->GetSelection()->Unselect();
-			} catch (const _com_error&) {
+			} catch (const _com_error& e) {
 				OvLog(L"COM error unselecting suppressed chart child");
+				RecError("Tick/Unselect", (long)e.Error(), "COM error unselecting suppressed chart child");
+			} catch (...) {
+				OvLog(L"COM error unselecting suppressed chart child");
+				RecError("Tick/Unselect", (long)E_FAIL, "unknown error unselecting suppressed chart child");
 			}
 			OvLog((L"suppressed native selection of chart child PP_KIND=" + Widen(firstKind)).c_str());
 		} else if (hasShapeSel && firstKind == "CHART_ROOT" && firstShape) {
@@ -8038,6 +9659,14 @@ void Tick() {
 			mouseStateChanged || !SameSelectionState(oldHasSelectionChrome, oldSelRect, oldSelId, oldSelKind)) {
 			RequestOverlayRepaint();
 		}
+		if (g_recActive) {
+			const ULONGLONG now = ::GetTickCount64();
+			if (g_recLastIdleSnapshotMs == 0 || now - g_recLastIdleSnapshotMs >= 1000) {
+				g_recLastIdleSnapshotMs = now;
+				RecEmitSnapshot();
+			}
+			RecCapturePendingFrame();
+		}
 
 		std::string k = g_selKind;
 		if (k != g_lastKind) {
@@ -8051,14 +9680,17 @@ void Tick() {
 		wchar_t buf[96];
 		::swprintf_s(buf, 96, L"Tick: COM error 0x%08lX - hiding overlay", (unsigned long)e.Error());
 		OvLog(buf);
+		RecError("Tick", (long)e.Error(), "COM error");
 		HideOverlay();
 		HideAppBar();
-	} catch (const std::exception&) {
+	} catch (const std::exception& e) {
 		OvLog(L"Tick: std::exception - hiding overlay");
+		RecError("Tick", (long)E_FAIL, e.what());
 		HideOverlay();
 		HideAppBar();
 	} catch (...) {
 		OvLog(L"Tick: unknown exception - hiding overlay");
+		RecError("Tick", (long)E_FAIL, "unknown error");
 		HideOverlay();
 		HideAppBar();
 	}
@@ -8091,11 +9723,14 @@ int Overlay_OnNativeSelectionChanged(const char* firstShapeKind, const char* fir
 	// CHART_ROOT once suppression settles).
 	g_lastNativeSelKindForTest = hasShapeSelection ? kind : "";
 
+	const char* resolution = "none";
+	int action = OVERLAY_NATIVE_SEL_NONE;
+
 	// Never mutate the selection model mid-mutation/inline-edit — the caller's
 	// own guards also cover this, but keep the handler self-safe.
-	if (g_mutating || IsEditSessionActive()) return OVERLAY_NATIVE_SEL_NONE;
-
-	if (hasShapeSelection && !kind.empty() && kind != "CHART_ROOT") {
+	if (g_mutating || IsEditSessionActive()) {
+		resolution = "ignored_busy";
+	} else if (hasShapeSelection && !kind.empty() && kind != "CHART_ROOT") {
 		// A chart CHILD is natively selected: mirror TASK/MILESTONE picks into
 		// ownSel (other child kinds are suppressed without a mirror, matching
 		// the historical Tick behavior), then tell the caller to Unselect it.
@@ -8107,10 +9742,9 @@ int Overlay_OnNativeSelectionChanged(const char* firstShapeKind, const char* fir
 		}
 		g_suppressedKind.clear();
 		g_suppressedId.clear();
-		return OVERLAY_NATIVE_SEL_SUPPRESS_CHILD;
-	}
-
-	if (hasShapeSelection && kind.empty()) {
+		action = OVERLAY_NATIVE_SEL_SUPPRESS_CHILD;
+		resolution = "suppress_child";
+	} else if (hasShapeSelection && kind.empty()) {
 		// A FOREIGN (non-chart) shape got natively selected: the user started
 		// interacting with something else on the slide. Clear our internal
 		// selection so the app bar + hotkeys revert to the neutral/component
@@ -8122,13 +9756,65 @@ int Overlay_OnNativeSelectionChanged(const char* firstShapeKind, const char* fir
 			ClearOwnSelection();
 			g_appBarValid = false;   // force app-bar rebuild to component context
 			g_appBarModelDirty = true;
+			resolution = "clear_own_foreign";
+		} else {
+			resolution = "foreign";
 		}
-		return OVERLAY_NATIVE_SEL_NONE;
+	} else if (hasShapeSelection && kind == "CHART_ROOT") {
+		// CHART_ROOT selected: no model change here (Tick owns CHART_ROOT chrome).
+		resolution = "chart_root";
+	} else {
+		// Empty selection: must not clear ownSel (transient after Unselect).
+		resolution = "empty";
 	}
 
-	// CHART_ROOT selected, or empty selection: no model change here (the Tick
-	// owns CHART_ROOT chrome geometry, and the empty case must not clear ownSel).
-	return OVERLAY_NATIVE_SEL_NONE;
+	// R1b: nativeSel transition + snapshot while recording (SR-REC-06/11).
+	// Tick calls this every 150ms — emit only when the observation changes.
+	if (g_recActive) {
+		std::string key;
+		key.reserve(64 + kind.size() + id.size() + g_recNativeChildKind.size() + g_recNativeChildId.size());
+		key += kind; key += '|'; key += id; key += '|';
+		key += hasShapeSelection ? '1' : '0'; key += '|';
+		key += g_recNativeHasChild ? '1' : '0'; key += '|';
+		key += g_recNativeChildKind; key += '|';
+		key += g_recNativeChildId; key += '|';
+		key += resolution;
+		if (key != g_recLastNativeKey) {
+			g_recLastNativeKey = key;
+			std::string body;
+			body.reserve(128 + kind.size() + id.size()
+				+ g_recNativeChildKind.size() + g_recNativeChildId.size());
+			body += "\"kind\":\"";
+			EntityJsonAppendEscaped(body, kind);
+			body += "\",\"id\":\"";
+			EntityJsonAppendEscaped(body, id);
+			body += "\",\"hasChildShapeRange\":";
+			body += g_recNativeHasChild ? "true" : "false";
+			body += ",\"childKind\":\"";
+			EntityJsonAppendEscaped(body, g_recNativeChildKind);
+			body += "\",\"childId\":\"";
+			EntityJsonAppendEscaped(body, g_recNativeChildId);
+			body += "\",\"resolution\":\"";
+			EntityJsonAppendEscaped(body, resolution);
+			body += "\"";
+			RecEvent("nativeSel", body);
+			RecEmitSnapshot();
+			RecCaptureFrames("sel");
+		}
+	}
+
+	return action;
+}
+
+int Overlay_OnNativeSelectionChangedWithChild(
+	const char* firstShapeKind, const char* firstShapeId, bool hasShapeSelection,
+	bool hasChildShapeRange, const char* childKind, const char* childId) {
+	Overlay_NoteNativeSelDetail(hasChildShapeRange, childKind, childId);
+	const bool useChild = hasChildShapeRange && childKind && childKind[0] != '\0';
+	return Overlay_OnNativeSelectionChanged(
+		useChild ? childKind : firstShapeKind,
+		useChild ? childId : firstShapeId,
+		hasShapeSelection);
 }
 
 void OverlayStart(IDispatch* app) {
@@ -8148,6 +9834,7 @@ void OverlayStart(IDispatch* app) {
 }
 
 void OverlayStop() {
+	if (g_recActive) SessionRecordStop();
 	if (g_timer) { ::KillTimer(NULL, g_timer); g_timer = 0; }
 	ThemeMenu_Dismiss(0);
 	DestroyInlineEditor();
@@ -8274,12 +9961,106 @@ void Overlay_SetCursorPosOverrideForTest(bool enabled, POINT screenPt, bool altD
 	g_cursorOverrideAltDown = altDown;
 }
 
+// Forward decl (defined with other test seams below).
+void Overlay_GetPaintCadenceForTest(double* outHz, long* outPaintCount,
+	long* outWindowMs, double* outP50Ms, double* outP95Ms);
+
+// ---- session recorder ForTest seams (R1b-core) -----------------------------
+void Overlay_NoteNativeSelDetail(bool hasChild, const char* childKind, const char* childId) {
+	g_recNativeHasChild = hasChild;
+	g_recNativeChildKind = childKind ? childKind : "";
+	g_recNativeChildId = childId ? childId : "";
+}
+
+void Overlay_StartSessionRecordForTest() {
+	SessionRecordStart();
+}
+
+void Overlay_StopSessionRecordForTest() {
+	SessionRecordStop();
+}
+
+bool Overlay_IsSessionRecordingForTest() {
+	return g_recActive;
+}
+
+void Overlay_SetSessionRecording(bool active) {
+	if (active == g_recActive) return;
+	if (active) SessionRecordStart();
+	else SessionRecordStop();
+}
+
+void Overlay_SetSessionRecordStateChangedCallback(
+	OverlaySessionRecordStateChanged callback, void* context) {
+	g_recStateChanged = callback;
+	g_recStateChangedContext = context;
+}
+
+const char* Overlay_GetSessionDirForTest() {
+	static std::string s;
+	s = Narrow(g_recSessionDir);
+	return s.c_str();
+}
+
+void Overlay_RecError(const char* where, long hr, const char* msg) {
+	RecError(where, hr, msg);
+}
+
+const char* Overlay_DumpEntitiesForTest() {
+	// COM-free seam (SR-ENT-08). Apply selection/hover flags from live globals
+	// then re-serialize; geometry stays whatever BuildRowBands last cached.
+	static std::string s;
+	if (g_entityCache.empty()) {
+		s = "{\"entities\":[]}";
+		return s.c_str();
+	}
+	for (PpEntity& e : g_entityCache) {
+		const bool ownIdMatch = !g_ownSelId.empty() && e.id == g_ownSelId;
+		e.flags.selectedOwn = ownIdMatch && (
+			e.kind == g_ownSelKind
+			|| (g_ownSelKind == "TASK" && IsTaskKind(e.kind))
+			|| (g_ownSelKind == "MILESTONE" && (e.kind == "MILESTONE" || e.kind == "MILESTONE_LABEL"))
+			|| (g_ownSelKind == "ROW" && e.kind == "ROW_LABEL")
+			|| (g_ownSelKind == "MARKER" && (e.kind == "TODAY_LINE" || e.kind == "DEADLINE"
+				|| e.kind == "CUSTOM_MARKER" || e.kind == "TODAY_LABEL"
+				|| e.kind == "DEADLINE_LABEL" || e.kind == "CUSTOM_MARKER_LABEL"))
+			|| (g_ownSelKind == "TEXT" && e.kind == "TEXT")
+			|| (g_ownSelKind == "DEP" && e.kind == "DEP"));
+		// Prefer ChildShapeRange truth when present (SR-REC-06 / live bug #1).
+		if (g_recNativeHasChild && !g_recNativeChildKind.empty()) {
+			e.flags.selectedNative = (e.kind == g_recNativeChildKind)
+				&& (g_recNativeChildId.empty() || e.id == g_recNativeChildId);
+		} else {
+			e.flags.selectedNative = !g_lastNativeSelKindForTest.empty()
+				&& e.kind == g_lastNativeSelKindForTest
+				&& !g_suppressedId.empty() && e.id == g_suppressedId;
+		}
+		e.flags.hover = (!g_hoverRowId.empty() && (e.id == g_hoverRowId || e.rowId == g_hoverRowId))
+			// Task-bar hover: every primitive of the hovered bar unit (fill,
+			// progress, label, % readout, rail chrome) shares the task id and
+			// is part of the one hovered object (SR-TASK-UNIT-01).
+			|| (!g_hoverTaskId.empty() && e.id == g_hoverTaskId && IsTaskKind(e.kind))
+			|| (!g_lastHit.id.empty() && e.id == g_lastHit.id);
+		// BuildRowBands maps the cached pure Scene primitive's clippedL/clippedR
+		// flags into the entity. Preserve that truth here (SR-ENT-02).
+		e.flags.visible = true;
+	}
+	s = EntityDumpToJson(g_entityCache);
+	g_entityDumpJson = s;
+	return s.c_str();
+}
+
 const char* Overlay_DumpChromeStateForTest() {
 	static std::string s;
 	s.clear();
 	s += "{";
 	s += "\"ownSelKind\":\"" + g_ownSelKind + "\",";
 	s += "\"ownSelId\":\"" + g_ownSelId + "\",";
+	s += "\"sessionRecording\":" + std::string(g_recActive ? "true" : "false") + ",";
+	s += "\"recIndicatorPainted\":" + std::string(g_recIndicatorPainted ? "true" : "false") + ",";
+	s += "\"sessionDir\":\"";
+	EntityJsonAppendEscaped(s, Narrow(g_recSessionDir));
+	s += "\",";
 	s += "\"ownSelCount\":" + std::to_string(OwnSelCount()) + ",";
 	s += "\"ownSelExtra\":[";
 	for (size_t i = 0; i < g_ownSelExtra.size(); ++i) {
@@ -8291,6 +10072,10 @@ const char* Overlay_DumpChromeStateForTest() {
 	// COM sink most recently observed ("" / "CHART_ROOT" / a child kind), and
 	// whether the Delete/arrow hotkeys are currently registered. Consumed by the
 	// component-shape-protection scenario (no_child_shape_selected + hotkey scope).
+	// Task-bar hover ground truth (gated by trace_entity_dump's
+	// entity_task_hover_scoped invariant): "" when no bar is under the cursor.
+	s += "\"hoverTaskId\":\"" + g_hoverTaskId + "\",";
+	s += "\"hoverRowId\":\"" + g_hoverRowId + "\",";
 	s += "\"nativeSelKind\":\"" + g_lastNativeSelKindForTest + "\",";
 	s += "\"hotkeysActive\":" + std::string(g_hotkeysActive ? "true" : "false") + ",";
 	s += "\"linkMode\":" + std::string(g_linkMode ? "true" : "false") + ",";
@@ -8330,6 +10115,21 @@ const char* Overlay_DumpChromeStateForTest() {
 		s += "\"windowHeaderBandRect\":" + (IsRectEmpty(&g_headerBandScreenRect) ? std::string("{}") : rectJson(g_headerBandScreenRect)) + ",";
 		s += "\"windowPortLRect\":" + (IsRectEmpty(&windowPortL) ? std::string("{}") : rectJson(windowPortL)) + ",";
 		s += "\"windowPortRRect\":" + (IsRectEmpty(&windowPortR) ? std::string("{}") : rectJson(windowPortR)) + ",";
+		// Ground truth for the discoverability gate: a port is only real if the
+		// overlay would actually route a press there (alpha-covered = inside the
+		// chart rect, and the zone hit test agrees with the published rect).
+		{
+			auto portLive = [&](const RECT& r, HtZone want) {
+				if (IsRectEmpty(&r)) return false;
+				RECT clipped{};
+				if (!::IntersectRect(&clipped, &r, &g_chartScreenRect) || !SameRect(clipped, r)) return false;
+				const POINT c = { (r.left + r.right) / 2, (r.top + r.bottom) / 2 };
+				return WindowPortUnderPoint(c) == want;
+			};
+			s += std::string("\"windowPortLHitTestable\":") + (portLive(windowPortL, HtZone::WindowPortL) ? "true" : "false") + ",";
+			s += std::string("\"windowPortRHitTestable\":") + (portLive(windowPortR, HtZone::WindowPortR) ? "true" : "false") + ",";
+			s += std::string("\"windowPortHover\":\"") + RecHtZoneName(g_windowPortHoverZone) + "\",";
+		}
 		for (int i = 0; i < 2; ++i) {
 			const char* key = (i == 0) ? "rowAdderAboveRect" : "rowAdderBelowRect";
 			if (g_rowBoundaryInsertValid[i]) {
@@ -8382,21 +10182,40 @@ const char* Overlay_DumpChromeStateForTest() {
 	s += "\"hasDrag\":" + std::string((g_dragActive || g_gestureActive) ? "true" : "false") + ",";
 	s += "\"hasCommitEcho\":" + std::string(g_dragCommitEcho.active ? "true" : "false") + ",";
 	s += "\"dragKind\":" + std::to_string(static_cast<int>(g_dragKind)) + ",";
+	// SR-SMO-09..12 continuous paint cadence sample (0 when not sampling).
+	{
+		double hz = 0.0, p50 = 0.0, p95 = 0.0;
+		long pc = 0, wms = 0;
+		Overlay_GetPaintCadenceForTest(&hz, &pc, &wms, &p50, &p95);
+		char cadBuf[192];
+		::snprintf(cadBuf, sizeof(cadBuf),
+			"\"paintCadence\":{\"active\":%s,\"paintCount\":%ld,\"windowMs\":%ld,\"hz\":%.2f,\"p50Ms\":%.2f,\"p95Ms\":%.2f},",
+			g_paintSampleActive ? "true" : "false", pc, wms, hz, p50, p95);
+		s += cadBuf;
+	}
 	s += "\"dragPillText\":\"" + g_dragPillText + "\",";
 	s += "\"dragPreviewRect\":{\"left\":" + std::to_string(g_dragPreviewRect.left) + ",\"top\":" + std::to_string(g_dragPreviewRect.top)
 		+ ",\"right\":" + std::to_string(g_dragPreviewRect.right) + ",\"bottom\":" + std::to_string(g_dragPreviewRect.bottom) + "},";
 	s += "\"dragCandidatePercent\":" + std::to_string(g_dragCandidatePercent) + ",";
 	s += "\"dragTargetRowId\":\"" + g_lastCommittedDragTargetRowId + "\",";
 	int ownSelTaskPercent = -1;
+	std::string ownSelTaskStart, ownSelTaskEnd;
 	if (g_ownSelKind == "TASK" && !g_ownSelId.empty()) {
 		PpDocument cached;
 		if (Gantt_TryPeekCachedDoc(&cached)) {
 			for (const auto& t : cached.tasks) {
-				if (t.id == g_ownSelId) { ownSelTaskPercent = t.percent; break; }
+				if (t.id == g_ownSelId) {
+					ownSelTaskPercent = t.percent;
+					ownSelTaskStart = t.start;
+					ownSelTaskEnd = t.end;
+					break;
+				}
 			}
 		}
 	}
 	s += "\"ownSelTaskPercent\":" + std::to_string(ownSelTaskPercent) + ",";
+	s += "\"ownSelTaskStart\":\"" + ownSelTaskStart + "\",";
+	s += "\"ownSelTaskEnd\":\"" + ownSelTaskEnd + "\",";
 	s += "\"cardVisible\":" + std::string((g_cardHwnd && ::IsWindowVisible(g_cardHwnd)) ? "true" : "false") + ",";
 	s += "\"contextMenuVisible\":" + std::string(ThemeMenu_IsVisible() ? "true" : "false") + ",";
 	s += "\"appBarVisible\":" + std::string(g_appBarShown ? "true" : "false") + ",";
@@ -8532,6 +10351,70 @@ void Overlay_GetRenderCountersForTest(long* overlayPaints, long* appBarPaints,
 	if (appBarPaints) *appBarPaints = g_appBarPaintCount;
 	if (overlaySwp) *overlaySwp = g_overlaySwpCount;
 	if (appBarSwp) *appBarSwp = g_appBarSwpCount;
+}
+
+void Overlay_BeginPaintCadenceSampleForTest() {
+	g_paintSampleActive = true;
+	g_paintTsCount = 0;
+	g_paintTsWrite = 0;
+	g_paintSampleStartMs = ::GetTickCount64();
+}
+
+void Overlay_EndPaintCadenceSampleForTest() {
+	g_paintSampleActive = false;
+}
+
+void Overlay_GetPaintCadenceForTest(double* outHz, long* outPaintCount,
+	long* outWindowMs, double* outP50Ms, double* outP95Ms) {
+	const long n = g_paintTsCount;
+	if (outPaintCount) *outPaintCount = n;
+
+	// Reconstruct ordered samples from ring.
+	ULONGLONG ordered[kPaintTsCap];
+	const int start = (g_paintTsCount < kPaintTsCap) ? 0 : g_paintTsWrite;
+	for (int i = 0; i < n; ++i)
+		ordered[i] = g_paintTsMs[(start + i) % kPaintTsCap];
+
+	// Window = first→last paint (not wall-clock from Begin — excludes pre-paint dead time).
+	long windowMs = 0;
+	if (n >= 2)
+		windowMs = (long)(ordered[n - 1] - ordered[0]);
+	else if (n == 1 && g_paintSampleStartMs)
+		windowMs = (long)(::GetTickCount64() - g_paintSampleStartMs);
+	if (outWindowMs) *outWindowMs = windowMs;
+
+	// Hz from (paintCount-1) / span so intervals define cadence (SR-SMO-09).
+	double hz = 0.0;
+	if (windowMs > 0 && n >= 2)
+		hz = (1000.0 * (double)(n - 1)) / (double)windowMs;
+	else if (windowMs > 0 && n == 1)
+		hz = 1000.0 / (double)windowMs;
+	if (outHz) *outHz = hz;
+
+	double p50 = 0.0, p95 = 0.0;
+	if (n >= 2) {
+		double intervals[kPaintTsCap];
+		int ni = 0;
+		for (int i = 1; i < n; ++i) {
+			const double d = (double)(ordered[i] - ordered[i - 1]);
+			if (d >= 0.0) intervals[ni++] = d;
+		}
+		if (ni > 0) {
+			for (int i = 1; i < ni; ++i) {
+				double key = intervals[i];
+				int j = i - 1;
+				while (j >= 0 && intervals[j] > key) {
+					intervals[j + 1] = intervals[j];
+					--j;
+				}
+				intervals[j + 1] = key;
+			}
+			p50 = intervals[(ni - 1) * 50 / 100];
+			p95 = intervals[(ni - 1) * 95 / 100];
+		}
+	}
+	if (outP50Ms) *outP50Ms = p50;
+	if (outP95Ms) *outP95Ms = p95;
 }
 
 void Overlay_DumpWindowStateForTest(char* buf, int bufLen) {

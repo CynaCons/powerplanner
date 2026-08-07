@@ -215,6 +215,8 @@ private:
 
 			std::string kind, id;
 			bool hasShapeSel = false;
+			bool hasChildShapeRange = false;
+			std::string childKind, childId;
 			if (sel->GetType() == PowerPoint::ppSelectionShapes) {
 				PowerPoint::ShapeRangePtr sr = sel->GetShapeRange();
 				if (sr && sr->GetCount() >= 1) {
@@ -225,17 +227,41 @@ private:
 					_bstr_t i = sh->GetTags()->Item(_bstr_t(L"PP_ID"));
 					id = i.length() ? Narrow((const wchar_t*)i) : "";
 				}
+				// SR-REC-06: ChildShapeRange truth (live bug #1 blind spot).
+				// Guarded try/catch — property may throw on some selection types.
+				try {
+					if (sel->GetHasChildShapeRange() == VARIANT_TRUE) {
+						hasChildShapeRange = true;
+						PowerPoint::ShapeRangePtr csr = sel->GetChildShapeRange();
+						if (csr && csr->GetCount() >= 1) {
+							PowerPoint::ShapePtr csh = csr->Item(_variant_t(1L));
+							_bstr_t ck = csh->GetTags()->Item(_bstr_t(L"PP_KIND"));
+							childKind = ck.length() ? Narrow((const wchar_t*)ck) : "";
+							_bstr_t ci = csh->GetTags()->Item(_bstr_t(L"PP_ID"));
+							childId = ci.length() ? Narrow((const wchar_t*)ci) : "";
+						}
+					}
+				} catch (...) {
+					// leave child detail empty
+				}
 			}
 
-			int action = Overlay_OnNativeSelectionChanged(kind.c_str(), id.c_str(), hasShapeSel);
+			// Note child detail BEFORE the shared handler so nativeSel events
+			// and entity flags see the dual-range truth.
+			int action = Overlay_OnNativeSelectionChangedWithChild(
+				kind.c_str(), id.c_str(), hasShapeSel,
+				hasChildShapeRange, childKind.c_str(), childId.c_str());
 			if (action == OVERLAY_NATIVE_SEL_SUPPRESS_CHILD) {
 				// Instant equivalent of the Tick poll's Unselect(). Re-fires this
 				// event with an empty/CHART_ROOT selection, which resolves to
 				// NONE next dispatch — bounded, no recursion.
-				try { sel->Unselect(); } catch (...) {}
+				try { sel->Unselect(); } catch (...) {
+					Overlay_RecError("Connect/Unselect", (long)E_FAIL, "Unselect failed after suppress_child");
+				}
 			}
 		} catch (...) {
 			// Never let an event-sink exception escape into PowerPoint.
+			Overlay_RecError("Connect/WindowSelectionChange", (long)E_FAIL, "exception in selection sink");
 		}
 	}
 
@@ -243,8 +269,8 @@ private:
 };
 } // namespace
 
-// The Fluent ribbon: a "PowerPlanner" tab with one "Insert Gantt" button.
-// onLoad caches the IRibbonUI; the button's onAction reaches DoInsertGantt().
+// The Fluent ribbon: chart commands plus a discoverable session recorder.
+// onLoad caches IRibbonUI so recorder state changes can invalidate the toggle.
 static const wchar_t* kRibbonXml =
 	L"<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui' onLoad='OnRibbonLoad'>"
 	L"  <ribbon>"
@@ -256,10 +282,15 @@ static const wchar_t* kRibbonXml =
 	L"                  screentip='Insert a Gantt chart' supertip='Emit a Gantt chart as native PowerPoint shapes on the current slide.'/>"
 	L"          <button id='ppPull' label='Import from slide' size='normal'"
 	L"                  imageMso='Refresh' onAction='OnPullGantt'"
-	L"                  screentip='Import from slide' supertip='Read an existing PowerPlanner chart\'s data from the current slide.'/>"
+	L"                  screentip='Import from slide' supertip='Read existing PowerPlanner chart data from the current slide.'/>"
 	L"          <button id='ppReflow' label='Repair layout' size='normal'"
 	L"                  imageMso='RecurrenceEdit' onAction='OnReflowGantt'"
 	L"                  screentip='Repair layout' supertip='Read moved or resized task bars from the current slide, then rebuild the chart with its data in sync.'/>"
+	L"        </group>"
+	L"        <group id='ppDiagnostics' label='Diagnostics'>"
+	L"          <toggleButton id='ppRecord' label='Record' size='normal'"
+	L"                  onAction='OnRecordSession' getPressed='GetRecordPressed'"
+	L"                  screentip='Record a debug session' supertip='Capture PowerPlanner inputs, selection, operations, paints, and entity snapshots for diagnosis.'/>"
 	L"        </group>"
 	L"      </tab>"
 	L"    </tabs>"
@@ -273,6 +304,7 @@ STDMETHODIMP CConnect::OnConnection(IDispatch* Application,
 	IDispatch* /*AddInInst*/, SAFEARRAY** /*custom*/)
 {
 	m_pApp = Application;  // PowerPoint.Application — used from N2 onward
+	Overlay_SetSessionRecordStateChangedCallback(&CConnect::OnRecorderStateChanged, this);
 	PpLog(L"OnConnection — add-in loaded into PowerPoint");
 	OverlayStart(m_pApp);  // N4: on-slide selection overlay (polling timer)
 	AdviseSelectionSink(); // SR-SMO-05: instant WindowSelectionChange suppression
@@ -282,6 +314,7 @@ STDMETHODIMP CConnect::OnConnection(IDispatch* Application,
 STDMETHODIMP CConnect::OnDisconnection(AddInDesignerObjects::ext_DisconnectMode /*RemoveMode*/, SAFEARRAY** /*custom*/)
 {
 	UnadviseSelectionSink();
+	Overlay_SetSessionRecordStateChangedCallback(nullptr, nullptr);
 	OverlayStop();
 	m_pRibbon.Release();
 	m_pApp.Release();
@@ -325,6 +358,8 @@ STDMETHODIMP CConnect::GetIDsOfNames(REFIID riid, LPOLESTR* rgszNames, UINT cNam
 		if (_wcsicmp(rgszNames[0], L"OnCtxScaleMonth") == 0) { rgDispId[0] = DISPID_PP_CTX_SCALE_MONTH; return S_OK; }
 		if (_wcsicmp(rgszNames[0], L"OnCtxScaleQuarter") == 0) { rgDispId[0] = DISPID_PP_CTX_SCALE_QUARTER; return S_OK; }
 		if (_wcsicmp(rgszNames[0], L"OnCtxScaleYear") == 0) { rgDispId[0] = DISPID_PP_CTX_SCALE_YEAR; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"OnRecordSession") == 0) { rgDispId[0] = DISPID_PP_RECORD_SESSION; return S_OK; }
+		if (_wcsicmp(rgszNames[0], L"GetRecordPressed") == 0) { rgDispId[0] = DISPID_PP_GET_RECORD_PRESSED; return S_OK; }
 	}
 	return ExtBase::GetIDsOfNames(riid, rgszNames, cNames, lcid, rgDispId);
 }
@@ -335,9 +370,10 @@ STDMETHODIMP CConnect::Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD 
 	switch (dispIdMember)
 	{
 	case DISPID_PP_ONLOAD:
-		// onLoad(ribbon as IRibbonUI)
+		// onLoad(ribbon as IRibbonUI) — only fires when customUI XML was accepted.
 		if (pDispParams && pDispParams->cArgs >= 1 && pDispParams->rgvarg[0].vt == VT_DISPATCH)
 			m_pRibbon = pDispParams->rgvarg[0].pdispVal;
+		PpLog(L"OnRibbonLoad — customUI accepted; PowerPlanner tab should be visible");
 		return S_OK;
 
 	case DISPID_PP_INSERT_GANTT:
@@ -398,6 +434,17 @@ STDMETHODIMP CConnect::Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD 
 
 	case DISPID_PP_CTX_SCALE_YEAR:
 		DoCtxScaleYear();
+		return S_OK;
+
+	case DISPID_PP_RECORD_SESSION:
+		DoRecordSession();
+		return S_OK;
+
+	case DISPID_PP_GET_RECORD_PRESSED:
+		if (!pVarResult) return E_POINTER;
+		::VariantInit(pVarResult);
+		pVarResult->vt = VT_BOOL;
+		pVarResult->boolVal = Overlay_IsSessionRecordingForTest() ? VARIANT_TRUE : VARIANT_FALSE;
 		return S_OK;
 	}
 	return ExtBase::Invoke(dispIdMember, riid, lcid, wFlags, pDispParams, pVarResult, pExcepInfo, puArgErr);
@@ -750,4 +797,28 @@ void CConnect::DoCtxScaleYear()
 		outSelectId.clear();
 		return SetScale(doc, "year");
 	});
+}
+
+void CConnect::DoRecordSession()
+{
+	Overlay_SetSessionRecording(!Overlay_IsSessionRecordingForTest());
+	InvalidateRecordControl();
+}
+
+void CConnect::OnRecorderStateChanged(bool, void* context)
+{
+	CConnect* self = static_cast<CConnect*>(context);
+	if (self) self->InvalidateRecordControl();
+}
+
+void CConnect::InvalidateRecordControl()
+{
+	if (!m_pRibbon) return;
+	try {
+		CComQIPtr<Office::IRibbonUI> ribbon(m_pRibbon);
+		if (ribbon) ribbon->InvalidateControl(_bstr_t(L"ppRecord"));
+	} catch (...) {
+		Overlay_RecError("Ribbon/InvalidateRecord", (long)E_FAIL,
+			"failed to invalidate Record toggle");
+	}
 }

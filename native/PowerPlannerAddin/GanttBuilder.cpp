@@ -643,9 +643,21 @@ static bool TryApplySceneDiffFast(PowerPoint::ShapePtr group, const PpDocument& 
 		// Same-bounds row-geometry drift (rare: lane redistribution with equal
 		// union bounds) still needs a fresh PP_ROWY. Pure C++ compare gates the
 		// COM reads + tag write.
+		// FAIL CLOSED when the detector has no baseline. CommitSceneCache
+		// populates g_cacheRowYJson (the REBASED tag) but never
+		// g_cacheRowYPreRebase, and InvalidateSceneCache clears it — so after
+		// every full rebuild the detector is empty and the old
+		// `!empty() && changed` guard SKIPPED the rewrite entirely. The first
+		// fast-path edit after any rebuild could therefore re-pack lanes and
+		// leave PP_ROWY describing the previous geometry. The overlay derives
+		// every row band from that tag (Overlay.cpp BuildRowBands) and caches
+		// those bands keyed on the tag itself, so the staleness is
+		// self-reinforcing: hover wash, row hit zones and drag drop-targets sit
+		// at the old lane boundaries until something else invalidates. An
+		// unknown baseline must mean "rewrite", not "assume unchanged".
 		{
 			std::string newRowY = BuildRowYJson(doc, slideW, minD);
-			if (!g_cacheRowYPreRebase.empty() && newRowY != g_cacheRowYPreRebase) {
+			if (g_cacheRowYPreRebase.empty() || newRowY != g_cacheRowYPreRebase) {
 				std::string rebased = RebaseRowYJson(newRowY, group->GetLeft(), group->GetTop(), group->GetWidth(), group->GetHeight());
 				group->GetTags()->Add(_bstr_t(L"PP_ROWY"), _bstr_t(Widen(rebased).c_str()));
 				g_cacheRowYJson = rebased;
@@ -1457,6 +1469,12 @@ bool Gantt_TryGetCachedDoc(long chartRootShapeId, PpDocument* out) {
 bool Gantt_TryPeekCachedDoc(PpDocument* out) {
 	if (!out || !g_sceneCacheValid) return false;
 	*out = g_cacheDoc;
+	return true;
+}
+
+bool Gantt_TryPeekCachedScene(Scene* out) {
+	if (!out || !g_sceneCacheValid) return false;
+	*out = g_lastScene;
 	return true;
 }
 

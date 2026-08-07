@@ -22,6 +22,11 @@ struct HtRect {
 // Kinds of chart child shapes that participate in hit-testing.
 enum class HtItemKind {
 	Task,
+	// On-bar or right-of-bar TASK_LABEL geometry. Hit-tests as TaskBody with the
+	// same task id so label text is never a separate selectable object from the
+	// bar unit (SR-TASK-UNIT-01). Does NOT participate in resize/progress edge
+	// bands — those stay on the Task body rect only.
+	TaskLabel,
 	Milestone,
 	RowLabel,
 	Title,
@@ -99,6 +104,19 @@ struct HtHit {
 	std::string id;                     // item id; row id for RowBand/EmptyCell
 	std::string rowId;                  // row id when zone is RowBand/EmptyCell
 };
+
+// Every emitted primitive that belongs to a task bar unit maps to ownSel TASK.
+// SR-TASK-UNIT-01: the bar is one object — fill, progress, label, % readout,
+// and rail task chrome share the task's PP_ID and must never be separate
+// user-selectable objects.
+inline bool IsTaskKind(const std::string& kind) {
+	return kind == "TASK"
+		|| kind == "TASK_PROGRESS"
+		|| kind == "TASK_LABEL"
+		|| kind == "TASK_PCT"
+		|| kind == "RAIL_TASKLBL"
+		|| kind == "RAIL_DOT";
+}
 
 // Half-width of a task's resize edge band: the band spans the bar edge
 // +-kHtEdgePx (i.e. 4px outside and 4px inside the bar). This is the 96-DPI
@@ -190,6 +208,8 @@ enum HtMenuCmd {
 	HtCmd_AxisNumbersCW,
 	HtCmd_RailLabelsOn,
 	HtCmd_RailLabelsOff,
+	// Native session recorder toggle (Phase 15 / SR-REC-16).
+	HtCmd_RecordSession,
 };
 
 // One flat entry in a (possibly submenu'd) popup menu. Submenu items share the

@@ -459,6 +459,43 @@ kbd {
   font-feature-settings: 'tnum';
 }
 
+.app-status-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Agent bridge activity (SRS-ABR-060) — present enough to notice, quiet
+   enough not to compete with the chart. */
+.agent-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--color-border-hairline);
+  border-radius: 999px;
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.agent-indicator-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: agent-pulse 2s ease-in-out infinite;
+}
+
+@keyframes agent-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-indicator-dot { animation: none; }
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;

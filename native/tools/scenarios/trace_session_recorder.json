@@ -1,0 +1,22 @@
+{
+  "name": "trace_session_recorder",
+  "description": "v2.10.0 SR-REC: session recorder writes session dir (events.jsonl+meta.json+frames/), event schema for input/nativeSel/ownSel/gesture/op/paint/snapshot/frame/doc/error, REC indicator, and SR-SMO-09 paint cadence remains green while recording is on.",
+  "trace_profile": "session-recorder",
+  "timeout": 180,
+  "retries": 2,
+  "check_invariants": true,
+  "invariants": [
+    "session_dir_layout",
+    "project_local_session_dir",
+    "events_jsonl_schema",
+    "event_types_present",
+    "ownsel_events_on_transition",
+    "gesture_phase_pairs",
+    "snapshot_entity_dedupe",
+    "live_child_geometry_fresh",
+    "error_events_on_swallowed_catch",
+    "paint_cadence_min_hz",
+    "rec_indicator_visible",
+    "composited_frame_present"
+  ]
+}

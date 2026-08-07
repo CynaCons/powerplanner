@@ -4,6 +4,7 @@
 
 #include "pch.h"
 #include "GanttModel.h"
+#include "Scene.h"
 
 // A built-in sample chart (N3 replaces this with a parsed/round-tripped document).
 PpDocument MakeSampleDocument();
@@ -54,6 +55,11 @@ bool Gantt_TryGetCachedDoc(long chartRootShapeId, PpDocument* out);
 // there. Returns false when the cache is invalid (caller falls back to the full
 // id-checked read). Does NOT relax the op-path doc read's id check.
 bool Gantt_TryPeekCachedDoc(PpDocument* out);
+
+// Recorder/entity-dump observation seam. Returns the exact pure Scene last
+// committed with the cached document, including text, style and clip flags.
+// The copy is COM-free and read-only from the caller's perspective.
+bool Gantt_TryPeekCachedScene(Scene* out);
 
 // Op-dispatch doc acquisition used by Overlay.cpp's mutation paths. When the
 // scene cache is valid and the active slide id still matches g_cacheSlideId,

@@ -1,7 +1,6 @@
 @echo off
-rem Build (if needed), register, and launch PowerPoint with the PowerPlanner add-in.
-rem Usage: start.bat          - use the existing DLL (builds only if missing)
-rem        start.bat build    - force a fresh build first
+rem Build, register, and launch PowerPoint with the PowerPlanner add-in.
+rem Every invocation rebuilds the DLL so PowerPoint cannot load stale code.
 setlocal
 set "HERE=%~dp0"
 set "DLL=%HERE%build\PowerPlannerAddin.dll"
@@ -16,11 +15,9 @@ if not errorlevel 1 (
 	timeout /t 2 /nobreak >nul
 )
 
-if /i "%~1"=="build" call "%HERE%build.bat" || exit /b 1
-if not exist "%DLL%" (
-	echo [start] DLL not found - building first...
-	call "%HERE%build.bat" || exit /b 1
-)
+echo [start] Building PowerPlannerAddin.dll...
+call "%HERE%build.bat" || exit /b 1
+if not exist "%DLL%" exit /b 1
 
 call "%HERE%register.bat" || exit /b 1
 

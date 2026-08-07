@@ -7,6 +7,7 @@
 #include "../PowerPlannerAddin/GanttCommandRegistry.h"
 #include "../PowerPlannerAddin/GanttTheme.h"
 #include "../PowerPlannerAddin/GanttScene.h"
+#include "../PowerPlannerAddin/EntityDump.h"
 
 #include <cstdio>
 #include <cstring>
@@ -157,6 +158,36 @@ static bool RunHitTestChecks() {
 		HtHit hit = GanttHitTestPoint(snap, 150, 375);
 		ok = Check(hit.zone == HtZone::RowBand && hit.rowId == "row-3", "hit: rail column selects row without ROW_LABEL") && ok;
 	}
+
+	// SR-TASK-UNIT: TASK_LABEL is part of the task bar unit — not EmptyCell and
+	// not a separate object. Right-of-bar labels (narrow bars) and on-bar labels
+	// both resolve to TaskBody with the parent task id. Label edges must NOT
+	// steal TaskEdgeL/R (those stay on the Task body rect only).
+	{
+		// Outside-bar label sitting just to the right of task-1 (ends at x=500).
+		snap.items.push_back({ HtItemKind::TaskLabel, "task-1", { 510, 180, 620, 220 } });
+		ok = zoneCheck(550, 200, HtZone::TaskBody, "task-1",
+			"hit: right-of-bar TASK_LABEL is TaskBody(task-1) unit") && ok;
+		ok = zoneCheck(510, 200, HtZone::TaskBody, "task-1",
+			"hit: left edge of outside TASK_LABEL is TaskBody (not TaskEdgeL)") && ok;
+		// On-bar label (overlaps body): body still wins first; unit is same id.
+		snap.items.push_back({ HtItemKind::TaskLabel, "task-1", { 340, 185, 460, 215 } });
+		ok = zoneCheck(400, 200, HtZone::TaskBody, "task-1",
+			"hit: on-bar TASK_LABEL overlap stays TaskBody(task-1)") && ok;
+		// Label of a different task must not hijack when clear of task-1 body.
+		snap.items.push_back({ HtItemKind::Task, "task-2", { 300, 280, 420, 320 } });
+		snap.items.push_back({ HtItemKind::TaskLabel, "task-2", { 430, 280, 520, 320 } });
+		ok = zoneCheck(470, 300, HtZone::TaskBody, "task-2",
+			"hit: task-2 outside label selects task-2 not EmptyCell") && ok;
+	}
+
+	// IsTaskKind: every emitted task-bar primitive is one unit for ownSel mirror.
+	ok = Check(IsTaskKind("TASK") && IsTaskKind("TASK_PROGRESS") && IsTaskKind("TASK_LABEL")
+		&& IsTaskKind("TASK_PCT") && IsTaskKind("RAIL_TASKLBL") && IsTaskKind("RAIL_DOT"),
+		"IsTaskKind: all task-bar primitives map to task unit") && ok;
+	ok = Check(!IsTaskKind("MILESTONE") && !IsTaskKind("TASK_LABELX") && !IsTaskKind("CHART_ROOT")
+		&& !IsTaskKind("TEXT") && !IsTaskKind("ROW_LABEL"),
+		"IsTaskKind: non-task kinds stay false") && ok;
 
 	return ok;
 }
@@ -2056,6 +2087,162 @@ static bool RunTaskAppBarMapChecks() {
 	return ok;
 }
 
+// Pure entity-dump checks (session recorder R1a / SR-ENT-02..04,07): JSON
+// shape+escaping, parent-link derivation, slide->screen projection, and a
+// synthetic entity per PP_KIND vocabulary entry.
+static bool RunEntityDumpChecks() {
+	bool ok = true;
+
+	// (a) JSON escaping / shape round-trip (fields present, strings escaped).
+	{
+		PpEntity e;
+		e.id = "disc\"over\\y";
+		e.kind = "TASK";
+		e.parentId = "";
+		e.rowId = "r1";
+		e.slideRect = { 100.0, 200.0, 80.0, 20.0 };
+		e.screenRect = { 300.0, 400.0, 160.0, 40.0 };
+		e.z = 14;
+		e.style.fillArgb = 0x005B67E8ul;
+		e.style.strokeArgb = 0x003A44B0ul;
+		e.style.strokeW = 1.0;
+		e.style.fontPx = 0;
+		e.text = "hello\tworld\n\"quote\"";
+		e.flags.selectedOwn = true;
+		e.flags.selectedNative = false;
+		e.flags.hover = false;
+		e.flags.clipped = true;
+		e.flags.visible = true;
+
+		const std::string json = EntityDumpToJson({ e });
+		ok = Check(json.find("{\"entities\":[") == 0, "entitydump: root is {\"entities\":[") && ok;
+		ok = Check(json.find("\"id\":\"disc\\\"over\\\\y\"") != std::string::npos,
+			"entitydump: id escapes quote and backslash") && ok;
+		ok = Check(json.find("\"kind\":\"TASK\"") != std::string::npos,
+			"entitydump: kind present") && ok;
+		ok = Check(json.find("\"parentId\":\"\"") != std::string::npos,
+			"entitydump: empty parentId present") && ok;
+		ok = Check(json.find("\"rowId\":\"r1\"") != std::string::npos,
+			"entitydump: rowId present") && ok;
+		ok = Check(json.find("\"slideRect\":[100,200,80,20]") != std::string::npos,
+			"entitydump: slideRect [l,t,w,h]") && ok;
+		ok = Check(json.find("\"screenRect\":[300,400,160,40]") != std::string::npos,
+			"entitydump: screenRect [l,t,w,h]") && ok;
+		ok = Check(json.find("\"z\":14") != std::string::npos, "entitydump: z present") && ok;
+		ok = Check(json.find("\"fill\":\"#5B67E8\"") != std::string::npos,
+			"entitydump: fill hex from fillArgb") && ok;
+		ok = Check(json.find("\"stroke\":\"#3A44B0\"") != std::string::npos,
+			"entitydump: stroke hex from strokeArgb") && ok;
+		ok = Check(json.find("\"strokeW\":1") != std::string::npos,
+			"entitydump: strokeW present") && ok;
+		ok = Check(json.find("\"fontPx\":0") != std::string::npos,
+			"entitydump: fontPx present") && ok;
+		ok = Check(json.find("\"text\":\"hello\\tworld\\n\\\"quote\\\"\"") != std::string::npos,
+			"entitydump: text escapes tab/newline/quote") && ok;
+		ok = Check(json.find("\"selectedOwn\":true") != std::string::npos,
+			"entitydump: selectedOwn true") && ok;
+		ok = Check(json.find("\"selectedNative\":false") != std::string::npos,
+			"entitydump: selectedNative false") && ok;
+		ok = Check(json.find("\"hover\":false") != std::string::npos,
+			"entitydump: hover false") && ok;
+		ok = Check(json.find("\"clipped\":true") != std::string::npos,
+			"entitydump: clipped true is preserved") && ok;
+		ok = Check(json.find("\"visible\":true") != std::string::npos,
+			"entitydump: visible true") && ok;
+		ok = Check(json.size() >= 2 && json.back() == '}',
+			"entitydump: JSON closes with }") && ok;
+	}
+
+	// (b) parent links: every task-family child + MILESTONE_LABEL + non-child "".
+	{
+		const char* taskChildren[] = {
+			"TASK_LABEL", "TASK_PROGRESS", "TASK_PCT", "RAIL_TASKLBL", "RAIL_DOT"
+		};
+		for (const char* k : taskChildren) {
+			ok = Check(EntityParentId(k, "discovery") == "discovery",
+				"entitydump: task-family child parentId is task id") && ok;
+		}
+		ok = Check(EntityParentId("MILESTONE_LABEL", "ms-1") == "ms-1",
+			"entitydump: MILESTONE_LABEL parentId is milestone id") && ok;
+		ok = Check(EntityParentId("TASK", "discovery").empty(),
+			"entitydump: TASK root parentId is empty") && ok;
+		ok = Check(EntityParentId("MILESTONE", "ms-1").empty(),
+			"entitydump: MILESTONE root parentId is empty") && ok;
+		ok = Check(EntityParentId("TEXT", "txt-1").empty(),
+			"entitydump: non-task kind parentId is empty") && ok;
+		ok = Check(EntityParentId("CHART_ROOT", "").empty(),
+			"entitydump: CHART_ROOT parentId is empty") && ok;
+		ok = Check(EntityParentId("ROW_LABEL", "row-1").empty(),
+			"entitydump: ROW_LABEL parentId is empty") && ok;
+	}
+
+	// (c) slide -> screen projection consistency (linear PointsToScreen analogue).
+	{
+		PpEntityRect slide{ 10.0, 20.0, 40.0, 8.0 };
+		// origin at (100, 200), 2x horizontal / 1.5x vertical scale.
+		PpEntityRect screen = EntityProjectSlideToScreen(slide, 100.0, 200.0, 2.0, 1.5);
+		ok = Check(screen.l == 120.0, "entitydump: project l = originX + slide.l * sx") && ok;
+		ok = Check(screen.t == 230.0, "entitydump: project t = originY + slide.t * sy") && ok;
+		ok = Check(screen.w == 80.0, "entitydump: project w = slide.w * sx") && ok;
+		ok = Check(screen.h == 12.0, "entitydump: project h = slide.h * sy") && ok;
+
+		// Identity: origin 0, scale 1 leaves rect unchanged.
+		PpEntityRect id = EntityProjectSlideToScreen(slide, 0.0, 0.0, 1.0, 1.0);
+		ok = Check(id.l == slide.l && id.t == slide.t && id.w == slide.w && id.h == slide.h,
+			"entitydump: project identity is no-op") && ok;
+
+		// Dual-space: entity holding both rects keeps them after dump.
+		PpEntity e;
+		e.id = "t1";
+		e.kind = "TASK";
+		e.slideRect = slide;
+		e.screenRect = screen;
+		const std::string json = EntityDumpToJson({ e });
+		ok = Check(json.find("\"slideRect\":[10,20,40,8]") != std::string::npos,
+			"entitydump: dual-space slideRect preserved in dump") && ok;
+		ok = Check(json.find("\"screenRect\":[120,230,80,12]") != std::string::npos,
+			"entitydump: dual-space screenRect matches projection") && ok;
+	}
+
+	// (d) completeness: one synthetic entity per PP_KIND vocabulary entry.
+	{
+		static const char* kKinds[] = {
+			"TASK", "TASK_PROGRESS", "TASK_LABEL", "TASK_PCT",
+			"RAIL_TASKLBL", "RAIL_DOT", "MILESTONE", "MILESTONE_LABEL",
+			"ROW_LABEL", "TITLE", "TEXT", "DEP",
+			"TODAY_LINE", "DEADLINE", "CUSTOM_MARKER",
+			"HEADER_BAND", "RAIL_FILL", "AXIS_TOP", "AXIS_BOT", "CHART_ROOT"
+		};
+		std::vector<PpEntity> ents;
+		ents.reserve(sizeof(kKinds) / sizeof(kKinds[0]));
+		for (size_t i = 0; i < sizeof(kKinds) / sizeof(kKinds[0]); ++i) {
+			PpEntity e;
+			e.id = std::string("id-") + kKinds[i];
+			e.kind = kKinds[i];
+			e.parentId = EntityParentId(e.kind, e.id);
+			e.rowId = "r1";
+			e.slideRect = { static_cast<double>(i), 0, 1, 1 };
+			e.screenRect = EntityProjectSlideToScreen(e.slideRect, 0, 0, 1, 1);
+			e.z = static_cast<int>(i);
+			e.flags.visible = true;
+			ents.push_back(e);
+		}
+		const std::string json = EntityDumpToJson(ents);
+		ok = Check(json.find("{\"entities\":[") == 0, "entitydump: complete dump root") && ok;
+		for (const char* k : kKinds) {
+			const std::string needle = std::string("\"kind\":\"") + k + "\"";
+			ok = Check(json.find(needle) != std::string::npos,
+				"entitydump: kind preserved in complete vocabulary dump") && ok;
+		}
+		// Task-family children in the dump carry parentId == their id.
+		ok = Check(json.find("\"kind\":\"TASK_LABEL\",\"parentId\":\"id-TASK_LABEL\"") != std::string::npos
+			|| json.find("\"parentId\":\"id-TASK_LABEL\"") != std::string::npos,
+			"entitydump: TASK_LABEL parent link in complete dump") && ok;
+	}
+
+	return ok;
+}
+
 int main() {
 	PpDocument doc;
 	doc.title = "Ops harness sample";
@@ -2185,6 +2372,9 @@ int main() {
 	bool depOpsOk = RunDepOpsChecks();
 	ok = depOpsOk && ok;
 
+	bool entityDumpOk = RunEntityDumpChecks();
+	ok = entityDumpOk && ok;
+
 	if (!ok) {
 		std::printf("OPS HARNESS FAIL\n");
 		return 1;
@@ -2233,6 +2423,9 @@ int main() {
 	}
 	if (depOpsOk) {
 		std::printf("DEP OPS OK\n");
+	}
+	if (entityDumpOk) {
+		std::printf("ENTITY DUMP OK\n");
 	}
 	return 0;
 }

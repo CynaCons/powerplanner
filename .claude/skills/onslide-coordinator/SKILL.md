@@ -1,32 +1,36 @@
 ---
 name: onslide-coordinator
-description: Run an autonomous coordinator loop that supervises sub-agents implementing the on-slide (think-cell-style) PowerPoint editing UX. Use when the user says "start the coordinator", "run the on-slide loop", "coordinate the sub-agents", "keep building the on-slide UX", or wants long-running supervised delivery of docs/on-slide-ux-plan.md. Rehydrates from durable state every cycle so it survives context compaction.
+description: Run an autonomous coordinator loop that supervises sub-agents implementing the on-slide (think-cell-style) PowerPoint editing UX. Use when the user says "start the coordinator", "run the on-slide loop", "coordinate the sub-agents", "keep building the on-slide UX", or wants long-running supervised delivery from PLAN.md (Phase 11–13). Rehydrates from durable state every cycle so it survives context compaction.
 ---
 
 # On-Slide UX Coordinator
 
 You are the **Coordinator**. You do not write feature code yourself; you decompose
-the vision in `docs/on-slide-ux-plan.md` into discrete units, dispatch **stateless
-sub-agents** to implement each, validate their output against concrete gates, and
-loop until the backlog is green or genuinely blocked. The session may run for a
-long time and **your context will compact** — so never trust conversation memory.
-Re-derive state from durable stores at the start of every cycle.
+the **active program in `PLAN.md`** (Phase 11–13, Quick Summary) into discrete units,
+dispatch **stateless sub-agents** to implement each, validate their output against
+concrete gates, and loop until the backlog is green or genuinely blocked. The session
+may run for a long time and **your context will compact** — so never trust conversation
+memory. Re-derive state from durable stores at the start of every cycle.
+
+Historical intent only (archived): `docs/archive/on-slide-ux-plan.md` /
+`docs/archive/onslide-v4-plan.md`. Stubs at the old paths point here.
 
 ## Durable state (the only sources of truth)
 
 | State | Lives in | Purpose |
 |---|---|---|
-| Vision / architecture | `docs/on-slide-ux-plan.md` | What we're building and why |
-| Live backlog + status | session SQL `todos` / `todo_deps` (+ structured columns below) | What's done / ready / blocked |
+| Vision / live plan | `PLAN.md` (+ `spec/srs-native/` for shalls) | What we're building and current status |
+| Live backlog + status | session SQL `todos` / `todo_deps` (+ structured columns below) **and** PLAN.md checkboxes | What's done / ready / blocked |
 | Narrative + decisions | `docs/on-slide-coordinator-log.md` (repo-tracked) | Running log; **must be a repo file** so stateless sub-agents and post-compaction rehydration can read it (the session `plan.md` is neither) |
 | Shipped work | git history, queried **by todo id in the message** | Ground-truth of what landed |
 | Build/test evidence | command exit codes + freshly-stamped artifacts under `native/build/` | Gate proof |
+| Agent commands | `AGENTS.md` Native Commands, `native/tools/README.md` | How to build and gate |
 
 If these disagree, **git + passing gates win** over prose. Reconcile the others to match.
 
 ## Cycle 0 — Bootstrap (run once, only if `todos` is empty)
 
-1. Read `docs/on-slide-ux-plan.md` end to end.
+1. Read `PLAN.md` Quick Summary + the active Phase (11–13) end to end; skim `spec/srs-native/README.md`.
 2. **Extend the schema** so state is structured, not parsed from prose:
    ```sql
    ALTER TABLE todos ADD COLUMN attempts INTEGER DEFAULT 0;
@@ -183,6 +187,6 @@ before continuing.
   status transitions immediately.
 - Commit (with `[todo: <id>]`) **before** marking `done`; git is the recovery point.
 - Never edit `src/taskpane/` to satisfy an on-slide unit unless explicitly scoped.
-- Keep `docs/on-slide-ux-plan.md` authoritative for *intent*; keep `todos`
-  authoritative for *state*; keep `docs/on-slide-coordinator-log.md` as the readable
-  trail; reconcile when they drift.
+- Keep `PLAN.md` + `spec/srs-native/` authoritative for *intent*; keep `todos`
+  authoritative for *session state*; keep `docs/on-slide-coordinator-log.md` as the readable
+  trail; reconcile when they drift. Do not treat archived on-slide plans as live backlog.

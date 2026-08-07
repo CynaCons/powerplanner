@@ -31,13 +31,14 @@ IDs: `SR-<FEAT>-NNN` or `SRS-NAT-<FEAT>-NNN` (choose a stable short tag per file
 ## Current Files
 - SRS-NativeUXFoundations.md — covers 2026-07-11 user feedback points (component shape selectability, sticky appbar, context appbar, theme-coherent surfaces).
 - SRS-InteractionConventions.md — binding interaction-conventions requirements (direct manipulation, live preview, commit/cancel, affordances, platform conventions) for the native on-slide Gantt editor.
-- SRS-InteractionSmoothness.md — native interaction reactivity, latency, in-place reconcile, hover, selection eventing, drag commit echo, inline rename, and undo requirements migrated from legacy prose in v2.6.8.
+- SRS-InteractionSmoothness.md — native interaction reactivity, latency, in-place reconcile, hover, selection eventing, drag commit echo, inline rename, undo, and continuous paint cadence (SR-SMO-09..13, Phase 13 v2.8.1).
 - SRS-OverlayLifecycle.md — native overlay visibility gating, positioning, teardown, and rendering stability requirements migrated from legacy prose in v2.6.8.
 - SRS-SelectionChromeVisuals.md — native selection chrome, chart visual quality, app bar fit, and design-token requirements migrated from legacy prose in v2.6.8.
 - SRS-CreationFlows.md — native on-slide creation and editing flow requirements migrated from legacy prose in v2.6.8.
 - SRS-DependencyEditing.md — native dependency creation, port/linking, selection, and deletion requirements migrated from legacy prose in v2.6.8.
 - SRS-RowAndTaskSelection.md — native row/task selection, highlighting, progress editability, and emitted-shape stability requirements migrated from legacy prose in v2.6.8.
 - SRS-TimeWindow.md — explicit time-window editing (header ports, drag + two-phase render, clip/hide losslessness, projection/caching invariants, undo, commit budget) for the v2.7.x program (SR-WIN-01..29).
+- SRS-SessionRecorder.md — in-DLL session recorder (Record toggle, events.jsonl/meta/frames, SR-REC-01..17) and complete entity dump (SR-ENT-01..08) for agent visibility into live PowerPoint sessions (Phase 15 / v2.10.x; design: docs/session-recorder-spec.md).
 - (Future) Split files by concern aligned with v2.5.x iterations and docs/onslide-ux-inventory.md.
 
 When a native SRS generalizes to both surfaces, move the requirement to `../srs/` and update traces.

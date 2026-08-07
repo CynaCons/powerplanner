@@ -680,7 +680,9 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
     # Overall move/resize legitimately clears item sel to avoid weird combined chrome.
     # component-shape-protection intentionally deselects at its "reset" step (UF-07),
     # so it is exempt too (its own no_child_shape_selected / context_reset checks cover it).
-    if profile and not profile.startswith('overall-') and profile not in ('component-shape-protection', 'window-edge-drag'):
+    if profile and not profile.startswith('overall-') and profile not in (
+        'component-shape-protection', 'window-edge-drag', 'task-bar-unit',
+    ):
         empty_mid = False
         for i, (step, kind) in enumerate(own_sel_seq):
             if i > 0 and not kind:
@@ -694,7 +696,7 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
         results.append({
             "rule": "no_large_sel_drop_to_empty",
             "passed": True,
-            "detail": "skipped for overall-* / component-shape-protection (intentional deselect)",
+            "detail": "skipped for overall-* / component-shape-protection / task-bar-unit (intentional deselect)",
         })
 
     # 4. rowband count stable or increases (insert may +1)
@@ -1151,6 +1153,491 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": "appBarGroups == appBarLayoutGroups and appBarWindowCount == 1 at each step",
         })
 
+    if profile == "task-bar-unit":
+        # v2.9.0 SR-TASK-UNIT: TASK_LABEL / TASK / TASK_PROGRESS are one object.
+        by_step = {s.step: s.state for s in steps}
+
+        def _is_child_kind(k: str) -> bool:
+            return bool(k) and k != "CHART_ROOT"
+
+        def _task_unit(step_name: str, want_id: str) -> bool:
+            st = by_step.get(step_name, {})
+            native = st.get("nativeSelKind", "")
+            return (
+                st.get("ownSelKind") == "TASK"
+                and st.get("ownSelId") == want_id
+                and not _is_child_kind(native)
+            )
+
+        label_ok = _task_unit("label-settled", "discovery")
+        results.append({
+            "rule": "task_label_selects_task_unit",
+            "passed": label_ok,
+            "detail": (
+                f"label-settled ownSel=({by_step.get('label-settled', {}).get('ownSelKind')},"
+                f"{by_step.get('label-settled', {}).get('ownSelId')}) "
+                f"native={by_step.get('label-settled', {}).get('nativeSelKind')!r} "
+                f"(want TASK/discovery, native ''/CHART_ROOT)"
+            ),
+        })
+
+        grouped_label_ok = _task_unit("grouped-label-settled", "discovery")
+        results.append({
+            "rule": "task_group_child_selects_task_unit",
+            "passed": grouped_label_ok,
+            "detail": (
+                f"grouped-label-settled ownSel=("
+                f"{by_step.get('grouped-label-settled', {}).get('ownSelKind')},"
+                f"{by_step.get('grouped-label-settled', {}).get('ownSelId')}) "
+                f"native={by_step.get('grouped-label-settled', {}).get('nativeSelKind')!r} "
+                f"(outer CHART_ROOT + child TASK_LABEL must resolve TASK/discovery)"
+            ),
+        })
+
+        body_ok = _task_unit("body-settled", "discovery")
+        results.append({
+            "rule": "task_body_selects_same_unit",
+            "passed": body_ok,
+            "detail": (
+                f"body-settled ownSel=({by_step.get('body-settled', {}).get('ownSelKind')},"
+                f"{by_step.get('body-settled', {}).get('ownSelId')}) "
+                f"native={by_step.get('body-settled', {}).get('nativeSelKind')!r}"
+            ),
+        })
+
+        click_st = by_step.get("label-click", {})
+        click_ok = (
+            click_st.get("ownSelKind") == "TASK"
+            and click_st.get("ownSelId") == "discovery"
+        )
+        results.append({
+            "rule": "task_label_click_selects_task",
+            "passed": click_ok,
+            "detail": (
+                f"label-click ownSel=({click_st.get('ownSelKind')},{click_st.get('ownSelId')}) "
+                f"(want TASK/discovery)"
+            ),
+        })
+
+        prog_ok = _task_unit("progress-settled", "wireframes")
+        results.append({
+            "rule": "task_progress_selects_task_unit",
+            "passed": prog_ok,
+            "detail": (
+                f"progress-settled ownSel=({by_step.get('progress-settled', {}).get('ownSelKind')},"
+                f"{by_step.get('progress-settled', {}).get('ownSelId')}) "
+                f"native={by_step.get('progress-settled', {}).get('nativeSelKind')!r} "
+                f"(want TASK/wireframes)"
+            ),
+        })
+
+        pre_drag = by_step.get("pre-drag", {})
+        post_drag = by_step.get("post-drag", {})
+        pre_start = pre_drag.get("ownSelTaskStart", "")
+        post_start = post_drag.get("ownSelTaskStart", "")
+        pre_end = pre_drag.get("ownSelTaskEnd", "")
+        post_end = post_drag.get("ownSelTaskEnd", "")
+        dates_moved = bool(pre_start and post_start and (pre_start != post_start or pre_end != post_end))
+        still_task = (
+            post_drag.get("ownSelKind") == "TASK"
+            and post_drag.get("ownSelId") == "discovery"
+        )
+        drag_ok = still_task and dates_moved
+        results.append({
+            "rule": "task_label_drag_moves_dates",
+            "passed": drag_ok,
+            "detail": (
+                f"pre start/end={pre_start}/{pre_end} post={post_start}/{post_end} "
+                f"ownSel=({post_drag.get('ownSelKind')},{post_drag.get('ownSelId')}) "
+                f"(want same TASK/discovery with changed dates)"
+            ),
+        })
+
+    if profile == "subrow-dense":
+        by_step = {s.step: s.state for s in steps}
+
+        def _ents(step):
+            return ((by_step.get(step) or {}).get("entityDump") or {}).get("entities") or []
+
+        def _tasks(step):
+            return [e for e in _ents(step)
+                    if isinstance(e, dict) and e.get("kind") == "TASK"
+                    and isinstance(e.get("slideRect"), list) and len(e["slideRect"]) == 4]
+
+        def _task(step, tid):
+            return next((e for e in _tasks(step) if e.get("id") == tid), {})
+
+        def _rect(e):
+            # slideRect is [left, top, width, height] in slide points.
+            x, y, w, h = (float(v) for v in e["slideRect"])
+            return x, y, x + w, y + h
+
+        steps_present = [s for s in ("before", "date-drag", "row-drag") if _tasks(s)]
+        results.append({
+            "rule": "subrow_dense_chart_rendered",
+            "passed": len(steps_present) == 3 and len(_tasks("before")) == 11,
+            "detail": (
+                f"steps with TASK entities={steps_present} "
+                f"beforeTasks={len(_tasks('before'))} (want 3 steps, 11 tasks)"
+            ),
+        })
+
+        # The dense fixture must actually produce multi-lane rows, otherwise the
+        # rest of these invariants are vacuous. Lanes are counted as distinct
+        # slideRect tops within one rowId.
+        lane_counts = {}
+        for e in _tasks("before"):
+            lane_counts.setdefault(str(e.get("rowId")), set()).add(round(float(e["slideRect"][1]), 1))
+        multi = {r: len(v) for r, v in lane_counts.items() if len(v) > 1}
+        results.append({
+            "rule": "subrow_multi_lane_rows_present",
+            "passed": multi.get("sr_alpha", 0) >= 3 and multi.get("sr_gamma", 0) >= 3
+                      and multi.get("sr_delta", 0) >= 2 and multi.get("sr_eps", 0) >= 2,
+            "detail": f"lanes per row={ {r: len(v) for r, v in lane_counts.items()} } multi={multi}",
+        })
+
+        # Core lane invariant: two task bars in the SAME row on the SAME lane
+        # (same slideRect top) must never overlap horizontally. This is the
+        # regression guard for the packing rule in GanttLayout.cpp Step 2, which
+        # used to free a lane at the occupant's END DATE even though the bar
+        # paints through start + widthDays - 1 (inclusive end, 2-day floor).
+        overlaps = []
+        for step in ("before", "date-drag", "row-drag"):
+            ts = _tasks(step)
+            for i in range(len(ts)):
+                for j in range(i + 1, len(ts)):
+                    a, b = ts[i], ts[j]
+                    if a.get("rowId") != b.get("rowId"):
+                        continue
+                    ax0, ay0, ax1, ay1 = _rect(a)
+                    bx0, by0, bx1, by1 = _rect(b)
+                    if abs(ay0 - by0) > 0.5:      # different lane
+                        continue
+                    if ax0 < bx1 - 0.5 and bx0 < ax1 - 0.5:
+                        overlaps.append(f"{step}:{a.get('id')}~{b.get('id')}@{a.get('rowId')}")
+        results.append({
+            "rule": "subrow_lane_bars_never_overlap",
+            "passed": not overlaps,
+            "detail": f"same-row same-lane horizontal overlaps={overlaps or 'none'}",
+        })
+
+        # Date-only (exactly horizontal) drag must move the dates and NOTHING
+        # else: same rowId, same lane top, same width.
+        a2_pre, a2_post = _task("before", "a2"), _task("date-drag", "a2")
+        if a2_pre and a2_post:
+            px0, py0, px1, _ = _rect(a2_pre)
+            qx0, qy0, qx1, _ = _rect(a2_post)
+            moved = abs(qx0 - px0) > 0.5
+            same_row = a2_pre.get("rowId") == a2_post.get("rowId") == "sr_alpha"
+            same_lane = abs(qy0 - py0) <= 0.5
+            same_width = abs((qx1 - qx0) - (px1 - px0)) <= 1.0
+            detail = (f"a2 rowId {a2_pre.get('rowId')}->{a2_post.get('rowId')} "
+                      f"x {px0:.1f}->{qx0:.1f} laneTop {py0:.1f}->{qy0:.1f} "
+                      f"w {px1 - px0:.1f}->{qx1 - qx0:.1f}")
+            passed = moved and same_row and same_lane and same_width
+        else:
+            detail, passed = "a2 missing from before/date-drag dumps", False
+        results.append({
+            "rule": "subrow_date_drag_keeps_row_and_lane",
+            "passed": passed,
+            "detail": detail,
+        })
+
+        # A date-only drag of ONE task must not relocate its row-mates' lanes.
+        churn = []
+        for tid in ("a1", "a3"):
+            pre, post = _task("before", tid), _task("date-drag", tid)
+            if not pre or not post:
+                churn.append(f"{tid}:missing")
+                continue
+            if abs(_rect(pre)[1] - _rect(post)[1]) > 0.5:
+                churn.append(f"{tid}:{_rect(pre)[1]:.1f}->{_rect(post)[1]:.1f}")
+        results.append({
+            "rule": "subrow_date_drag_no_rowmate_lane_churn",
+            "passed": not churn,
+            "detail": f"row-mates that changed lane during a2's date-only drag: {churn or 'none'}",
+        })
+
+        # Grabbing a bar's CENTRE must start a TaskBody drag (kind 1), not a
+        # TaskProgress drag (kind 4) -- at percent 50 the progress handle sits on
+        # the bar's centre and GanttHitTest step 1b outranks the body, which
+        # silently turns "move this task" into "set it to 100%".
+        # dragTargetRowId in the snapshot is the LAST COMMITTED target, so the
+        # resolved drop row is read from the post-commit step, not mid-flight.
+        mid = by_step.get("mid-row-drag") or {}
+        mid_kind = mid.get("dragKind")
+        committed_target = str((by_step.get("row-drag") or {}).get("dragTargetRowId") or "")
+        results.append({
+            "rule": "subrow_row_drag_latches_target_row",
+            "passed": bool(mid.get("hasDrag")) and mid_kind == 1
+                      and committed_target == "sr_gamma",
+            "detail": (
+                f"mid-drag hasDrag={mid.get('hasDrag')} dragKind={mid_kind} "
+                f"committed dragTargetRowId={committed_target!r} "
+                f"(want True, 1=TaskBody, 'sr_gamma')"
+            ),
+        })
+
+        # Dragging into a multi-lane row must land in THAT row, on a lane inside
+        # that row's lane stack, colliding with nothing (the collision half is
+        # covered by subrow_lane_bars_never_overlap above).
+        b1_post = _task("row-drag", "b1")
+        gamma = [e for e in _tasks("row-drag")
+                 if e.get("rowId") == "sr_gamma" and e.get("id") != "b1"]
+        if b1_post and gamma:
+            _, by0, _, by1 = _rect(b1_post)
+            g_top = min(_rect(e)[1] for e in gamma)
+            g_bot = max(_rect(e)[3] for e in gamma)
+            in_row = b1_post.get("rowId") == "sr_gamma"
+            # Allow one lane above/below the pre-existing gamma bars: b1 may
+            # legitimately open a new lane in the stack.
+            lane_h = max(1.0, (g_bot - g_top) / max(1, len(gamma)))
+            in_stack = by0 >= g_top - lane_h - 0.5 and by1 <= g_bot + lane_h + 0.5
+            passed = in_row and in_stack
+            detail = (f"b1 rowId={b1_post.get('rowId')} laneTop={by0:.1f} "
+                      f"gammaStack=[{g_top:.1f}..{g_bot:.1f}] laneH={lane_h:.1f}")
+        else:
+            passed = False
+            detail = f"b1 present={bool(b1_post)} gammaTasks={len(gamma)}"
+        results.append({
+            "rule": "subrow_drag_into_multilane_row_lands_in_lane",
+            "passed": passed,
+            "detail": detail,
+        })
+
+    if profile == "entity-dump":
+        by_step = {s.step: s.state for s in steps}
+        before = ((by_step.get("before") or {}).get("entityDump") or {}).get("entities") or []
+        after = ((by_step.get("after-style") or {}).get("entityDump") or {}).get("entities") or []
+        required_kinds = {
+            "HEADER_BAND", "RAIL_FILL", "AXIS_BOT", "ROW_DIVIDER",
+            "TASK", "TASK_LABEL", "MILESTONE", "ROW_LABEL", "TITLE",
+        }
+        kinds = {str(e.get("kind", "")) for e in before if isinstance(e, dict)}
+        results.append({
+            "rule": "entity_kinds_complete",
+            "passed": bool(before) and required_kinds <= kinds,
+            "detail": f"entities={len(before)} missingKinds={sorted(required_kinds - kinds)}",
+        })
+
+        uniform_fields = {
+            "id", "kind", "parentId", "rowId", "slideRect", "screenRect",
+            "z", "style", "text", "flags",
+        }
+        uniform_ok = bool(before) and all(
+            isinstance(e, dict)
+            and uniform_fields <= set(e)
+            and {"fill", "stroke", "strokeW", "fontPx"} <= set(e.get("style") or {})
+            and {"selectedOwn", "selectedNative", "hover", "clipped", "visible"}
+                <= set(e.get("flags") or {})
+            for e in before
+        )
+        results.append({
+            "rule": "entity_uniform_schema",
+            "passed": uniform_ok,
+            "detail": f"uniform schema on {len(before)} entities",
+        })
+        task_children = [
+            e for e in before if e.get("kind") in
+            ("TASK_LABEL", "TASK_PROGRESS", "TASK_PCT", "RAIL_TASKLBL", "RAIL_DOT")
+        ]
+        parent_ok = bool(task_children) and all(e.get("parentId") == e.get("id") for e in task_children)
+        results.append({
+            "rule": "entity_parent_links",
+            "passed": parent_ok,
+            "detail": f"taskChildren={len(task_children)} all parentId==id: {parent_ok}",
+        })
+        rect_ok = bool(before) and all(
+            isinstance(e.get("slideRect"), list) and len(e["slideRect"]) == 4
+            and isinstance(e.get("screenRect"), list) and len(e["screenRect"]) == 4
+            for e in before
+        ) and any(
+            float(e["screenRect"][2]) > 0 and float(e["screenRect"][3]) > 0
+            for e in before
+        )
+        results.append({
+            "rule": "entity_dual_space_rects",
+            "passed": rect_ok,
+            "detail": "all entities expose 4-value slide/screen rects with visible nonzero samples",
+        })
+        def _entity(items, kind, entity_id):
+            return next((e for e in items if e.get("kind") == kind and e.get("id") == entity_id), {})
+        before_task = _entity(before, "TASK", "discovery")
+        after_task = _entity(after, "TASK", "discovery")
+        fresh = bool(before_task and after_task) and before_task.get("style") != after_task.get("style")
+        results.append({
+            "rule": "entity_dump_fresh_after_reconcile",
+            "passed": fresh,
+            "detail": f"TASK/discovery style before={before_task.get('style')} after={after_task.get('style')}",
+        })
+        # Task-bar hover is scoped to ONE bar unit (not the whole row band).
+        hover_state = by_step.get("task-hover") or {}
+        hover_entities = ((hover_state.get("entityDump") or {}).get("entities")) or []
+        hover_task_id = str(hover_state.get("hoverTaskId") or "")
+        before_hover_id = str((by_step.get("hover-off") or {}).get("hoverTaskId") or "")
+        def _hovered(kind, entity_id):
+            e = next((x for x in hover_entities
+                      if x.get("kind") == kind and x.get("id") == entity_id), {})
+            return bool((e.get("flags") or {}).get("hover")), bool(e)
+        bar_hover, bar_present = _hovered("TASK", "wireframes")
+        # Same bar unit, different primitive: hovering the bar must flag its label
+        # too (SR-TASK-UNIT-01 — one object, not separate hoverable pieces).
+        label_hover, _ = _hovered("TASK_LABEL", "wireframes")
+        # A task in a DIFFERENT row must stay un-hovered. (A row-mate such as
+        # "visual" is legitimately flagged by the pre-existing ROW-level hover,
+        # so hoverTaskId — not flags.hover — is the task-scoped discriminator.)
+        other_row_hover, _ = _hovered("TASK", "discovery")
+        hover_ok = (
+            before_hover_id == ""
+            and hover_task_id == "wireframes"
+            and bar_present and bar_hover and label_hover
+            and not other_row_hover
+        )
+        results.append({
+            "rule": "entity_task_hover_scoped",
+            "passed": hover_ok,
+            "detail": (
+                f"hoverTaskId before='{before_hover_id}' onHover='{hover_task_id}' "
+                f"wireframes TASK.hover={bar_hover} TASK_LABEL.hover={label_hover} "
+                f"other-row discovery.hover={other_row_hover} (want ''->wireframes, True, True, False)"
+            ),
+        })
+
+        results.append({
+            "rule": "entity_serializer_harness_live_parity",
+            "passed": bool(before) and bool(after),
+            "detail": "trace reads Overlay_DumpEntitiesForTest, the same serializer used by live snapshots",
+        })
+
+    if profile == "session-recorder":
+        by_step = {s.step: s.state for s in steps}
+        stopped = by_step.get("stopped") or {}
+        session_dir = Path(str(stopped.get("sessionDir") or ""))
+        events_path = session_dir / "events.jsonl"
+        meta_path = session_dir / "meta.json"
+        frames_dir = session_dir / "frames"
+        layout_ok = session_dir.is_dir() and events_path.is_file() and meta_path.is_file() and frames_dir.is_dir()
+        results.append({
+            "rule": "session_dir_layout",
+            "passed": layout_ok,
+            "detail": f"sessionDir={session_dir} layoutOk={layout_ok}",
+        })
+        try:
+            project_local = session_dir.resolve().is_relative_to((NATIVE_ROOT / "records").resolve())
+        except (OSError, ValueError):
+            project_local = False
+        results.append({
+            "rule": "project_local_session_dir",
+            "passed": project_local and not (session_dir / ".active").exists(),
+            "detail": (
+                f"sessionDir={session_dir} expectedRoot={NATIVE_ROOT / 'records'} "
+                f"activeMarker={(session_dir / '.active').exists()}"
+            ),
+        })
+        rec_events = []
+        parse_error = ""
+        if events_path.is_file():
+            try:
+                rec_events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            except Exception as exc:
+                parse_error = str(exc)
+        schema_ok = bool(rec_events) and not parse_error and all(
+            isinstance(e, dict) and isinstance(e.get("t"), int)
+            and isinstance(e.get("seq"), int) and isinstance(e.get("type"), str)
+            for e in rec_events
+        ) and all(
+            rec_events[i]["seq"] < rec_events[i + 1]["seq"]
+            and rec_events[i]["t"] <= rec_events[i + 1]["t"]
+            for i in range(len(rec_events) - 1)
+        )
+        results.append({
+            "rule": "events_jsonl_schema",
+            "passed": schema_ok,
+            "detail": f"events={len(rec_events)} parseError={parse_error!r}",
+        })
+        event_types = {e.get("type") for e in rec_events}
+        required_types = {"input", "nativeSel", "ownSel", "gesture", "op", "paint", "snapshot", "frame", "doc", "error"}
+        results.append({
+            "rule": "event_types_present",
+            "passed": required_types <= event_types,
+            "detail": f"missingTypes={sorted(required_types - event_types)}",
+        })
+        results.append({
+            "rule": "ownsel_events_on_transition",
+            "passed": any(e.get("type") == "ownSel" and e.get("kind") == "TASK" for e in rec_events),
+            "detail": "TASK ownSel transition recorded",
+        })
+        starts = [e for e in rec_events if e.get("type") == "gesture" and e.get("phase") == "start"]
+        endings = [e for e in rec_events if e.get("type") == "gesture" and e.get("phase") in ("commit", "cancel")]
+        results.append({
+            "rule": "gesture_phase_pairs",
+            "passed": bool(starts) and len(endings) >= len(starts),
+            "detail": f"starts={len(starts)} endings={len(endings)}",
+        })
+        snaps = [e for e in rec_events if e.get("type") == "snapshot"]
+        dedupe_ok = any(isinstance(e.get("entities"), list) for e in snaps) and any(e.get("entities") is None for e in snaps)
+        results.append({
+            "rule": "snapshot_entity_dedupe",
+            "passed": dedupe_ok,
+            "detail": f"snapshots={len(snaps)} full={sum(isinstance(e.get('entities'), list) for e in snaps)} deduped={sum(e.get('entities') is None for e in snaps)}",
+        })
+        progress_rects = set()
+        for snap in snaps:
+            entities = snap.get("entities")
+            if not isinstance(entities, list):
+                continue
+            for entity in entities:
+                if entity.get("kind") == "TASK_PROGRESS" and entity.get("id") == "wireframes":
+                    progress_rects.add(tuple(entity.get("slideRect") or []))
+        results.append({
+            "rule": "live_child_geometry_fresh",
+            "passed": len(progress_rects) >= 2,
+            "detail": f"TASK_PROGRESS/wireframes distinct live rects={sorted(progress_rects)}",
+        })
+        results.append({
+            "rule": "error_events_on_swallowed_catch",
+            "passed": any(e.get("type") == "error" and e.get("where") == "trace_session_recorder/forced" for e in rec_events),
+            "detail": "forced swallowed-catch path emitted structured error",
+        })
+        results.append({
+            "rule": "rec_indicator_visible",
+            "passed": (
+                (by_step.get("recording-on") or {}).get("sessionRecording") is True
+                and (by_step.get("recording-on") or {}).get("recIndicatorPainted") is True
+            ),
+            "detail": (
+                f"recording-on sessionRecording={(by_step.get('recording-on') or {}).get('sessionRecording')} "
+                f"recIndicatorPainted={(by_step.get('recording-on') or {}).get('recIndicatorPainted')}"
+            ),
+        })
+        frame_events = [e for e in rec_events if e.get("type") == "frame"]
+        composited_ok = bool(frame_events)
+        frame_details = []
+        for event in frame_events:
+            frame_path = session_dir / str(event.get("file") or "")
+            png_ok = False
+            dims = (0, 0)
+            try:
+                data = frame_path.read_bytes()
+                if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24:
+                    dims = (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+                    png_ok = dims[0] >= 300 and dims[1] >= 150 and len(data) >= 5000
+            except OSError:
+                pass
+            event_ok = (
+                event.get("surface") == "composited"
+                and isinstance(event.get("screenRect"), list)
+                and len(event.get("screenRect")) == 4
+                and png_ok
+            )
+            composited_ok = composited_ok and event_ok
+            frame_details.append(f"{frame_path.name}:{event.get('surface')}:{dims}:{png_ok}")
+        results.append({
+            "rule": "composited_frame_present",
+            "passed": composited_ok,
+            "detail": "; ".join(frame_details) or "no frame events",
+        })
+
     if profile == "component-shape-protection":
         # v2.6.1 U1 selection integrity. Steps emitted by the appbar-shot
         # "component-shape-protection" profile: pre, child-immed, child-settled,
@@ -1212,6 +1699,38 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": (
                 f"reset ownSelKind={reset_own!r} appBarGroups={reset_groups} "
                 f"hasScaleGroup={reset.get('hasScaleGroup')} (want ownSel empty + SCALE present)"
+            ),
+        })
+
+    if profile in ("drag-paint-cadence", "session-recorder"):
+        # Phase 13 v2.8.1 SR-SMO-09: mid-gesture paint cadence >= 30 Hz over
+        # a continuous drag window. Fields injected by the profile at mid step.
+        mid_step = "mid-drag" if profile == "session-recorder" else "mid"
+        mid = next((s.state for s in steps if s.step == mid_step), {})
+        hz = mid.get("paintHz")
+        if hz is None:
+            pc = mid.get("paintCadence") or {}
+            if isinstance(pc, dict):
+                hz = pc.get("hz")
+        try:
+            hz_f = float(hz) if hz is not None else None
+        except (TypeError, ValueError):
+            hz_f = None
+        wms = mid.get("paintWindowMs")
+        if wms is None and isinstance(mid.get("paintCadence"), dict):
+            wms = mid["paintCadence"].get("windowMs")
+        pc_n = mid.get("paintCount")
+        if pc_n is None and isinstance(mid.get("paintCadence"), dict):
+            pc_n = mid["paintCadence"].get("paintCount")
+        p50 = mid.get("paintP50Ms")
+        p95 = mid.get("paintP95Ms")
+        window_ok = wms is not None and float(wms) >= 300.0
+        results.append({
+            "rule": "paint_cadence_min_hz",
+            "passed": hz_f is not None and window_ok and hz_f >= 30.0,
+            "detail": (
+                f"paintHz={hz_f} (budget>=30) windowMs={wms} paintCount={pc_n} "
+                f"p50Ms={p50} p95Ms={p95} (60 Hz aspirational, not gated)"
             ),
         })
 
@@ -1330,6 +1849,143 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
             "detail": f"hasDrag={has_drag} dragPillText={pill!r}",
         })
 
+    if profile == "window-expand":
+        # 2026-07-18 discoverability gate. The user reported that after placing
+        # tasks the window-expand arrows could not be found. Ground truth here
+        # comes only from the overlay dump + posted input: the pointer is parked
+        # far from the axis header for every assertion that claims the affordance
+        # exists at rest.
+        by_step = {s.step: s.state for s in steps}
+        pre = by_step.get("pre", {})
+        hover = by_step.get("hover", {})
+        click1 = by_step.get("click1", {})
+        click2 = by_step.get("click2", {})
+        final = by_step.get("+3", {})
+
+        def _valid_rect(value: Any) -> bool:
+            return (
+                isinstance(value, dict)
+                and value.get("right", 0) > value.get("left", 0)
+                and value.get("bottom", 0) > value.get("top", 0)
+            )
+
+        def _area(value: Any) -> int:
+            if not _valid_rect(value):
+                return 0
+            return (value["right"] - value["left"]) * (value["bottom"] - value["top"])
+
+        # 1) Laid out on a POPULATED chart with no hover at all.
+        populated = int(pre.get("rowCount") or 0) >= 3 and bool(pre.get("docDatesSignature"))
+        laid_out = (
+            populated
+            and _valid_rect(pre.get("windowHeaderBandRect"))
+            and _valid_rect(pre.get("windowPortLRect"))
+            and _valid_rect(pre.get("windowPortRRect"))
+            and pre.get("windowPortHover") in (None, "Outside")
+        )
+        results.append({
+            "rule": "window_ports_laid_out_without_hover",
+            "passed": laid_out,
+            "detail": (
+                f"rows={pre.get('rowCount')} hover={pre.get('windowPortHover')!r} "
+                f"portL={pre.get('windowPortLRect')} portR={pre.get('windowPortRRect')}"
+            ),
+        })
+
+        # 2) Hit-testable: inside the alpha capture layer AND the zone hit test
+        #    agrees at the published rect's centre.
+        hit_ok = bool(
+            pre.get("windowPortLHitTestable") is True
+            and pre.get("windowPortRHitTestable") is True
+        )
+        results.append({
+            "rule": "window_ports_hit_testable",
+            "passed": hit_ok,
+            "detail": (
+                f"L={pre.get('windowPortLHitTestable')} R={pre.get('windowPortRHitTestable')} "
+                f"chartRect={pre.get('chartRect')}"
+            ),
+        })
+
+        # 3) Discoverable size: a 14x14 edge dot is what the user could not find.
+        min_side = 18
+        sides_ok = all(
+            _valid_rect(r)
+            and (r["right"] - r["left"]) >= min_side
+            and (r["bottom"] - r["top"]) >= min_side
+            for r in (pre.get("windowPortLRect"), pre.get("windowPortRRect"))
+        )
+        results.append({
+            "rule": "window_ports_target_size",
+            "passed": sides_ok,
+            "detail": (
+                f"portL={_area(pre.get('windowPortLRect'))}px2 portR={_area(pre.get('windowPortRRect'))}px2 "
+                f"min_side={min_side}"
+            ),
+        })
+
+        # 4) Hover resolves to the LEFT port and is reported as such.
+        results.append({
+            "rule": "window_port_hover_resolves",
+            "passed": hover.get("windowPortHover") == "WindowPortL",
+            "detail": f"windowPortHover={hover.get('windowPortHover')!r}",
+        })
+
+        # 5) A plain CLICK (no drag) really widens the visible range, and does so
+        #    again on the second click — which also proves the ports were
+        #    re-laid-out after the first commit's rebuild.
+        def _end(state: dict) -> Any:
+            value = state.get("windowEnd")
+            try:
+                return date.fromisoformat(value) if value else None
+            except (TypeError, ValueError):
+                return None
+
+        end1, end2 = _end(click1), _end(click2)
+        widened = bool(end1 and end2 and end2 > end1)
+        results.append({
+            "rule": "window_click_widens_range",
+            "passed": widened,
+            "detail": (
+                f"pre=({pre.get('windowStart')},{pre.get('windowEnd')}) "
+                f"click1=({click1.get('windowStart')},{click1.get('windowEnd')}) "
+                f"click2=({click2.get('windowStart')},{click2.get('windowEnd')})"
+            ),
+        })
+
+        # 6) Survives the rebuild: with the pointer parked away again after two
+        #    real commits, the ports are still laid out and still hit-testable.
+        survives = bool(
+            _valid_rect(final.get("windowPortLRect"))
+            and _valid_rect(final.get("windowPortRRect"))
+            and final.get("windowPortLHitTestable") is True
+            and final.get("windowPortRHitTestable") is True
+            and final.get("windowPortHover") in (None, "Outside")
+        )
+        results.append({
+            "rule": "window_ports_survive_rebuild",
+            "passed": survives,
+            "detail": (
+                f"portL={final.get('windowPortLRect')} portR={final.get('windowPortRRect')} "
+                f"hitL={final.get('windowPortLHitTestable')} hitR={final.get('windowPortRHitTestable')} "
+                f"hover={final.get('windowPortHover')!r}"
+            ),
+        })
+
+        # 7) The axis really moved: PP_PROJ agrees with the committed window.
+        proj_ok = False
+        try:
+            proj = final.get("ppProj") or {}
+            start_day = (date.fromisoformat(final["windowStart"]) - date(1970, 1, 1)).days
+            proj_ok = int(proj.get("minDay")) == start_day and int(proj.get("pad")) == 0
+        except (KeyError, TypeError, ValueError):
+            proj_ok = False
+        results.append({
+            "rule": "window_expand_projection_follows",
+            "passed": proj_ok,
+            "detail": f"window=({final.get('windowStart')},{final.get('windowEnd')}) ppProj={final.get('ppProj')}",
+        })
+
     if profile == "window-edge-drag":
         # W2 is intentionally preview-only. All proof points come from the
         # overlay dump and header-only captures, never from a synthetic model
@@ -1343,18 +1999,23 @@ def check_trace_invariants(tr: OperationTraceReport, profile: Optional[str] = No
         def _valid_rect(value: Any) -> bool:
             return isinstance(value, dict) and value.get("right", 0) > value.get("left", 0) and value.get("bottom", 0) > value.get("top", 0)
 
+        # 2026-07-18: this rule used to assert the ports were ABSENT until the
+        # pointer entered the axis header band. That gate was the defect (the
+        # band shrinks with row count until it is unhoverable), so the rule now
+        # asserts the opposite: the ports are laid out at rest, WITHOUT hover,
+        # and hover costs no idle repaint.
         idle_delta = pre.get("windowIdlePaintDelta")
-        ports_gated = (
+        ports_resting = (
             _valid_rect(pre.get("windowHeaderBandRect"))
-            and not _valid_rect(pre.get("windowPortLRect"))
-            and not _valid_rect(pre.get("windowPortRRect"))
+            and _valid_rect(pre.get("windowPortLRect"))
+            and _valid_rect(pre.get("windowPortRRect"))
             and _valid_rect(hover.get("windowPortLRect"))
             and _valid_rect(hover.get("windowPortRRect"))
             and idle_delta == 0
         )
         results.append({
-            "rule": "window_ports_hover_gated",
-            "passed": ports_gated,
+            "rule": "window_ports_persistently_laid_out",
+            "passed": ports_resting,
             "detail": f"prePorts=({pre.get('windowPortLRect')},{pre.get('windowPortRRect')}) hoverPorts=({hover.get('windowPortLRect')},{hover.get('windowPortRRect')}) idlePaintDelta={idle_delta}",
         })
 
@@ -1763,7 +2424,21 @@ def run_scenario(name: str, update_goldens: bool = False, **overrides) -> Harnes
             check_trace_invariants(tr, spec["trace_profile"])
             if spec.get("invariants"):
                 allowed = set(spec["invariants"])
-                tr.invariants = [i for i in (tr.invariants or []) if i.get("rule") in allowed]
+                produced = {
+                    i.get("rule"): i for i in (tr.invariants or [])
+                    if i.get("rule") in allowed
+                }
+                tr.invariants = [
+                    produced.get(rule, {
+                        "rule": rule,
+                        "passed": False,
+                        "detail": (
+                            f"scenario requested invariant {rule!r}, but profile "
+                            f"{spec['trace_profile']!r} did not produce it"
+                        ),
+                    })
+                    for rule in spec["invariants"]
+                ]
             if any(not i.get("passed", True) for i in (tr.invariants or [])):
                 tr.status = "FAIL"
         shim = HarnessReport(
@@ -1789,6 +2464,10 @@ def run_scenario(name: str, update_goldens: bool = False, **overrides) -> Harnes
     )
     if "goldens" in spec:
         run_with_golden_checks(report, spec["goldens"], update=update_goldens)
+        if any(not g.get("match") for g in (report.golden_comparisons or [])):
+            if report.status == "PASS":
+                report.status = "FAIL"
+            report.notes = (report.notes or "") + "; golden mismatch (use --update-goldens if intentional)"
     return report
 
 
@@ -2107,8 +2786,17 @@ if __name__ == "__main__":
         # item-selection continuity rules would be false failures).
         window_profile_rules = {
             "window-repair-lossless": None,
+            "window-expand": {
+                "window_ports_laid_out_without_hover",
+                "window_ports_hit_testable",
+                "window_ports_target_size",
+                "window_port_hover_resolves",
+                "window_click_widens_range",
+                "window_ports_survive_rebuild",
+                "window_expand_projection_follows",
+            },
             "window-edge-drag": {
-                "window_ports_hover_gated",
+                "window_ports_persistently_laid_out",
                 "window_pill_two_iso_dates",
                 "window_drag_snaps_and_clamps",
                 "window_preview_header_pixel_diff",

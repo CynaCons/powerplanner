@@ -7,7 +7,7 @@
 > the menu is very good"). Where this document, the mockup, and the tokens
 > disagree, precedence is: tokens → this document → mockup incidentals.
 >
-> Implementation plan + acceptance criteria: `docs/onslide-v4-plan.md`.
+> Implementation plan + acceptance: live `PLAN.md` (Phases 9–13). Historical V4 slice ACs: `docs/archive/onslide-v4-plan.md` (stub: `docs/onslide-v4-plan.md`).
 
 ## R0 — Global invariants (apply to every requirement)
 

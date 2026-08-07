@@ -5,7 +5,9 @@
 #include <vector>
 
 // Custom theme-coherent popup menu (SR-THEME-01/03). Replaces Win32 TrackPopupMenu.
-void ThemeMenu_Init(HINSTANCE inst, ULONG_PTR gdiplusToken, int (*scalePx)(int));
+using ThemeMenuRecordInputFn = void (*)(const char*, UINT, HWND, WPARAM, LPARAM);
+void ThemeMenu_Init(HINSTANCE inst, ULONG_PTR gdiplusToken, int (*scalePx)(int),
+	ThemeMenuRecordInputFn recordInput = nullptr);
 
 // Show menu at screen position. When block==true, pumps until dismissed and returns
 // the chosen HtMenuCmd (0 = cancelled). When block==false, shows the menu and returns

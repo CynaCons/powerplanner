@@ -85,6 +85,59 @@ static PpDocument MakeShowcaseDocument() {
 	return doc;
 }
 
+// Dense multi-lane fixture for the `subrow-dense` trace (trace_subrow_dense).
+// The showcase document only ever produces 2-lane rows, so it cannot expose the
+// class of defect the user reported ("a row made of several sub-rows ... doesn't
+// handle the sub-rows on the right side properly"). This one is deliberately
+// nastier:
+//   sr_alpha   3 lanes (a1/a2/a3 all mutually overlapping) + a milestone
+//   sr_beta    1 lane  (the drag SOURCE for the row-retarget leg)
+//   sr_gamma   3 lanes, later in time (the drag TARGET: "on the right side")
+//   sr_delta   2 lanes that merely TOUCH (b.start == a.end) — the case the old
+//              `tracks[k] <= t->start` packing rule stacked on ONE lane, so the
+//              two bars painted on top of each other
+//   sr_eps     1 lane containing a single-day task next to a next-day task —
+//              the SpanWidthDays(>=2) floor makes those paint over each other
+//              under the old rule as well
+static PpDocument MakeDenseSubRowDocument() {
+	PpDocument doc;
+	doc.title = "";
+	doc.scale = "week";
+	doc.rows = {
+		{ "sr_alpha", "Alpha",   "" },
+		{ "sr_beta",  "Beta",    "" },
+		{ "sr_gamma", "Gamma",   "" },
+		{ "sr_delta", "Delta",   "" },
+		{ "sr_eps",   "Epsilon", "" },
+	};
+	doc.tasks = {
+		{ "a1", "Alpha one",   "2026-06-01", "2026-06-14", "sr_alpha", "#4355E0", 100, "" },
+		{ "a2", "Alpha two",   "2026-06-05", "2026-06-18", "sr_alpha", "#4355E0", 60,  "" },
+		{ "a3", "Alpha three", "2026-06-09", "2026-06-22", "sr_alpha", "#4355E0", 30,  "" },
+		// percent 0 on purpose: at percent 50 the progress handle sits exactly on
+		// the bar's geometric CENTRE, and GanttHitTest step 1b resolves the
+		// progress edge before the task body — so "grab the middle and move it"
+		// silently becomes a percent drag. See the defect note in the report;
+		// this fixture must exercise a BODY drag, so it avoids that collision.
+		{ "b1", "Beta one",    "2026-06-02", "2026-06-11", "sr_beta",  "#0E8D8A", 0,   "" },
+		{ "g1", "Gamma one",   "2026-07-01", "2026-07-18", "sr_gamma", "#7A4FA3", 20,  "" },
+		{ "g2", "Gamma two",   "2026-07-06", "2026-07-24", "sr_gamma", "#7A4FA3", 10,  "" },
+		{ "g3", "Gamma three", "2026-07-11", "2026-07-30", "sr_gamma", "#7A4FA3", 0,   "" },
+		{ "d1", "Delta one",   "2026-06-01", "2026-06-15", "sr_delta", "#5B6C8F", 0,   "" },
+		{ "d2", "Delta two",   "2026-06-15", "2026-06-29", "sr_delta", "#5B6C8F", 0,   "" },
+		{ "e1", "Eps one",     "2026-06-03", "2026-06-03", "sr_eps",   "#B4553F", 0,   "" },
+		{ "e2", "Eps two",     "2026-06-04", "2026-06-12", "sr_eps",   "#B4553F", 0,   "" },
+	};
+	doc.milestones = {
+		{ "m_alpha", "Alpha gate", "2026-06-20", "sr_alpha", "" },
+		{ "m_gamma", "Gamma gate", "2026-07-28", "sr_gamma", "" },
+	};
+	doc.markers = {
+		{ "today", "today", "TODAY", "2026-06-25", "" },
+	};
+	return doc;
+}
+
 static void PumpFor(DWORD ms) {
 	DWORD start = ::GetTickCount();
 	MSG msg;
@@ -153,13 +206,13 @@ static void SelectChartRootNatively(PowerPoint::_SlidePtr& slide) {
 	} catch (...) {}
 }
 
-// v2.6.1 component-shape-protection: natively select a chart CHILD (a TASK bar
-// inside the CHART_ROOT group) so the overlay's suppression path (Tick poll /
-// COM sink via Overlay_OnNativeSelectionChanged) can be exercised. Returns the
-// observed native selection PP_KIND immediately after Select() (before any tick
-// suppresses it), or "" on failure — logged by the caller as honest evidence
-// that a child really was selected before suppression cleared it.
-static std::string SelectTaskChildNatively(PowerPoint::_SlidePtr& slide, const char* taskId) {
+// Natively select a chart CHILD by PP_KIND + PP_ID so the overlay suppression
+// path (Tick poll / COM sink via Overlay_OnNativeSelectionChanged) can be
+// exercised. Returns the observed native selection PP_KIND immediately after
+// Select() (before any tick suppresses it), or "" on failure.
+static std::string SelectChartChildNatively(PowerPoint::_SlidePtr& slide,
+	const char* kindWant, const char* idWant) {
+	if (!kindWant || !*kindWant) return "";
 	try {
 		PowerPoint::ShapesPtr shs = slide->GetShapes();
 		long nn = shs->GetCount();
@@ -172,15 +225,80 @@ static std::string SelectTaskChildNatively(PowerPoint::_SlidePtr& slide, const c
 			for (long i = 1; i <= n; ++i) {
 				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
 				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
-				if (!k.length() || std::string((const char*)_bstr_t(k)) != "TASK") continue;
+				if (!k.length() || std::string((const char*)_bstr_t(k)) != kindWant) continue;
 				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
-				if (taskId && *taskId && (!id.length() || std::string((const char*)_bstr_t(id)) != taskId)) continue;
+				if (idWant && *idWant && (!id.length() || std::string((const char*)_bstr_t(id)) != idWant)) continue;
 				try { ch->Select(Office::msoTrue); } catch (...) { return ""; }
 				return std::string((const char*)_bstr_t(k));
 			}
 		}
 	} catch (...) {}
 	return "";
+}
+
+static bool MoveChartChildBy(PowerPoint::_SlidePtr& slide, const char* kindWant,
+	const char* idWant, float dx, float dy) {
+	if (!kindWant || !*kindWant || !idWant || !*idWant) return false;
+	try {
+		PowerPoint::ShapesPtr shs = slide->GetShapes();
+		for (long ii = 1; ii <= shs->GetCount(); ++ii) {
+			PowerPoint::ShapePtr root = shs->Item(_variant_t(ii));
+			_bstr_t rk = root->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!rk.length() || std::string((const char*)_bstr_t(rk)) != "CHART_ROOT") continue;
+			PowerPoint::GroupShapesPtr items = root->GetGroupItems();
+			for (long i = 1; i <= items->GetCount(); ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				if (k.length() && id.length()
+					&& std::string((const char*)_bstr_t(k)) == kindWant
+					&& std::string((const char*)_bstr_t(id)) == idWant) {
+					ch->PutLeft(ch->GetLeft() + dx);
+					ch->PutTop(ch->GetTop() + dy);
+					return true;
+				}
+			}
+		}
+	} catch (...) {}
+	return false;
+}
+
+// v2.6.1 component-shape-protection: natively select a TASK bar child.
+static std::string SelectTaskChildNatively(PowerPoint::_SlidePtr& slide, const char* taskId) {
+	return SelectChartChildNatively(slide, "TASK", taskId);
+}
+
+// Screen rect of a chart child by PP_KIND + PP_ID (TASK_LABEL, TASK_PROGRESS, …).
+static bool FindChartChildRect(PowerPoint::_ApplicationPtr& app,
+	const char* kindWant, const char* idWant, RECT* out) {
+	if (!out || !kindWant || !*kindWant || !idWant || !*idWant) return false;
+	try {
+		PowerPoint::DocumentWindowPtr w = app->GetActiveWindow();
+		PowerPoint::_SlidePtr sl = w->GetView()->GetSlide();
+		PowerPoint::ShapesPtr shs = sl->GetShapes();
+		long nn = shs->GetCount();
+		for (long ii = 1; ii <= nn; ++ii) {
+			PowerPoint::ShapePtr root = shs->Item(_variant_t(ii));
+			_bstr_t rk = root->GetTags()->Item(_bstr_t(L"PP_KIND"));
+			if (!rk.length() || std::string((const char*)_bstr_t(rk)) != "CHART_ROOT") continue;
+			PowerPoint::GroupShapesPtr items = root->GetGroupItems();
+			long n = items->GetCount();
+			for (long i = 1; i <= n; ++i) {
+				PowerPoint::ShapePtr ch = items->Item(_variant_t(i));
+				_bstr_t k = ch->GetTags()->Item(_bstr_t(L"PP_KIND"));
+				if (!k.length() || std::string((const char*)_bstr_t(k)) != kindWant) continue;
+				_bstr_t id = ch->GetTags()->Item(_bstr_t(L"PP_ID"));
+				if (!id.length() || std::string((const char*)_bstr_t(id)) != idWant) continue;
+				float l = ch->GetLeft(), t = ch->GetTop(), ww = ch->GetWidth(), h = ch->GetHeight();
+				out->left = w->PointsToScreenPixelsX(l);
+				out->top = w->PointsToScreenPixelsY(t);
+				out->right = w->PointsToScreenPixelsX(l + ww);
+				out->bottom = w->PointsToScreenPixelsY(t + h);
+				return true;
+			}
+		}
+	} catch (...) {}
+	return false;
 }
 
 // Read the current native selection's first-shape PP_KIND (""/"CHART_ROOT"/child)
@@ -321,6 +439,34 @@ static void PostTaskBodyDrag(HWND ov, POINT screenCenter, int dragPx) {
 	Overlay_SetCursorPosOverrideForTest(true, upScreen);
 	::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)finalX, (short)clientPt.y));
 	PumpFor(400);
+}
+
+// Two-axis variant of PostTaskBodyDrag: the sub-row traces need a drag that is
+// EXACTLY horizontal (dy == 0, the "date-only" leg that must not change rowId)
+// and one that also travels vertically into another row's lane stack.
+static void PostTaskBodyDragXY(HWND ov, POINT screenCenter, int dragPx, int dragPy) {
+	if (!ov) return;
+	POINT clientPt = screenCenter;
+	::ScreenToClient(ov, &clientPt);
+	Overlay_SetCursorPosOverrideForTest(true, screenCenter);
+	::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON,
+		MAKELPARAM((short)clientPt.x, (short)clientPt.y));
+	PumpFor(60);
+	const int steps = 6;
+	for (int s = 1; s <= steps; ++s) {
+		const int ox = dragPx * s / steps, oy = dragPy * s / steps;
+		POINT screenPt = { screenCenter.x + ox, screenCenter.y + oy };
+		Overlay_SetCursorPosOverrideForTest(true, screenPt);
+		::PostMessageW(ov, WM_MOUSEMOVE, MK_LBUTTON,
+			MAKELPARAM((short)(clientPt.x + ox), (short)(clientPt.y + oy)));
+		PumpFor(45);
+	}
+	POINT upScreen = { screenCenter.x + dragPx, screenCenter.y + dragPy };
+	Overlay_SetCursorPosOverrideForTest(true, upScreen);
+	::PostMessageW(ov, WM_LBUTTONUP, 0,
+		MAKELPARAM((short)(clientPt.x + dragPx), (short)(clientPt.y + dragPy)));
+	PumpFor(500);
+	Overlay_SetCursorPosOverrideForTest(false, POINT{});
 }
 
 static bool FindTaskBodyRect(PowerPoint::_ApplicationPtr& app, const char* taskId, RECT* out);
@@ -1592,6 +1738,15 @@ int wmain(int argc, wchar_t** argv) {
 	for (int i = 1; i < argc; ++i) {
 		if (wcscmp(argv[i], L"--gallery") == 0) { gallery = true; break; }
 	}
+	// The seeded document is chosen BEFORE the trace-profile argument is parsed
+	// further down, so the subrow-dense fixture needs its own early scan.
+	bool denseSubRow = false;
+	for (int i = 1; i + 1 < argc; ++i) {
+		if (wcscmp(argv[i], L"--trace") == 0 && wcscmp(argv[i + 1], L"subrow-dense") == 0) {
+			denseSubRow = true;
+			break;
+		}
+	}
 	HWND existingPpt = ::FindWindowW(L"PPTFrameClass", nullptr);
 	if (existingPpt && !attach) {
 		wprintf(L"APPBARSHOT REFUSE: PowerPoint already running; close it or pass --attach\n");
@@ -1636,7 +1791,7 @@ int wmain(int argc, wchar_t** argv) {
 			title->GetFill()->PutVisible(Office::msoFalse);
 		}
 
-		PpDocument showcaseDoc = MakeShowcaseDocument();
+		PpDocument showcaseDoc = denseSubRow ? MakeDenseSubRowDocument() : MakeShowcaseDocument();
 		// The gallery has one explicit dependency-selection frame. Keep the
 		// normal harness fixture untouched so existing traces remain byte-for-byte
 		// representative of their established setup.
@@ -1901,10 +2056,15 @@ int wmain(int argc, wchar_t** argv) {
 				wcscmp(traceProfile, L"row-label-select") == 0 ||
 				wcscmp(traceProfile, L"row-then-overall") == 0 ||
 				wcscmp(traceProfile, L"task-select-progress") == 0 ||
+				wcscmp(traceProfile, L"task-bar-unit") == 0 ||
+				wcscmp(traceProfile, L"entity-dump") == 0 ||
+				wcscmp(traceProfile, L"subrow-dense") == 0 ||
+				wcscmp(traceProfile, L"session-recorder") == 0 ||
 				wcscmp(traceProfile, L"component-shape-protection") == 0 ||
 				wcscmp(traceProfile, L"appbar-docked") == 0 ||
 				wcscmp(traceProfile, L"appbar-context-evolution") == 0 ||
 				wcscmp(traceProfile, L"multi-row-delete") == 0 ||
+				wcscmp(traceProfile, L"drag-paint-cadence") == 0 ||
 				wcsstr(traceProfile, L"overall-"));
 			if (traceCleanStart) {
 				Overlay_SelectForTest("", ""); // clean start: the branch drives selection itself
@@ -2051,6 +2211,7 @@ int wmain(int argc, wchar_t** argv) {
 				Overlay_SelectForTest("", "");
 				PumpFor(300);
 				captureStep("pre", traceProfile);
+
 				Overlay_PerformAppBarCommandForTest(HtCmd_ScaleMonth);
 				captureStep("scale-immed", traceProfile);
 				PumpFor(150);
@@ -2333,6 +2494,56 @@ int wmain(int argc, wchar_t** argv) {
 				captureStep("+1", traceProfile);
 				PumpFor(300);
 				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"drag-paint-cadence") == 0) {
+				// Phase 13 v2.8.1 SR-SMO-09..12: continuous paint cadence during
+				// a long mid-gesture task drag (>=300 ms of motion).
+				Overlay_SelectForTest("TASK", "interviews");
+				SelectChartRootNatively(slide);
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+				HWND ov = OverlayHwnd();
+				POINT center{};
+				if (ov && FindTaskBodyCenter(app, "interviews", &center)) {
+					POINT clientPt = center;
+					::ScreenToClient(ov, &clientPt);
+					Overlay_SetCursorPosOverrideForTest(true, center);
+					::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((short)clientPt.x, (short)clientPt.y));
+					PumpFor(40);
+					Overlay_BeginPaintCadenceSampleForTest();
+					// Denser moves over >=300 ms so paint cadence reflects continuous
+					// drag preview (SR-SMO-09), not a sparse 6-step sample.
+					const int dragPx = 120, dragSteps = 40;
+					for (int s = 1; s <= dragSteps; ++s) {
+						POINT sp = { center.x + dragPx * s / dragSteps, center.y };
+						Overlay_SetCursorPosOverrideForTest(true, sp);
+						::PostMessageW(ov, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM((short)(clientPt.x + dragPx * s / dragSteps), (short)clientPt.y));
+						// Pump one paint cycle; 16 ms ≈ 60 Hz host cadence.
+						PumpFor(16);
+					}
+					double hz = 0.0, p50 = 0.0, p95 = 0.0;
+					long pc = 0, wms = 0;
+					Overlay_GetPaintCadenceForTest(&hz, &pc, &wms, &p50, &p95);
+					char cadExtra[220];
+					::snprintf(cadExtra, sizeof(cadExtra),
+						"\"paintHz\":%.2f,\"paintCount\":%ld,\"paintWindowMs\":%ld,\"paintP50Ms\":%.2f,\"paintP95Ms\":%.2f,",
+						hz, pc, wms, p50, p95);
+					extraTraceFieldsForTrace = cadExtra;
+					captureStep("mid", traceProfile);
+					extraTraceFieldsForTrace.clear();
+					wprintf(L"TRACE CADENCE: {\"hz\":%.2f,\"paintCount\":%ld,\"windowMs\":%ld,\"p50Ms\":%.2f,\"p95Ms\":%.2f,\"budgetHz\":30}\n",
+						hz, pc, wms, p50, p95);
+					::fflush(stdout);
+					Overlay_EndPaintCadenceSampleForTest();
+					POINT up = { center.x + dragPx, center.y };
+					Overlay_SetCursorPosOverrideForTest(true, up);
+					::PostMessageW(ov, WM_LBUTTONUP, 0, MAKELPARAM((short)(clientPt.x + dragPx), (short)clientPt.y));
+					PumpFor(400);
+				}
+				captureStep("immed", traceProfile);
+				PumpFor(150);
+				captureStep("+1", traceProfile);
+				PumpFor(300);
+				captureStep("+3", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"link-drag-port") == 0) {
 				Overlay_SelectForTest("TASK", "discovery");
 				SelectChartRootNatively(slide);
@@ -2467,6 +2678,67 @@ int wmain(int argc, wchar_t** argv) {
 				PumpFor(200);
 				captureStep("+1", traceProfile);
 				PumpFor(300);
+				captureStep("+3", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"window-expand") == 0) {
+				// Discoverability regression gate (2026-07-18). On the populated
+				// showcase doc (many tasks + milestones) the window-expand ports
+				// must be laid out, alpha-covered and hit-testable with the
+				// pointer parked FAR from the axis header, must survive the
+				// rebuild the commit triggers, and a plain CLICK (no drag) must
+				// really widen the visible range.
+				Overlay_SelectForTest("", "");
+				// Park the cursor in the top-left corner: nowhere near the header
+				// band, so nothing here can be explained by a hover reveal.
+				Overlay_SetCursorPosOverrideForTest(true, POINT{ 0, 0 });
+				PumpFor(400);
+				captureStep("pre", traceProfile);
+
+				HWND ov = OverlayHwnd();
+				RECT leftPort{}, rightPort{};
+				if (ov && ParseNamedRectFromDump(Overlay_DumpChromeStateForTest(), "windowPortLRect", &leftPort)
+					&& leftPort.right > leftPort.left) {
+					POINT lp2 = { (leftPort.left + leftPort.right) / 2, (leftPort.top + leftPort.bottom) / 2 };
+					POINT lp2Client = lp2;
+					::ScreenToClient(ov, &lp2Client);
+					Overlay_SetCursorPosOverrideForTest(true, lp2);
+					::PostMessageW(ov, WM_MOUSEMOVE, 0, MAKELPARAM((short)lp2Client.x, (short)lp2Client.y));
+					PumpFor(200);
+				} else {
+					wprintf(L"WINDOWEXPAND: windowPortLRect not published with pointer parked away\n");
+				}
+				captureStep("hover", traceProfile);
+
+				// Two successive plain clicks on the RIGHT port. Between them the
+				// pointer is parked away again, so the second click also proves the
+				// ports were re-laid-out after the first commit's rebuild.
+				auto clickRightPort = [&](const char* step) {
+					if (!ov) { captureStep(step, traceProfile); return; }
+					RECT port{};
+					if (ParseNamedRectFromDump(Overlay_DumpChromeStateForTest(), "windowPortRRect", &port)
+						&& port.right > port.left) {
+						POINT p = { (port.left + port.right) / 2, (port.top + port.bottom) / 2 };
+						POINT pc = p;
+						::ScreenToClient(ov, &pc);
+						LPARAM plp = MAKELPARAM((short)pc.x, (short)pc.y);
+						Overlay_SetCursorPosOverrideForTest(true, p);
+						::PostMessageW(ov, WM_MOUSEMOVE, 0, plp);
+						PumpFor(120);
+						// No intervening WM_MOUSEMOVE: this must stay a CLICK, never
+						// a threshold-crossing drag.
+						::PostMessageW(ov, WM_LBUTTONDOWN, MK_LBUTTON, plp);
+						PumpFor(80);
+						::PostMessageW(ov, WM_LBUTTONUP, 0, plp);
+						PumpFor(600);
+					} else {
+						wprintf(L"WINDOWEXPAND: windowPortRRect not published before %hs\n", step);
+					}
+					Overlay_SetCursorPosOverrideForTest(true, POINT{ 0, 0 });
+					PumpFor(250);
+					captureStep(step, traceProfile);
+				};
+				clickRightPort("click1");
+				clickRightPort("click2");
+				PumpFor(400);
 				captureStep("+3", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"window-edge-drag") == 0) {
 				// W2: real hover + posted mouse gesture, with target coordinates read
@@ -2995,6 +3267,271 @@ int wmain(int argc, wchar_t** argv) {
 				Overlay_InvalidateAppBarForTest();
 				PumpFor(400);
 				captureStep("component", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"subrow-dense") == 0) {
+				// Sub-row (lane) positioning on a DENSE chart. Two legs:
+				//   date-drag  a2 lives on lane 1 of the 3-lane row sr_alpha.
+				//              Drag it EXACTLY horizontally. Its rowId must not
+				//              move (the live recording of 2026-07-18 caught a
+				//              date-only drag silently rewriting rowId).
+				//   row-drag   b1 is alone on the single-lane row sr_beta. Drag
+				//              it down-right into sr_gamma's 3-lane stack ("the
+				//              right side") and it must land in that row, on a
+				//              lane that collides with nothing.
+				// Every step publishes the entity dump so the invariants can read
+				// per-entity rowId + slide/screen rects rather than guessing from
+				// pixels.
+				auto publishEntities = [&]() {
+					const char* dump = Overlay_DumpEntitiesForTest();
+					extraTraceFieldsForTrace = "\"entityDump\":";
+					extraTraceFieldsForTrace += dump ? dump : "{\"entities\":[]}";
+					extraTraceFieldsForTrace += ",";
+				};
+				HWND srOv = OverlayHwnd();
+				Overlay_SelectForTest("", "");
+				PumpFor(350);
+				publishEntities();
+				captureStep("before", traceProfile);
+
+				POINT a2c{};
+				if (srOv && FindTaskBodyCenter(app, "a2", &a2c)) {
+					PostTaskBodyDragXY(srOv, a2c, 90, 0); // date-only: dy == 0
+					PumpFor(500);
+				}
+				publishEntities();
+				captureStep("date-drag", traceProfile);
+
+				POINT b1c{}, g2c{};
+				const bool okB1 = srOv && FindTaskBodyCenter(app, "b1", &b1c);
+				const bool okG2 = srOv && FindTaskBodyCenter(app, "g2", &g2c);
+				if (okB1 && okG2) {
+					const int ddx = (int)(g2c.x - b1c.x), ddy = (int)(g2c.y - b1c.y);
+					POINT bc = b1c;
+					::ScreenToClient(srOv, &bc);
+					Overlay_SetCursorPosOverrideForTest(true, b1c);
+					::PostMessageW(srOv, WM_LBUTTONDOWN, MK_LBUTTON,
+						MAKELPARAM((short)bc.x, (short)bc.y));
+					PumpFor(80);
+					for (int s = 1; s <= 6; ++s) {
+						POINT sp = { b1c.x + ddx * s / 6, b1c.y + ddy * s / 6 };
+						Overlay_SetCursorPosOverrideForTest(true, sp);
+						::PostMessageW(srOv, WM_MOUSEMOVE, MK_LBUTTON,
+							MAKELPARAM((short)(bc.x + ddx * s / 6), (short)(bc.y + ddy * s / 6)));
+						PumpFor(50);
+					}
+					publishEntities();
+					captureStep("mid-row-drag", traceProfile);
+					POINT up = { b1c.x + ddx, b1c.y + ddy };
+					Overlay_SetCursorPosOverrideForTest(true, up);
+					::PostMessageW(srOv, WM_LBUTTONUP, 0,
+						MAKELPARAM((short)(bc.x + ddx), (short)(bc.y + ddy)));
+					PumpFor(700);
+					Overlay_SetCursorPosOverrideForTest(false, POINT{});
+				}
+				publishEntities();
+				captureStep("row-drag", traceProfile);
+				extraTraceFieldsForTrace.clear();
+			} else if (traceProfile && wcscmp(traceProfile, L"entity-dump") == 0) {
+				auto publishEntities = [&]() {
+					const char* dump = Overlay_DumpEntitiesForTest();
+					extraTraceFieldsForTrace = "\"entityDump\":";
+					extraTraceFieldsForTrace += dump ? dump : "{\"entities\":[]}";
+					extraTraceFieldsForTrace += ",";
+				};
+				Overlay_SelectForTest("TASK", "discovery");
+				PumpFor(350);
+				publishEntities();
+				captureStep("before", traceProfile);
+				Overlay_PerformAppBarCommandForTest(HtCmd_Swatch2);
+				PumpFor(450);
+				publishEntities();
+				captureStep("after-style", traceProfile);
+
+				// Task-bar hover: park the pointer well outside the chart for a
+				// DETERMINISTIC no-hover control (the steps above run with the
+				// machine's real cursor wherever it happens to be), then move it
+				// onto a task in a different row than the selected one.
+				{
+					HWND hovOv = OverlayHwnd();
+					POINT offPt{ 0, 0 };
+					Overlay_SetCursorPosOverrideForTest(true, offPt);
+					if (hovOv) ::PostMessageW(hovOv, WM_MOUSEMOVE, 0, MAKELPARAM(0, 0));
+					PumpFor(300);
+					publishEntities();
+					captureStep("hover-off", traceProfile);
+
+					POINT hoverPt{};
+					if (hovOv && FindTaskBodyCenter(app, "wireframes", &hoverPt)) {
+						POINT hoverClient = hoverPt;
+						::ScreenToClient(hovOv, &hoverClient);
+						Overlay_SetCursorPosOverrideForTest(true, hoverPt);
+						::PostMessageW(hovOv, WM_MOUSEMOVE, 0,
+							MAKELPARAM((short)hoverClient.x, (short)hoverClient.y));
+						PumpFor(350);
+					}
+					publishEntities();
+					captureStep("task-hover", traceProfile);
+					Overlay_SetCursorPosOverrideForTest(false, POINT{});
+					PumpFor(250);
+				}
+				extraTraceFieldsForTrace.clear();
+			} else if (traceProfile && wcscmp(traceProfile, L"session-recorder") == 0) {
+				Overlay_SelectForTest("", "");
+				PumpFor(250);
+				Overlay_PerformAppBarCommandForTest(HtCmd_RecordSession);
+				PumpFor(300);
+				captureStep("recording-on", traceProfile);
+
+				// Native child-only geometry must be visible even when the root
+				// bounds/count/tags stay unchanged. Restore after the sample.
+				if (MoveChartChildBy(slide, "TASK_PROGRESS", "wireframes", 4.0f, 0.0f)) {
+					PumpFor(1100);
+					MoveChartChildBy(slide, "TASK_PROGRESS", "wireframes", -4.0f, 0.0f);
+					PumpFor(1100);
+				}
+
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(250);
+				Overlay_PerformAppBarCommandForTest(HtCmd_NudgePlus1);
+				PumpFor(350);
+
+				HWND recOv = OverlayHwnd();
+				POINT center{};
+				if (recOv && FindTaskBodyCenter(app, "discovery", &center)) {
+					POINT clientPt = center;
+					::ScreenToClient(recOv, &clientPt);
+					Overlay_SetCursorPosOverrideForTest(true, center);
+					::PostMessageW(recOv, WM_LBUTTONDOWN, MK_LBUTTON,
+						MAKELPARAM((short)clientPt.x, (short)clientPt.y));
+					PumpFor(40);
+					Overlay_BeginPaintCadenceSampleForTest();
+					const int dragPx = 96, dragSteps = 36;
+					for (int s = 1; s <= dragSteps; ++s) {
+						POINT sp = { center.x + dragPx * s / dragSteps, center.y };
+						Overlay_SetCursorPosOverrideForTest(true, sp);
+						::PostMessageW(recOv, WM_MOUSEMOVE, MK_LBUTTON,
+							MAKELPARAM((short)(clientPt.x + dragPx * s / dragSteps), (short)clientPt.y));
+						PumpFor(16);
+					}
+					double hz = 0.0, p50 = 0.0, p95 = 0.0;
+					long pc = 0, wms = 0;
+					Overlay_GetPaintCadenceForTest(&hz, &pc, &wms, &p50, &p95);
+					char cadence[220];
+					::snprintf(cadence, sizeof(cadence),
+						"\"paintHz\":%.2f,\"paintCount\":%ld,\"paintWindowMs\":%ld,\"paintP50Ms\":%.2f,\"paintP95Ms\":%.2f,",
+						hz, pc, wms, p50, p95);
+					extraTraceFieldsForTrace = cadence;
+					captureStep("mid-drag", traceProfile);
+					extraTraceFieldsForTrace.clear();
+					Overlay_EndPaintCadenceSampleForTest();
+					::PostMessageW(recOv, WM_LBUTTONUP, 0,
+						MAKELPARAM((short)(clientPt.x + dragPx), (short)clientPt.y));
+					PumpFor(500);
+				}
+				Overlay_RecError("trace_session_recorder/forced", (long)E_FAIL,
+					"forced swallowed-catch evidence");
+				PumpFor(1150); // exercises the ~1 Hz idle snapshot path
+				captureStep("recorded", traceProfile);
+				Overlay_StopSessionRecordForTest();
+				captureStep("stopped", traceProfile);
+			} else if (traceProfile && wcscmp(traceProfile, L"task-bar-unit") == 0) {
+				// v2.9.0 SR-TASK-UNIT: task bar is one object. Native pick of
+				// TASK_LABEL and TASK_PROGRESS both mirror to ownSel TASK and
+				// suppress the child; overlay click on the label rect selects
+				// the same task; body drag from the label still moves dates.
+				Overlay_SelectForTest("", "");
+				PumpFor(300);
+				captureStep("pre", traceProfile);
+
+				// Live PowerPoint reports the group in ShapeRange and the actual
+				// clicked primitive in ChildShapeRange. The child must win.
+				int actGroupedLabel = Overlay_OnNativeSelectionChangedWithChild(
+					"CHART_ROOT", "", true, true, "TASK_LABEL", "discovery");
+				wprintf(L"TASKUNIT groupedLabelSelect: handlerAction=%d\n", actGroupedLabel);
+				PumpFor(220);
+				captureStep("grouped-label-settled", traceProfile);
+
+				// (1) Native select TASK_LABEL → ownSel TASK, no child remains.
+				std::string labelAtSelect = SelectChartChildNatively(slide, "TASK_LABEL", "discovery");
+				int actLabel = Overlay_OnNativeSelectionChanged("TASK_LABEL", "discovery", true);
+				wprintf(L"TASKUNIT labelSelect: com=%hs handlerAction=%d\n",
+					labelAtSelect.empty() ? "(none)" : labelAtSelect.c_str(), actLabel);
+				PumpFor(220);
+				captureStep("label-immed", traceProfile);
+				PumpFor(450);
+				captureStep("label-settled", traceProfile);
+
+				// (2) Clear, then native select TASK body rect — same unit id.
+				Overlay_SelectForTest("", "");
+				PumpFor(200);
+				std::string bodyAtSelect = SelectChartChildNatively(slide, "TASK", "discovery");
+				int actBody = Overlay_OnNativeSelectionChanged("TASK", "discovery", true);
+				wprintf(L"TASKUNIT bodySelect: com=%hs handlerAction=%d\n",
+					bodyAtSelect.empty() ? "(none)" : bodyAtSelect.c_str(), actBody);
+				PumpFor(220);
+				captureStep("body-immed", traceProfile);
+				PumpFor(450);
+				captureStep("body-settled", traceProfile);
+
+				// (3) Overlay click center of TASK_LABEL → ownSel TASK discovery.
+				Overlay_SelectForTest("", "");
+				PumpFor(200);
+				HWND ovUnit = OverlayHwnd();
+				RECT labelRc{};
+				if (ovUnit && FindChartChildRect(app, "TASK_LABEL", "discovery", &labelRc)
+					&& labelRc.right > labelRc.left && labelRc.bottom > labelRc.top) {
+					POINT lp{
+						(labelRc.left + labelRc.right) / 2,
+						(labelRc.top + labelRc.bottom) / 2
+					};
+					WalkClick(ovUnit, lp, 0);
+					PumpFor(320);
+				} else {
+					// Fallback: inject the same decision path as a label hit.
+					Overlay_OnNativeSelectionChanged("TASK_LABEL", "discovery", true);
+					PumpFor(220);
+				}
+				captureStep("label-click", traceProfile);
+
+				// (4) Progress fill is the same unit when present (wireframes has %).
+				// Prefer discovery if it has progress; else wireframes TASK_PROGRESS.
+				Overlay_SelectForTest("", "");
+				PumpFor(150);
+				std::string progKind = SelectChartChildNatively(slide, "TASK_PROGRESS", "wireframes");
+				if (!progKind.empty()) {
+					int actProg = Overlay_OnNativeSelectionChanged("TASK_PROGRESS", "wireframes", true);
+					wprintf(L"TASKUNIT progressSelect: com=%hs handlerAction=%d\n",
+						progKind.c_str(), actProg);
+				} else {
+					// No progress shape: mirror path still must accept the kind.
+					int actProg = Overlay_OnNativeSelectionChanged("TASK_PROGRESS", "wireframes", true);
+					wprintf(L"TASKUNIT progressSelect: com=(none) handlerAction=%d\n", actProg);
+				}
+				PumpFor(400);
+				captureStep("progress-settled", traceProfile);
+
+				// (5) Drag from label area moves dates (date range shifts).
+				// Capture start date before drag via dump if available.
+				Overlay_SelectForTest("TASK", "discovery");
+				SelectChartRootNatively(slide);
+				PumpFor(250);
+				captureStep("pre-drag", traceProfile);
+				if (ovUnit && FindChartChildRect(app, "TASK_LABEL", "discovery", &labelRc)
+					&& labelRc.right > labelRc.left) {
+					POINT from{
+						(labelRc.left + labelRc.right) / 2,
+						(labelRc.top + labelRc.bottom) / 2
+					};
+					PostScreenDrag(ovUnit, from, 72);
+					PumpFor(400);
+				} else if (ovUnit) {
+					POINT center{};
+					if (FindTaskBodyCenter(app, "discovery", &center)) {
+						PostScreenDrag(ovUnit, center, 72);
+						PumpFor(400);
+					}
+				}
+				captureStep("post-drag", traceProfile);
 			} else if (traceProfile && wcscmp(traceProfile, L"component-shape-protection") == 0) {
 				// v2.6.1 U1 selection integrity (SR-SHP-01..03 / SR-IXC-19/21 /
 				// UF-07 / SR-IXC-09). Three sub-tests in one profile:

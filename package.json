@@ -1,7 +1,7 @@
 {
   "name": "powerplanner",
   "private": true,
-  "version": "2.3.1",
+  "version": "2.11.0",
   "type": "module",
   "description": "Calendar-true Gantt charts you can actually present.",
   "scripts": {

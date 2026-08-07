@@ -1,0 +1,11 @@
+{
+  "name": "trace_drag_paint_cadence",
+  "description": "v2.8.1 continuous feel: paint cadence during task drag (SR-SMO-09..12), floor 30 Hz",
+  "exe": "ppappbarshot",
+  "trace_profile": "drag-paint-cadence",
+  "timeout": 180,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": ["paint_cadence_min_hz"],
+  "expected_trace_steps": ["pre", "mid", "immed", "+1", "+3"]
+}

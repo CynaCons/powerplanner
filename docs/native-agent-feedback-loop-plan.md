@@ -275,7 +275,7 @@ i4b-latency-traces (v2.5.3, SR-SMO-02) — measured latency budgets, 2026-07-11:
 - New: scenarios/ (appbar_matrix, row_selection, task_marker_context) + goldens/ + README
 - `native/build-appbar-shot.bat` (supports recompiles with new hooks)
 - `docs/on-slide-coordinator-log.md`, `.claude/skills/onslide-coordinator/SKILL.md` (integrated feedback steps)
-- `docs/onslide-v4-plan.md`, `PLAN.md` (references and tooling section for async review)
+- `docs/archive/onslide-v4-plan.md` (historical), `PLAN.md` (live plan + Phase 13 quality)
 - Updated plan itself with all checkboxes green.
 
 ## Success Criteria
@@ -298,7 +298,7 @@ See native/tools/README.md and the tooling paragraph in main PLAN.md N9.
 
 ## Relationship to Existing Processes
 
-This plan is an augmentation layer on top of the current ground rules, gate scripts, and slice acceptance criteria defined in `docs/onslide-v4-plan.md`. It does not change the requirement that units must still produce the expected harness PASS markers and visual PNGs from a clean rebuild.
+This plan is an augmentation layer on top of harness gates and PLAN.md. Historical V4 ground rules/slice ACs live in `docs/archive/onslide-v4-plan.md`. Units must still produce expected harness PASS markers and visual PNGs from a clean rebuild.
 
 The intent is to make those same gates and captures consumable and actionable by agents, dramatically shortening the feedback cycle for on-slide UX work.
 

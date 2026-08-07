@@ -20,22 +20,36 @@ This document defines the canonical layout of the specification and requirements
    - See `srs/README.md` for format and process
 
 3. **Native-specific Requirements — `spec/srs-native/`**
-   - Same table format.
-   - Only concerns that cannot or should not apply to web: overlay chrome, app bar docking & context, suppression of native child shape selection, custom theme-coherent menus/panels, lifecycle gating, native hit-test, etc.
-   - Primary file for 2026-07-11 feedback: `SRS-NativeUXFoundations.md` (SHP, DOCK, BAR, THEME, etc.)
-   - Must be paired with harness e2e scenarios under `native/tools/scenarios/`
+   - Same table format. Index: `srs-native/README.md`.
+   - Only concerns that cannot or should not apply to web: overlay chrome, app bar
+     docking & context, shape protection, theme-coherent menus/panels, lifecycle,
+     hit-test, time window, interaction conventions, smoothness, etc.
+   - Includes: `SRS-NativeUXFoundations.md`, `SRS-InteractionConventions.md`,
+     `SRS-InteractionSmoothness.md`, `SRS-OverlayLifecycle.md`,
+     `SRS-SelectionChromeVisuals.md`, `SRS-CreationFlows.md`,
+     `SRS-DependencyEditing.md`, `SRS-RowAndTaskSelection.md`, `SRS-TimeWindow.md`.
+   - Must be paired with harness e2e scenarios under `native/tools/scenarios/`.
+
+3b. **Web-specific Requirements — `spec/srs-web/`**
+   - Same table format. Index: `srs-web/README.md`.
+   - Only concerns that cannot or should not apply to native: browser runtime,
+     origin/token security posture, Vite build-output isolation, the web agent
+     surface.
+   - Includes: `SRS-agent-bridge.md` (`ABR`) — MCP agent control of the live web
+     document (PLAN.md Phase 14 / v2.11.x).
 
 4. **Implementation Notes, Plans, Guides — `docs/`**
-   - `native-addin.md`, `powerpoint-addin.md`
-   - `onslide-*-plan.md`, `overlay-architecture-map.md`, `onslide-ux-inventory.md`
+   - Live plan: repo-root `PLAN.md` (not docs).
+   - `native-addin.md`, `native-addin-install.md`, `overlay-architecture-map.md`,
+     `onslide-ux-inventory.md`, `native-agent-feedback-loop-plan.md`
    - `design-tokens.md` (normative values, consumed by native GanttTheme.h and mockup)
    - `mockup/onslide-mockup.html` (approved visual+interaction reference)
-   - `SRS_*.md` (legacy — being migrated/converted into `spec/srs-native/` tables)
+   - `SRS_*.md` — **pointers only** to `spec/srs-native/` tables (do not author shalls)
+   - Archived historical plans: `docs/archive/` (stubs remain at old on-slide plan paths)
    - Do **not** author new "shall" statements here.
 
 5. **Web Implementation** — `src/`
-   - Consumes foundation + shared SRS.
-   - No separate srs-web yet (future if divergence grows).
+   - Consumes foundation + shared SRS + `spec/srs-web/`.
 
 6. **Native Implementation** — `native/PowerPlannerAddin/`
    - C++ COM, Gantt* + Overlay.cpp
@@ -50,9 +64,15 @@ This document defines the canonical layout of the specification and requirements
 - Keep `spec/` as the clean contract layer. `docs/` supports but does not replace it.
 - After changes to structure, update this file, `spec/README.md`, `AGENTS.md`, and `PLAN.md`.
 
-## Migration Notes (2026-07-11)
-- Legacy `docs/SRS_*.md` (RowAndTaskSelection, SelectionChromeVisuals, etc.) will be converted to tables and moved or merged under `spec/srs-native/`.
-- References in PLAN and docs updated progressively.
-- Goal of v2.5.4 / v2.5.5: sustainable, non-redundant layout.
+## Migration status (updated 2026-07-17, Phase 13)
 
-This structure ensures clarity between common Gantt concepts and platform (native) specifics while focusing effort on the native on-slide experience.
+| Item | Status |
+|------|--------|
+| Legacy `docs/SRS_*.md` → `spec/srs-native/` tables | **Done** (stubs left at old paths) |
+| `SRS-InteractionSmoothness` / lifecycle / chrome / creation / deps / selection | **Done** as hyphenated tables under `srs-native/` |
+| `spec/srs/SRS-powerpoint.md` | **Stays shared** until a real web/native split needs a move |
+| Superseded on-slide coordinator/V4 plans | **Archived** to `docs/archive/`; stubs at old paths |
+| SR-ID → harness coverage map | **Phase 13 v2.8.3** (not structural) |
+
+This structure ensures clarity between common Gantt concepts and platform (native)
+specifics while focusing effort on the native on-slide experience.

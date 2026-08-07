@@ -1,0 +1,8 @@
+{
+  "dllVersion": "2.10.0-fixture",
+  "pptxName": "session-fixture-live-failures.pptx",
+  "chartId": "chart-fixture-1",
+  "startTime": "2026-07-18T14:22:00Z",
+  "screen": {"w": 1920, "h": 1080, "dpi": 96},
+  "recordingReason": "Synthetic fixture for session_report.py --selftest (R2). Encodes the three 2026-07-18 live-verify failure signatures from docs/session-recorder-spec.md §1."
+}

@@ -1,0 +1,41 @@
+name: native-pure
+
+# Phase 13 v2.8.4: pure-layer native gates (no PowerPoint required).
+on:
+  push:
+    paths:
+      - "native/**"
+      - "spec/fixtures/**"
+      - "docs/design-tokens.md"
+      - ".github/workflows/native-pure.yml"
+  pull_request:
+    paths:
+      - "native/**"
+      - "spec/fixtures/**"
+      - "docs/design-tokens.md"
+      - ".github/workflows/native-pure.yml"
+
+jobs:
+  pure:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build conformance + ops + unit harnesses
+        shell: cmd
+        run: |
+          call native\build-conformance.bat
+          if errorlevel 1 exit /b 1
+          call native\build-ops.bat
+          if errorlevel 1 exit /b 1
+          call native\build-unit.bat
+          if errorlevel 1 exit /b 1
+
+      - name: Theme token parity
+        shell: pwsh
+        run: python native/tools/check_theme_tokens.py

@@ -31,6 +31,8 @@ struct PpDocument;
 #define DISPID_PP_CTX_SCALE_MONTH   0x100E
 #define DISPID_PP_CTX_SCALE_QUARTER 0x100F
 #define DISPID_PP_CTX_SCALE_YEAR    0x1010
+#define DISPID_PP_RECORD_SESSION    0x1011
+#define DISPID_PP_GET_RECORD_PRESSED 0x1012
 
 // LIBIDs (we omit named_guids in the #import — see pch.h). Defined in Connect.cpp.
 extern const GUID LIBID_AddInDesigner_PP;
@@ -96,6 +98,9 @@ private:
 	void DoCtxScaleMonth();
 	void DoCtxScaleQuarter();
 	void DoCtxScaleYear();
+	void DoRecordSession();
+	static void OnRecorderStateChanged(bool active, void* context);
+	void InvalidateRecordControl();
 	void MutateChart(const std::function<bool(PpDocument&, std::string& outSelectId)>& op);
 
 	// SR-SMO-05 / ARC-07: PowerPoint Application (EApplication) event sink for

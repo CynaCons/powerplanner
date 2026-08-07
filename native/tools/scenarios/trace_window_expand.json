@@ -1,0 +1,19 @@
+{
+  "name": "trace_window_expand",
+  "description": "2026-07-18 discoverability regression gate for the time-window expand affordance. On the POPULATED showcase doc (many tasks + milestones) the left/right window-expand ports must be laid out with the pointer parked far from the axis header (they used to be gated on hovering a band whose pixel height shrinks with every row added, which is why the user 'couldn't find the arrow buttons' after placing tasks). Asserts the ports are non-empty, fully inside the alpha capture layer and agreed on by the zone hit test, that each target is at least 18x18 px, that hover resolves to WindowPortL, that a plain CLICK (no drag) really widens the visible range twice in a row, that the ports are still laid out and hit-testable after the rebuilds those two commits trigger, and that PP_PROJ follows the committed window.",
+  "exe": "ppappbarshot",
+  "trace_profile": "window-expand",
+  "timeout": 180,
+  "retries": 1,
+  "check_invariants": true,
+  "invariants": [
+    "window_ports_laid_out_without_hover",
+    "window_ports_hit_testable",
+    "window_ports_target_size",
+    "window_port_hover_resolves",
+    "window_click_widens_range",
+    "window_ports_survive_rebuild",
+    "window_expand_projection_follows"
+  ],
+  "expected_trace_steps": ["pre", "hover", "click1", "click2", "+3"]
+}
