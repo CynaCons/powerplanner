@@ -58,12 +58,22 @@ HtHit GanttHitTestPoint(const HtSnapshot& snap, long x, long y) {
 	}
 
 	// 1b) Task progress boundary (between date edges and milestones).
+	//
+	// Only the BOTTOM half of the bar is a progress grip. At percent 50 the
+	// progress line sits on the geometric centre — if the full bar height were
+	// live, "grab middle to move dates" silently became a percent drag
+	// (live 2026-07-18, PLAN v2.10.4 Defect B). Top half + vertical mid-line
+	// fall through to TaskBody so date drag stays the primary verb; progress
+	// remains discoverable on the lower half of the fill boundary.
 	const HtItem* progItem = nullptr;
 	long progDist = edgeBandPx + 1;
 	for (const auto& it : snap.items) {
 		if (it.kind != HtItemKind::Task) continue;
 		if (it.progressPercent <= 0 || it.progressPercent >= 100) continue;
 		if (y < it.rect.top || y >= it.rect.bottom) continue;
+		// Inclusive mid-line: y <= mid is body; only strictly below mid is progress.
+		const long midY = (it.rect.top + it.rect.bottom) / 2;
+		if (y <= midY) continue;
 		long barW = it.rect.right - it.rect.left;
 		if (barW < 4) continue;
 		long progX = it.rect.left + barW * it.progressPercent / 100;

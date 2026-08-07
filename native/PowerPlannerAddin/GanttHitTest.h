@@ -82,7 +82,8 @@ enum class HtZone {
 	TaskBody,   // inside a task bar, away from its edges (id = task id)
 	TaskEdgeL,  // within +-kHtEdgePx of a task's left edge (id = task id)
 	TaskEdgeR,  // within +-kHtEdgePx of a task's right edge (id = task id)
-	TaskProgressEdge, // within +-edgeBandPx of a task's progress boundary (id = task id)
+	TaskProgressEdge, // bottom-half +-edgeBandPx of progress boundary (id = task id);
+	                  // top half of the bar stays TaskBody so centre-grab moves dates
 	Milestone,  // inside a milestone marker rect (id = milestone id)
 	Label,      // inside a ROW_LABEL or TITLE text rect (kind + id)
 	Marker,     // within +-edgeBandPx of a vertical marker line (id = marker id);

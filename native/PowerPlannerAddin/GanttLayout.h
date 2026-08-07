@@ -16,6 +16,7 @@ struct LaidTask {
 struct LaidMilestone {
 	std::string id;
 	int rowIndex = 0;
+	int subRow = 0; // stacking track within the row (same unit as LaidTask::subRow)
 	long xDay = 0;
 };
 struct LaidSummary {

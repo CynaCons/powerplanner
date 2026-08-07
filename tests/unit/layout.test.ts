@@ -54,12 +54,38 @@ describe('layout engine', () => {
     expect(l.tasks[1].subRow).toBe(0);
   });
 
+  it('touching tasks (end == next start) stack — painted footprint collides', () => {
+    const doc = makeDoc({
+      tasks: [
+        { id: 't1', rowId: 'r1', label: 'A', start: '2026-06-01', end: '2026-06-15' },
+        { id: 't2', rowId: 'r1', label: 'B', start: '2026-06-15', end: '2026-06-29' },
+      ],
+    });
+    const l = layoutDocument({ doc, viewStart: '2026-06-01', pxPerDay: 10 });
+    expect(l.tasks[0].subRow).toBe(0);
+    expect(l.tasks[1].subRow).toBe(1);
+  });
+
   it('renders milestone at expected x', () => {
     const doc = makeDoc({
       milestones: [{ id: 'm1', rowId: 'r1', label: 'M', date: '2026-06-10' }],
     });
     const l = layoutDocument({ doc, viewStart: '2026-06-01', pxPerDay: 10 });
     expect(l.milestones[0].x).toBe(90);
+    expect(l.milestones[0].subRow).toBe(0);
+  });
+
+  it('milestone on an occupied lane moves to a free sub-row', () => {
+    const doc = makeDoc({
+      tasks: [
+        { id: 't1', rowId: 'r1', label: 'A', start: '2026-06-01', end: '2026-06-20' },
+      ],
+      milestones: [{ id: 'm1', rowId: 'r1', label: 'M', date: '2026-06-10' }],
+    });
+    const l = layoutDocument({ doc, viewStart: '2026-06-01', pxPerDay: 10 });
+    expect(l.tasks[0].subRow).toBe(0);
+    expect(l.milestones[0].subRow).toBe(1);
+    expect(l.rowHeights[0]).toBeGreaterThan(36);
   });
 
   it('builds dependency path between two tasks', () => {

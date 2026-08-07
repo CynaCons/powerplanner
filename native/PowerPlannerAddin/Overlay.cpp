@@ -9395,6 +9395,21 @@ void Tick() {
 
 		PowerPoint::DocumentWindowPtr win = g_app->GetActiveWindow();
 		if (!win) { if (g_shown) OvLog(L"Tick: no active window - hiding"); HideOverlay(); HideAppBar(); return; }
+		// Blank PowerPoint (no presentation open) throws 0x80048240 on many OM
+		// reads every 150 ms tick. Fail quiet once — no log flood (v2.10.3).
+		try {
+			PowerPoint::_PresentationPtr presCheck = g_app->GetActivePresentation();
+			if (!presCheck) {
+				if (g_shown) { HideOverlay(); HideAppBar(); }
+				return;
+			}
+		} catch (const _com_error& e) {
+			if ((unsigned long)e.Error() == 0x80048240ul) {
+				if (g_shown) { HideOverlay(); HideAppBar(); }
+				return;
+			}
+			throw;
+		}
 		g_pptHwnd = (HWND)(INT_PTR)g_app->GetHWND();
 
 		// Harness stand-down: the trace/e2e harnesses drive their OWN in-process
