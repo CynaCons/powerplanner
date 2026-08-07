@@ -526,6 +526,67 @@ kbd {
   .agent-indicator-dot { animation: none; }
 }
 
+/* Document settings — theme + fiscal year, relocated out of the inspector
+   (v2.13.0 / C0b). Set once per document, so a dialog beats a column. */
+.doc-settings__scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+}
+.doc-settings {
+  width: min(360px, calc(100vw - 32px));
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+  padding: 16px;
+}
+.doc-settings__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.doc-settings__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.doc-settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.doc-settings__field > label {
+  font-size: 11px;
+  color: var(--color-text-soft);
+}
+.doc-settings__segmented {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius);
+}
+.doc-settings__segmented button {
+  padding: 5px 8px;
+  font-size: 11px;
+  border-radius: calc(var(--radius) - 2px);
+  border: none;
+}
+.doc-settings__segmented button.is-active {
+  background: var(--color-bg-panel);
+  color: var(--color-text);
+  box-shadow: var(--shadow-1);
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;

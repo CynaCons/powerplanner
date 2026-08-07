@@ -764,10 +764,12 @@ remaining lever on the v2.12.0 legibility problem.
 
 ### v2.13.0 — C0: Reclaim the duplicated chrome
 **Goal:** Delete what is already said elsewhere. Worth doing regardless of what happens to the column.
-- [ ] C0a: status bar absorbs Statistics (span + avg complete alongside the existing counts); delete the Statistics section
-- [ ] C0b: File menu gains *Document settings…* (theme, fiscal year start); delete the Appearance and Document sections — the inspector becomes selection-only
-- [ ] C0c: delete the duplicate `Fit` from `Header.tsx`; the bar keeps the canonical one
-- [ ] C0d: confirm no capability is lost — every control removed is reachable at its new home
+- [x] C0a: status bar absorbs Statistics (span + avg complete alongside the existing counts); delete the Statistics section
+- [x] C0b: File menu gains *Document settings…* (theme, fiscal year start); delete the Appearance and Document sections — the inspector becomes selection-only
+- [x] C0c: delete the duplicate `Fit` from `Header.tsx`; the bar keeps the canonical one
+- [x] C0d: confirmed no capability lost — theme + fiscal year drive the document from the new dialog (verified live: theme light→dark, fiscal Jan→Apr); Escape closes; e2e now covers both, plus a **duplication gate** asserting scale renders exactly 5 buttons and Fit exactly 1
+- Measured: scale buttons on screen **10 → 5**, Fit **2 → 1**, `Inspector.tsx` **331 → 106 lines**. `computeDocStats` extracted to `src/utils/docStats.ts` — the numbers had no test coverage while they lived inline in the inspector; they do now
+- Note: the v2.12.1 **section**-collapse machinery (L1a–c) is now dead code and was removed with the sections. The **panel**-level collapse survives until C3 deletes the column
 
 ### v2.13.1 — C1: Command bar shell
 **Goal:** The tool palette becomes a grouped, selection-aware bar. Behaviour unchanged.

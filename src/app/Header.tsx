@@ -1,11 +1,9 @@
 import { useDocumentStore } from '../stores/documentStore';
-import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
 import {
   Undo2,
   Redo2,
   Plus,
-  Maximize2,
   Diamond,
   Magnet,
   Rows3,
@@ -47,24 +45,10 @@ export function Header() {
   const addMarker = useDocumentStore((s) => s.addMarker);
   const selection = useSelectionStore((s) => s.items);
   const rows = useDocumentStore((s) => s.doc.rows);
-  const fit = useViewportStore((s) => s.fit);
   const doc = useDocumentStore((s) => s.doc);
   const snapEnabled = useEditStore((s) => s.snapEnabled);
   const setSnap = useEditStore((s) => s.setSnap);
 
-  const onFit = () => {
-    const dates = [
-      ...doc.tasks.flatMap((t) => [t.start, t.end]),
-      ...doc.milestones.map((m) => m.date),
-    ];
-    if (dates.length === 0) return;
-    const min = dates.reduce((a, b) => (a < b ? a : b));
-    const max = dates.reduce((a, b) => (a > b ? a : b));
-    const chartArea = document.querySelector('.chart-area');
-    const totalWidth = chartArea?.clientWidth ?? 800;
-    const gutter = totalWidth < 600 ? 120 : 200;
-    fit(min, max, Math.max(100, totalWidth - gutter));
-  };
 
   const onAddTask = () => {
     if (rows.length === 0) return;
@@ -152,7 +136,8 @@ export function Header() {
             label="Snap"
             active={snapEnabled}
           />
-          <IconBtn onClick={onFit} title="Fit to data (Home)" icon={<Maximize2 size={14} strokeWidth={1.75} />} label="Fit" />
+          {/* Fit lives in the tool palette only — it was rendered in both
+              places at once (PLAN.md v2.13.0 / C0c). */}
         </Cluster>
 
         <Cluster>
