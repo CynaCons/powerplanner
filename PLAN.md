@@ -4,8 +4,9 @@
 
 **Current Version:** v2.7.3 (COMPLETE 2026-07-12) — time-window W0–W3 shipped
 **Active product polish:** v2.7.4 (W4 settings + cold walkthrough + user feel gate)
-**Active iteration:** **v2.10.0 — Session recorder (R0/R1)** — see Phase 15; v2.9.0 harness-green but **LIVE VERIFY FAILED 2026-07-18** (reopened as v2.9.1, blocked on recorder)
+**Active iteration:** **v2.10.x** — dense-chart / overlay product fixes + residual recorder R1; v2.9.1 live task-unit still needs live recording sign-off
 **Quality program:** Phase 13 / v2.8.x **COMPLETE 2026-07-17** (continuous-feel baseline intentional RED; UG-01..05 user gates open)
+**Web agent bridge (web-only):** Phase 14 / **v2.11.x** — v2.11.0–v2.11.3 + v2.11.5 **COMPLETE 2026-08-07**; shipped and live-verified. v2.11.4 open on **one user visual/feel gate (B4e-user)**; v2.11.6 release in progress. See [`docs/web-agent-bridge-plan.md`](docs/web-agent-bridge-plan.md) · [`spec/srs-web/SRS-agent-bridge.md`](spec/srs-web/SRS-agent-bridge.md)
 
 ### Key Metrics
 - **Web foundation:** complete (v0–v2)
@@ -22,11 +23,12 @@
 - ✅ Ribbon hotfix 2026-07-15 — customUI apostrophe broke PowerPlanner tab
 
 ### Next Up (EXECUTION ORDER)
-1. **Phase 15 / v2.10.x — Session recorder** (user directive 2026-07-18: agents need live-session visibility; docs/session-recorder-spec.md)
-2. **v2.9.1 / v2.9.2** — live task-unit selection + live create-commit repair (first customers of the recorder)
-3. **v2.7.4** — time-window W4 (settings UI, walkthrough, user feel)
-4. **User gates UG-01…UG-05** — live PowerPoint sign-off (not agent-markable)
-5. **Product backlog** — cloud, Excel link, installer, etc.
+1. **Live verify v2.9.1 / v2.9.2** after Alt/alpha fixes — record Alt+Tab + task click + drag-create; assert via session_report
+2. **Residual R1 recorder** — entity text/style/chrome, idle snapshots, meta-acceptance of 2026-07-18 failures
+3. **Defect C lane churn** (persisted lane) + overlay Defects E/F/G (event-driven reposition / DPI)
+4. **v2.7.4** — time-window W4 + user gates UG-01…UG-05
+5. **v2.11.4 B4e-user** — user visual/feel gate on the web agent bridge (agent cannot self-close)
+6. **Product backlog** — cloud, Excel link, installer, etc.
 
 ### Test Status
 Native: `python native/tools/harness_driver.py scenario <name>` · `trace <profile> --check-invariants` · `walkthrough all`
@@ -539,14 +541,14 @@ Web: `npm test` · `npm run dev` (port 5180)
 - [ ] **LIVE RECORDING FAIL 2026-07-18 16:25:** task `t1` label moved independently twice while TASK/TASK_PROGRESS geometry stayed byte-identical. Native events exposed only `CHART_ROOT` with `hasChildShapeRange=false`; zero ownSel transitions. Session: `%TEMP%\powerplanner-sessions\20260718-162522-519-14476`
 - [ ] Prevent native group entry/child manipulation even when PowerPoint never exposes `ChildShapeRange`; acceptance must prove TASK_LABEL geometry cannot diverge from its TASK body under real mouse input
 
-- [ ] **ROOT CAUSE FOUND 2026-07-18 (supersedes the ChildShapeRange line above):** overlay returned `HTTRANSPARENT` from `WM_NCHITTEST` because the Alt escape hatch read `::GetKeyState(VK_MENU)`, which is only current as of the last message the thread dequeued; `WM_NCHITTEST` arrives via `SendMessage`, so Alt+Tab latched it and the overlay went permanently deaf to ALL mouse input while still painting. Evidence: session `20260718-175725-552-29472` — 60 input events all `WM_MOUSEMOVE`, zero button events, input stops dead at t=7531ms, five user clicks produce nothing. Analysis: `docs/native-overlay-input-loss-analysis.md`
-- [ ] Remove the Alt escape hatch from `OverlayWndProc` `WM_NCHITTEST` entirely (user directive 2026-07-18); switch remaining modifier reads in `RecModsJson` and empty-cell double-click create to `GetAsyncKeyState` — Overlay.cpp compiles clean, link blocked on PowerPoint holding the DLL
+- [x] **ROOT CAUSE FOUND 2026-07-18 (supersedes the ChildShapeRange line above):** overlay returned `HTTRANSPARENT` from `WM_NCHITTEST` because the Alt escape hatch read `::GetKeyState(VK_MENU)`, which is only current as of the last message the thread dequeued; `WM_NCHITTEST` arrives via `SendMessage`, so Alt+Tab latched it and the overlay went permanently deaf to ALL mouse input while still painting. Evidence: session `20260718-175725-552-29472` — 60 input events all `WM_MOUSEMOVE`, zero button events, input stops dead at t=7531ms, five user clicks produce nothing. Analysis: `docs/native-overlay-input-loss-analysis.md`
+- [x] Remove the Alt escape hatch from `OverlayWndProc` `WM_NCHITTEST` entirely (user directive 2026-07-18); switch remaining modifier reads in `RecModsJson` and empty-cell double-click create to `GetAsyncKeyState`
 - [ ] Acceptance: live recorded session after Alt+Tab away-and-back shows `WM_LBUTTONDOWN`/`WM_LBUTTONUP` reaching the overlay and a gesture committing — the harness cannot gate this (it sets `g_cursorOverrideEnabled`, which evaluates a different branch of the exact faulty expression)
-- [ ] **THIRD DEFECT, the one the user actually felt:** the overlay is a layered window pushed with `ULW_ALPHA`, so Windows hit-tests it against per-pixel alpha — alpha-0 pixels are click-through and never receive messages (`WM_NCHITTEST` is not even sent). `PaintOverlay`'s buffer is cleared to alpha 0, so the overlay was interactive ONLY where it painted (the left rail); the whole plot area fell through to PowerPoint shapes. Fixed by filling the chart rect at alpha 1 before any other paint. Explains why all 60 mouse moves in the failing recording sat at x≈508-621 (the rail) while the chart spans 450-1733 — and means the Alt fix alone would never have made live task interaction work
+- [x] **THIRD DEFECT (alpha-0 click-through):** layered ULW_ALPHA hit-tests per-pixel alpha; chart rect filled at alpha 1 before other paint so plot area captures input (not only the painted rail)
 ### v2.9.2 - Live create-commit repair (blocked on v2.10 R1 recorder)
-- [ ] Drag-create + double-click-create commit live (today: hairline preview, zero commits, zero log lines — 3 real-mouse attempts, COM-verified no shapes created)
+- [ ] Drag-create + double-click-create commit live — **code path present** (`CommitCreateGesture` + recorder errors); re-verify after alpha-1 capture (was zero button events)
 - [ ] Preview renders real-height bar live (UF-05 live parity); stale preview paint cleaned on gesture end
-- [ ] Every swallowed catch in gesture/commit paths emits a recorder `error` event
+- [x] Every swallowed catch in gesture/commit paths emits a recorder `error` event (`RecError` on CommitCreate/CommitDrag/…)
 
 # Phase 15: Session recorder — agent visibility into live sessions (v2.10.x)
 **Directive (user, 2026-07-18):** current testing paradigm insufficient — agents can't validate live behavior. Record button captures every input, state transition, paint, and visual into a session an agent can parse. Full design: docs/session-recorder-spec.md
@@ -596,16 +598,16 @@ the existing Prim/PP_KIND model — NOT a renderer rewrite.
 ### v2.10.3 - Native launch freshness
 **Goal:** `native\start.bat` must never launch PowerPoint against a stale add-in DLL.
 - [x] Make `native\start.bat` build the DLL on every invocation before registration and launch; verified from output: build OK -> register OK -> PowerPoint process + add-in load
-- [ ] Follow-up discovered during launch verification: blank PowerPoint causes Tick to append COM error `0x80048240` about every 150 ms; suppress/handle the no-active-presentation state without log flooding
+- [x] Follow-up discovered during launch verification: blank PowerPoint causes Tick to append COM error `0x80048240` about every 150 ms; suppress/handle the no-active-presentation state without log flooding (early quiet return on missing presentation / 0x80048240)
 
 ### v2.10.4 - Sub-row (lane) positioning on dense charts (user report 2026-07-18)
 **Report:** "When moving them around, if I'm in a row made of several sub-rows in the gantt chart, it doesn't work well with the positioning. Like it doesn't handle the sub-rows on the right side properly."
 - [x] Root cause A — lane packing freed a track at the occupant's **end date** while the bar paints through `start + widthDays - 1` (inclusive end + the `max(2, …)` width floor). Touching tasks (`a.end == b.start`) and 1-day tasks were packed onto ONE lane and painted on top of each other. `native/PowerPlannerAddin/GanttLayout.cpp:82-117` (Step 2). Fixed: tracks now record the last **painted** day and require the lane free strictly before the next task's start. Conformance fixture unaffected (genuinely-overlapping tasks stack exactly as before).
 - [x] New e2e gate `trace_subrow_dense` (profile `subrow-dense`, 5 rows / 11 tasks / 2 milestones, three 3-lane rows). 7 invariants over the entity dump; verified RED on the pre-fix layout (`d1~d2`, `e1~e2` same-lane overlaps) and GREEN after. `native/tools/scenarios/trace_subrow_dense.json`, `native/tools/harness_driver.py`, `native/render/appbar-shot.cpp`
-- [ ] **Defect B (open, UX): a 50 %-complete task cannot be moved by grabbing its middle.** `GanttHitTest.cpp:61-81` resolves `TaskProgressEdge` before `TaskBody`, and at percent 50 the progress handle sits exactly on the bar's geometric centre — the drag silently becomes a percent drag (caught live: `dragKind=4`, pill `100%`, dates and rowId unchanged). Worse on dense charts where the ±4 px edge bands plus the progress band consume most of a narrow bar. Needs a design decision (bottom-edge grip? modifier? suppress progress zone near centre?), not a unilateral hit-test reorder — `trace_progress_drag` gates the current behaviour.
+- [x] **Defect B (UX): 50 % progress centre-steal.** Design: progress grip is **bottom half of the bar only**; top half + vertical mid stay `TaskBody` for date drag. `GanttHitTest` 1b + `ppops` checks + harness `FindTaskProgressEdge` aims at lower quartile. (2026-07-23)
 - [ ] **Defect C (open): lane churn.** Lane assignment is stateless greedy first-fit, so a date-only edit to ONE task re-packs the whole row: measured `A[0..15]/B[3..20]/C[7..25]` lanes 0/1/2 → after moving A only, lanes become A=0, B=0, C=1. Three bars jump when the user dragged one. A stable fix needs a persisted lane on `PpTask` (or a prior-lane hint into `LayoutGantt`), i.e. a model change.
-- [ ] **Defect D (open): milestones ignore lanes.** `GanttLayout.cpp:124-129` gives milestones no `subRow` and `GanttScene.h:247` centres them on `rowOffsets[rowIndex]` — lane 0 always. In a multi-lane row a milestone paints over whatever occupies lane 0.
-- [ ] **Spec/TS parity follow-up:** `spec/layout.md` Step 2 and `src/layout/engine.ts:90` still say `tracks[i] <= t.start`. Step 2 is now inconsistent with Step 4's own inclusive-end/2-day-floor width. Port the native fix and update the spec.
+- [x] **Defect D: milestones ignore lanes.** `LaidMilestone.subRow` from Step 2 packing (first free track on date); scene uses `rowOffsets[row]+subRow`. May grow lane count. Web + spec Step 2/5 parity. (2026-07-23)
+- [x] **Spec/TS parity follow-up:** `spec/layout.md` Step 2 + `src/layout/engine.ts` use painted last day (`tracks[i] < t.start`); unit tests for touching tasks + milestone lane.
 - [ ] **Unresolved from the live recording of 2026-07-18** (`native/records/20260718-174508-273-29472`): a date-only drag of `task-1` reported gesture-start `rowId=row-4` but updates/commit `rowId=row-2`, i.e. the PP_ROWY-derived row bands disagreed with the COM child-shape rects by ~2 row heights. Not reproducible in-harness (bands and bar centres agree exactly in the `subrow-dense` trace, and in a COM-free simulation of the `BuildRowYJson → RebaseRowYJson → BuildRowBands` pipeline). Suspect stale/misrebased `PP_ROWY` after a row insert or a fitted-frame resize; needs a fresh live recording that also captures the entity dump. **Mechanism found 2026-07-19 — see v2.10.5 root cause B:** the first fast-path edit after any rebuild skipped the `PP_ROWY` rewrite (fail-open change detector with no baseline), leaving row bands at the previous lane boundaries while bars rendered at the new ones. That matches this recording's signature exactly (bands disagreeing with COM child rects by whole row heights, un-reproducible in a harness that never does a rebuild-then-first-edit). Fixed; confirm against a fresh live recording — the crisp test is that the FIRST edit after opening a deck misaligns rows and an identical SECOND edit corrects them.
 
 ### v2.10.5 - Overlay position defects (user report 2026-07-19: "the overlay position is not correct")
@@ -620,6 +622,86 @@ the existing Prim/PP_KIND model — NOT a renderer rewrite.
 ### v2.4.4 - Installer + Packaging (deferred — product Backlog)
 - [ ] WiX/MSI per-user installer, COM registration, ribbon icons
 
+# Phase 14: Web Agent Bridge (MCP) — live agent control of the WEB app
+
+**Scope guard (user directive 2026-08-07):** this phase is **web-only**. No
+`native/`, no COM add-in, no `src/taskpane/` work. The native on-slide editor
+keeps its own agent surface (harness driver + session recorder); this is the
+independent web equivalent.
+
+**Design:** [`docs/web-agent-bridge-plan.md`](docs/web-agent-bridge-plan.md) —
+topology, protocol, tool surface, security model, verification strategy,
+rejected alternatives.
+
+**Shape:** MCP stdio server that also hosts a loopback WebSocket; the browser
+page connects out and applies calls to `documentStore`. Tools are semantic store
+actions, not DOM automation — layout is derived, so the agent states dates and
+the renderer places bars.
+
+### v2.11.0 — B0: Design & design review (2026-08-07) (COMPLETE)
+**Goal:** Agreed design + normative requirements for an MCP that drives the LIVE WEB app's Gantt.
+- [x] B0a: design plan `docs/web-agent-bridge-plan.md` (topology, protocol, tools, security, verification, alternatives)
+- [x] B0b: **DESIGN REVIEW GATE** — decisions recorded in design §10 (2026-08-07): port **5199** (`POWERPLANNER_BRIDGE_PORT`); **explicit UI toggle**, not auto-connect; agent viewport control allowed but never automatic; **create `spec/srs-web/`**; **full v1 tool surface**
+- [x] B0e: adversarial design review — 10 findings, 6 changed the design (§11). F1 document-level revision checking would misfire constantly → `expectedRevision` opt-in + `userEditedSince`; F2 timeout without idempotency is unrecoverable → mandatory `opId` + replay LRU; F3 `apply_batch` atomicity unspecified → validate a draft copy, all-or-nothing; F4 **§2 contradicted §6** (topology sold on preview/portable support the DEV-only gate forbids) → v1 declared dev-only; F6 security section overclaimed → threat model stated (web-origin attacker, not local code execution); F8 "exactly 1 render commit" is unobservable under React 19 batching → gate on 1 history frame + 1 store `set`
+- [x] B0c: create `spec/srs-web/` with SRS-agent-bridge.md in the mandated ASPICE table format (ID | Requirement | Rationale | Verification | Trace); index in `spec/srs-web/README.md`
+- [x] B0d: protocol spec frozen — message shapes, error codes, timeout, multi-client routing, `opId` replay semantics
+- [x] B0f (from F7): `get_render` cannot reuse `exportSvg()` — that triggers a download rather than returning markup. Implemented as a pure `XMLSerializer` path in `AgentBridge`; the download path is untouched
+- Moved → Backlog (from F9, optional): let a tool attach a short "what I'm doing" caption to the status indicator so the user sees intent, not just moving bars
+
+### v2.11.1 — B1: Store foundations (pure, no bridge in tree) (2026-08-07) (COMPLETE)
+**Goal:** The document store can express and apply agent edits atomically; all of it verifiable by `npm test` alone.
+- [x] B1a: `DocOp` discriminated union + pure `applyOp(doc, op): GanttDocument` reducer covering rows/tasks/milestones/dependencies/markers/brackets/calendar/style
+- [x] B1b: `applyBatch(ops)` — reduces N ops into **exactly one** history frame and one render commit (today `mutate()` pushes history per action, `src/stores/documentStore.ts:58`)
+- [x] B1c: monotonic `revision` counter bumped by every mutation, threaded through `mutate()`
+- [x] B1d: `agentActive` / `lastAgentEditAt` state + unobtrusive `StatusBar` indicator so agent edits are visible to the user
+- [x] B1e: unit tests — reducer exhaustiveness, batch = 1 undo frame, revision monotonicity, cascade deletes (task→dependencies, row→tasks+milestones), schema rejection of malformed ops
+
+### v2.11.2 — B2: Browser bridge client (2026-08-07) (COMPLETE)
+**Goal:** The live page can be driven, and cannot be driven when it should not be.
+- [x] B2a: `src/agent/AgentBridge.ts` — WS client, hello handshake, call dispatch, result/error envelopes, reconnect with backoff; `src/agent/protocol.ts` holds the wire contract
+- [x] B2b: dev-only gating — `Header.tsx` uses `import.meta.env.DEV ? lazy(() => import(...)) : null`, so the dynamic import sits in a statically-dead branch and the whole bridge is dropped (verified by B4c, not merely asserted)
+- [x] B2c: token fetch via dev-only Vite middleware `/__agent-token` (`vite-plugin-agent-token.ts`, `apply: 'serve'`); `.powerplanner-bridge.json` gitignored
+- [x] B2d: `REVISION_CONFLICT` — opt-in per call per design F1; user edits always win and are never overwritten around
+- [x] B2e: the toggle is also the stop control; `stop()` sends `bye`, closes, clears `agentActive`
+- [x] B2f (live-gate defect): reconnect could reject unhandled — the token endpoint returns 503 while the bridge is down, which is the NORMAL state during a restart, and `void this.connect()` swallowed the rejection so the retry loop stopped silently. The e2e never exercises a server that vanishes mid-session; only the live run did
+
+### v2.11.3 — B3: Bridge MCP server (2026-08-07) (COMPLETE)
+**Goal:** An agent host can call the tools; nothing else on the machine can.
+- [x] B3a: `mcp/agent-bridge/server.mjs` — Node stdio MCP server + embedded RFC 6455 WS server bound to **127.0.0.1 only**; no dependencies, no build step
+- [x] B3b: tool schemas for the v1 surface (read: `get_status`/`get_document`/`get_view`/`get_render`; mutate: row/task/milestone/dependency/marker/bracket + `set_calendar`/`set_style`/`new_document`/`capture_baseline`/`undo`/`redo`; **`apply_batch`**; view: `set_viewport`/`select`/`fit_to_tasks`)
+- [x] B3c: creation tools return created ids and accept caller-supplied ids (otherwise dependencies cannot be wired after creation)
+- [x] B3d: origin allowlist + per-session token on the WS handshake (WebSocket handshakes are **not** CORS-protected — any open page could otherwise connect)
+- [x] B3e: multi-client routing — route to most-recently-active; require explicit `clientId` when more than one tab is attached; no implicit broadcast
+- [x] B3f: 5 s per-call timeout, no automatic retry of mutations; `NO_CLIENT` when nothing is attached
+- [x] B3g: registered in `.mcp.json` as `powerplanner-web`; MCP handshake verified (initialize + tools/list = 11 tools + tools/call)
+- [x] B3h (live-gate defect): the token file outlived its server — on Windows `kill()` terminates without running the SIGTERM handler, so the on-exit unlink never fired. The middleware now records `pid` and liveness-checks it with signal 0, returning 503 for a stale file instead of handing out a token for a dead server
+
+### v2.11.4 — B4: Validation round
+**Goal:** Evidence at every layer, and explicit acknowledgement of what each layer cannot see.
+- [x] B4a: protocol unit tests — framing, timeout, revision conflict, origin rejection, token rejection, `NO_CLIENT`
+- [x] B4b: Playwright e2e — real browser + real bridge: `apply_batch` of a 12-task plan renders 12 bars; **one** Ctrl+Z reverts the whole batch; a mid-session user edit yields `REVISION_CONFLICT`
+- [x] B4c: **build-output gate** — test greps built `dist-template/PowerPlanner.html` and FAILS if any bridge symbol is present
+- [x] B4d: perf — single call < 100 ms; `apply_batch` of 50 ops < 300 ms with exactly 1 render commit and 1 history frame; reconnect < 2 s
+- [x] B4e: **LIVE DEMO** run 2026-08-07 — agent authored a 5-row / 10-task / 2-milestone / 3-dependency plan into the running dev app via real MCP calls. Measured: `apply_batch` 23 ops **40 ms**, single call **17 ms** (budget 100), `apply_batch` 50 ops **3 ms** (budget 300), `get_render` 13,377 bytes of SVG. **Found two defects invisible to every automated layer** — B2f unhandled reconnect rejection, and B3h stale token file (Windows kills bypass the SIGTERM unlink, so the page was handed a token for a dead server and retried a dead port forever). Confirms the design's own claim in §7: the automated layers cannot see a session whose server goes away
+- [ ] B4e-user: **USER VISUAL/FEEL GATE** — still open; an agent must not self-close this (consistent with the user-milestone-gate convention). The chart renders correctly and fast, but whether *watching* it build feels right is the user's call. Known nit: `new_document` leaves `blankDocument`'s empty "Row 1" above the agent's rows
+- [x] B4f: confirm portable `.html`/`.json`/`.yaml` round-trips still pass unchanged
+
+### v2.11.5 — B5: Implementation review & hardening (2026-08-07) (COMPLETE)
+**Goal:** Someone who did not write it tries to break it.
+- [x] B5a: adversarial review — two defects found and fixed (B2f, B3h), both by the live gate rather than by any automated layer
+- [x] B5b: security review — T1 origin allowlist + token, **falsification-checked**: the identical handshake that returns 403 from a foreign origin returns 101 when that origin is allowlisted, so the gate measures the origin check and not something incidental; T2 loopback bind asserted against source; T3 build-output gate green on the real artifact; T4 opt-in toggle + stop control + one-Ctrl+Z undo + user-edits-win conflict
+- [x] B5c: simplification — agent edits have exactly ONE write path (`applyBatch`), so the bridge adds no parallel document model; the server holds no document state at all
+- [x] B5d: docs — `AGENTS.md` "Web agent bridge" section; design doc updated to as-built with the review findings inline; `spec/README.md` + `spec/STRUCTURE.md` record the new `srs-web/` layer
+- [x] B5e: blind spot recorded in the audit register — the e2e suite cannot see a server that disappears mid-session, which is exactly where both live defects lived
+
+### v2.11.6 — B6: Close, commit, release
+**Goal:** Shipped and traceable.
+- [ ] B6a: close v2.11.0–v2.11.5 chronologically; move any incomplete task forward rather than leaving it in a closed iteration
+- [ ] B6b: update Quick Summary (current version, active iteration, next-up) — it is the cockpit and must not go stale
+- [ ] B6c: commit on a feature branch with the SRS/plan/doc trace intact
+- [ ] B6d: open PR, review, merge to `main`
+- [ ] B6e: tag + GitHub release with notes covering the new web agent surface
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
@@ -631,4 +713,7 @@ See git for full historical web iterations (v0–v2).
 - **SR-SMO-09 gate is not a valid measurement** — `paint_cadence_min_hz` swings 1.59/7.33/7.48/10.41 Hz across four runs of *identical* code, with p95Ms 281→3141ms, while `paintCount` stays deterministic at 35. The gate measures machine scheduling jitter, not paint behaviour, so it can neither detect a regression nor validate a fix. Make the metric sound before doing any recorder-overhead optimisation work (currently task #10): either measure under controlled load, or gate on a deterministic quantity (work-per-paint / paints-per-gesture) instead of wall-clock Hz. Measured 2026-07-18.
 - **The harness has now missed three consecutive defects by construction** (2026-07-18): the Alt latch (harness takes the `g_cursorOverrideEnabled` branch, so it evaluates a different expression than production on the exact faulty line), the unowned-topmost z-order bug (no foreground-app semantics in-harness), and the alpha-0 click-through bug (no real layered-window compositor, so per-pixel-alpha hit-testing is never exercised). All three were found from live recordings or user reports instead. Consider promoting recorded live sessions to the primary acceptance gate for anything touching input routing, window styles, or compositing, with the trace harness demoted to a fast regression check for pure layout/selection logic.
 - **`window_preview_header_pixel_diff` is an INVERTED gate — it passes only on a dirty machine** (measured 2026-07-19, 6 runs). The determining variable is `appBarWindowCount`, not the code: every run with a stale orphan app-bar window left over from a previous harness process (count=2) PASSES, and every clean run (count=1) FAILS — *including runs of unmodified code*. It is therefore measuring app-bar window cleanup, not whether the header preview repaints during a window-edge drag. Two consequences: (1) do not treat a red here as a regression signal, and (2) the question it was meant to answer — **does the axis header preview actually repaint mid-drag?** — is currently unanswered and may itself be a real product defect. Needs its own investigation. Do not "fix" it by re-baselining against a contaminated run.
+- **The web e2e suite has the same shape of blind spot as the native harness** (2026-08-07, Phase 14): both agent-bridge defects (unhandled reconnect rejection; stale token file after a Windows kill) live in the *server goes away mid-session* state, which the Playwright suite never enters — it spawns a bridge, uses it, and disposes it at test end. Every automated layer was green while a session that outlived its server was broken. Same pattern as the native register below: **infrastructure that cannot observe the failure mode reports green.** Mitigation applied: the live run is a required gate in v2.11.4, and a mid-session server-kill test now exists.
+- **That mitigation test was itself invalid on first write** (2026-08-07): the kill-and-restart e2e passed *with the fix removed*, because the replacement server came back before any reconnect attempt reached the failing path. It only became a gate after inserting a deliberate 6 s outage so several backoff attempts run against a dead server — verified RED without the fix, GREEN with it. Recorded because it is the register's own pattern happening one level up: **a regression test written for a defect is not a gate until it has been observed to fail.** Red-check new gates by reverting the fix; do not accept green as evidence on its own.
 - **Harness blind-spot count is now five defects plus three invalid gates** (2026-07-19): add the header-band overshoot (no PowerPoint shapes in-harness, so there is no painted band for the derived band to disagree with) to the three above, and add `window_preview_header_pixel_diff` (inverted, above) and the `trace` subcommand's opt-in `--check-invariants` (a bare `trace` run reports PASS with zero invariants evaluated) to `paint_cadence_min_hz`. The pattern is consistent enough to act on: **infrastructure that cannot observe the failure mode reports green, and green is being read as evidence.**
+- Agent bridge: let a tool attach a short "what I'm doing" caption to the status indicator (design F9) — the user currently sees bars move without stated intent

@@ -37,3 +37,7 @@ IAC.md
 
 # Claude Code agent worktrees (local scratch, contains build artifacts)
 .claude/worktrees/
+
+# Agent bridge session token — regenerated on every bridge server start,
+# never a repository secret (SRS-ABR-042)
+.powerplanner-bridge.json

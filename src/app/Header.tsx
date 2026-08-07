@@ -18,6 +18,20 @@ import { newId } from '../utils/ids';
 import { todayISO, addDays } from '../utils/dates';
 import { ExportMenu } from './ExportMenu';
 import { BrandLogo } from './BrandLogo';
+import { lazy, Suspense } from 'react';
+
+/**
+ * Agent bridge toggle — dev builds only.
+ *
+ * `import.meta.env.DEV` is statically false in production, so the dynamic
+ * import sits in a dead branch and the whole bridge is dropped from the bundle
+ * rather than merely hidden (SRS-ABR-050; gated by a build-output test).
+ */
+const AgentBridgeToggle = import.meta.env.DEV
+  ? lazy(() =>
+      import('../agent/AgentBridgeToggle').then((m) => ({ default: m.AgentBridgeToggle })),
+    )
+  : null;
 
 export function Header() {
   const title = useDocumentStore((s) => s.doc.title);
@@ -161,6 +175,11 @@ export function Header() {
           title="Keyboard shortcuts (?)"
           icon={<HelpCircle size={14} strokeWidth={1.75} />}
         />
+        {AgentBridgeToggle && (
+          <Suspense fallback={null}>
+            <AgentBridgeToggle />
+          </Suspense>
+        )}
         <ExportMenu />
       </div>
     </header>

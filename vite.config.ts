@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import { agentTokenPlugin } from './vite-plugin-agent-token';
 
 function getOfficeDevHttpsOptions() {
   const certDir = resolve(homedir(), '.office-addin-dev-certs');
@@ -28,7 +29,7 @@ export default defineConfig(({ command, mode }) => {
   const https = command === 'serve' && addinDev ? getOfficeDevHttpsOptions() : undefined;
 
   return {
-    plugins: [react()],
+    plugins: [react(), agentTokenPlugin()],
     server: {
       host: 'localhost',
       port: 5180,

@@ -1,16 +1,43 @@
 import { create } from 'zustand';
 import type { GanttDocument, Task, Milestone, Bracket, Dependency, Marker, Row, TimeScale } from '../types/document';
 import { sampleDocument } from '../utils/sample';
+import { applyOps, type DocOp } from './docOps';
 
 const HISTORY_LIMIT = 100;
+
+/**
+ * Who caused a mutation. Only used to keep `userRevision` honest so an agent can
+ * tell that the user edited underneath it (SRS-ABR-020); it grants no different
+ * privileges — an agent edit and a user edit are the same edit.
+ */
+export type EditSource = 'user' | 'agent';
 
 interface DocumentState {
   doc: GanttDocument;
   past: GanttDocument[];
   future: GanttDocument[];
 
+  /** Bumped by every mutation, whatever its source. */
+  revision: number;
+  /** Bumped only by user-sourced mutations. */
+  userRevision: number;
+  /** True while an agent bridge session is attached (SRS-ABR-060). */
+  agentActive: boolean;
+  lastAgentEditAt: number | null;
+
   setDocument: (doc: GanttDocument) => void;
   replaceDocument: (doc: GanttDocument) => void;
+
+  /**
+   * Apply an ordered batch of operations as ONE undo frame and ONE store
+   * commit (SRS-ABR-013). All-or-nothing: if any operation is invalid the
+   * document is left untouched and the DocOpError propagates (SRS-ABR-012).
+   *
+   * This is the single path through which agent edits reach the document, so
+   * every agent mutation gets identical validation and history semantics.
+   */
+  applyBatch: (ops: DocOp[], source?: EditSource) => void;
+  setAgentActive: (active: boolean) => void;
 
   setTitle: (title: string) => void;
   setScale: (scale: TimeScale) => void;
@@ -44,8 +71,8 @@ interface DocumentState {
   captureBaseline: () => void;
   clearBaseline: () => void;
 
-  undo: () => void;
-  redo: () => void;
+  undo: (source?: EditSource) => void;
+  redo: (source?: EditSource) => void;
   canUndo: () => boolean;
   canRedo: () => boolean;
 }
@@ -55,10 +82,21 @@ function pushHistory(state: DocumentState): { past: GanttDocument[]; future: Gan
   return { past, future: [] };
 }
 
-function mutate(set: (fn: (s: DocumentState) => Partial<DocumentState>) => void, mutator: (doc: GanttDocument) => GanttDocument): void {
+function mutate(
+  set: (fn: (s: DocumentState) => Partial<DocumentState>) => void,
+  mutator: (doc: GanttDocument) => GanttDocument,
+  source: EditSource = 'user',
+): void {
   set((s) => {
     const history = pushHistory(s);
-    return { doc: mutator(s.doc), past: history.past, future: history.future };
+    return {
+      doc: mutator(s.doc),
+      past: history.past,
+      future: history.future,
+      revision: s.revision + 1,
+      userRevision: source === 'user' ? s.userRevision + 1 : s.userRevision,
+      lastAgentEditAt: source === 'agent' ? Date.now() : s.lastAgentEditAt,
+    };
   });
 }
 
@@ -67,8 +105,20 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   past: [],
   future: [],
 
-  setDocument: (doc) => set({ doc, past: [], future: [] }),
+  revision: 0,
+  userRevision: 0,
+  agentActive: false,
+  lastAgentEditAt: null,
+
+  setDocument: (doc) => set((s) => ({ doc, past: [], future: [], revision: s.revision + 1, userRevision: s.userRevision + 1 })),
   replaceDocument: (doc) => mutate(set, () => doc),
+
+  applyBatch: (ops, source = 'agent') =>
+    // applyOps reduces against a draft and throws before anything is committed,
+    // so an invalid batch never reaches `set` — one frame or none.
+    mutate(set, (d) => applyOps(d, ops), source),
+
+  setAgentActive: (active) => set({ agentActive: active }),
 
   setTitle: (title) => mutate(set, (d) => ({ ...d, title })),
   setScale: (scale) => mutate(set, (d) => ({ ...d, calendar: { ...d.calendar, scale } })),
@@ -135,17 +185,29 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     return next;
   }),
 
-  undo: () => {
+  undo: (source: EditSource = 'user') => {
     const s = get();
     if (s.past.length === 0) return;
     const previous = s.past[s.past.length - 1];
-    set({ doc: previous, past: s.past.slice(0, -1), future: [s.doc, ...s.future] });
+    set({
+      doc: previous,
+      past: s.past.slice(0, -1),
+      future: [s.doc, ...s.future],
+      revision: s.revision + 1,
+      userRevision: source === 'user' ? s.userRevision + 1 : s.userRevision,
+    });
   },
-  redo: () => {
+  redo: (source: EditSource = 'user') => {
     const s = get();
     if (s.future.length === 0) return;
     const next = s.future[0];
-    set({ doc: next, past: [...s.past, s.doc], future: s.future.slice(1) });
+    set({
+      doc: next,
+      past: [...s.past, s.doc],
+      future: s.future.slice(1),
+      revision: s.revision + 1,
+      userRevision: source === 'user' ? s.userRevision + 1 : s.userRevision,
+    });
   },
   canUndo: () => get().past.length > 0,
   canRedo: () => get().future.length > 0,

@@ -83,6 +83,10 @@ selection suppression for child shapes, sticky docking, theme-coherent chrome
 and menus, lifecycle, etc.) live in `spec/srs-native/` (table format identical
 to `spec/srs/`). 
 
+Web-specific requirements (browser runtime, origin/token security, Vite
+build-output isolation, the web agent surface) live in `spec/srs-web/`, same
+table format. First occupant: `SRS-agent-bridge.md`.
+
 - Never author primary SRS "shall" statements in `docs/`.
 - `docs/` holds supporting material: guides, architecture notes, UX inventories,
   mockups, and iteration plans.
@@ -91,4 +95,5 @@ to `spec/srs/`).
   plus e2e harness coverage for native changes.
 
 See `spec/srs/README.md` for the exact table format and ID rules. The same
-format applies under `spec/srs-native/`. All agents must follow this structure.
+format applies under `spec/srs-native/` and `spec/srs-web/`. All agents must
+follow this structure.
