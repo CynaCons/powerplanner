@@ -241,10 +241,11 @@ inline Scene BuildGanttScene(const PpDocument& doc, const GanttLayoutResult& L,
 	}
 
 	// Milestones (+ labels). Diamond fill = ink (tokens §1), overridable per
-	// milestone via its stored color.
+	// milestone via its stored color. cy uses m.subRow so multi-lane rows do not
+	// always paint the diamond over lane 0 (Defect D / layout Step 5).
 	for (const auto& m : L.milestones) {
 		float cx = xToPt(m.xDay) + ptPerDay / 2.0f;
-		float cy = slotTop(L.rowOffsets[m.rowIndex]) + ROW_HEIGHT / 2.0f;
+		float cy = slotTop(L.rowOffsets[m.rowIndex] + m.subRow) + ROW_HEIGHT / 2.0f;
 		float sz = 13.0f;
 		std::string label, msColor;
 		for (const auto& md : doc.milestones) if (md.id == m.id) { label = md.label; msColor = md.color; }

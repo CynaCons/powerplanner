@@ -105,6 +105,9 @@ GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStar
 		std::stable_sort(rowTasks.begin(), rowTasks.end(),
 			[](const PpTask* a, const PpTask* b) { return a->start < b->start; });
 		std::vector<long> tracks;  // each track = last painted day occupying it
+		// Per-task painted span for milestone lane placement (Defect D).
+		struct TaskSpan { long startDay; long lastDay; int subRow; };
+		std::vector<TaskSpan> spans;
 		for (const PpTask* t : rowTasks) {
 			const long startDay = DateToDays(t->start);
 			const long lastDay = startDay + SpanWidthDays(t->start, t->end) - 1;
@@ -114,8 +117,39 @@ GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStar
 			}
 			if (placed == -1) { tracks.push_back(lastDay); placed = (int)tracks.size() - 1; }
 			taskSubRow[t->id] = placed;
+			spans.push_back({ startDay, lastDay, placed });
 		}
-		subRowCount[i] = std::max(1, (int)tracks.size());
+		// Defect D: milestones used to ignore lanes (always subRow 0). Place each
+		// diamond on the first track free on its date (not covered by a task or
+		// an earlier same-row milestone). May grow the row's lane count.
+		std::vector<const PpMilestone*> rowMs;
+		for (const auto& m : doc.milestones) if (m.rowId == visible[i]->id) rowMs.push_back(&m);
+		std::stable_sort(rowMs.begin(), rowMs.end(),
+			[](const PpMilestone* a, const PpMilestone* b) { return a->date < b->date; });
+		std::vector<std::pair<long, int>> msDays; // (day, subRow) already placed
+		int laneCount = (int)tracks.size();
+		for (const PpMilestone* m : rowMs) {
+			const long day = DateToDays(m->date);
+			int placed = -1;
+			for (int k = 0; k < laneCount; ++k) {
+				bool free = true;
+				for (const auto& sp : spans) {
+					if (sp.subRow == k && sp.startDay <= day && day <= sp.lastDay) {
+						free = false; break;
+					}
+				}
+				if (free) {
+					for (const auto& md : msDays) {
+						if (md.second == k && md.first == day) { free = false; break; }
+					}
+				}
+				if (free) { placed = k; break; }
+			}
+			if (placed == -1) { placed = laneCount; ++laneCount; }
+			msDays.push_back({ day, placed });
+			taskSubRow[std::string("m:") + m->id] = placed;
+		}
+		subRowCount[i] = std::max(1, laneCount);
 	}
 
 	// Step 3 — row slots + offsets.
@@ -140,11 +174,13 @@ GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStar
 		R.tasks.push_back(lt);
 	}
 
-	// Step 5 — milestones.
+	// Step 5 — milestones (subRow from Step 2 packing; Defect D).
 	for (const auto& m : doc.milestones) {
 		auto it = rowIndex.find(m.rowId);
 		if (it == rowIndex.end()) continue;
-		R.milestones.push_back({ m.id, it->second, xDay(m.date) });
+		const std::string mkey = std::string("m:") + m.id;
+		const int sub = taskSubRow.count(mkey) ? taskSubRow[mkey] : 0;
+		R.milestones.push_back({ m.id, it->second, sub, xDay(m.date) });
 	}
 
 	// Step 6 — summary bars for parent rows with descendant tasks.
@@ -221,7 +257,7 @@ GanttLayoutResult LayoutGantt(const PpDocument& doc, const std::string& viewStar
 				const LaidMilestone* anchor = fm->second;
 				lt.anchored = true;
 				lt.rowIndex = anchor->rowIndex;
-				lt.subRow = 0;
+				lt.subRow = anchor->subRow;
 				lt.xDay = anchor->xDay;
 				lt.widthDays = 0;
 				R.texts.push_back(lt);

@@ -58,19 +58,38 @@ collapsed groups.
 
 ## Step 2 — Sub-row stacking (overlap → tracks)
 
-For each visible row, lay its tasks onto stacking tracks (greedy, first-fit):
+For each visible row, lay its tasks onto stacking tracks (greedy, first-fit).
+A track records the **last day the occupant still paints**, not the raw end
+date. Step 4 uses an inclusive-end bar and floors width at 2 days
+(`widthDays = max(2, end − start + 1)`), so a task ending on day E covers day E
+and a one-day task paints `start..start+1`. Comparing raw end dates would put
+touching / single-day neighbours on the same lane while they paint on top of
+each other.
 
 ```
 tasksInRow = doc.tasks where rowId == row.id, sorted by start ascending
-tracks = []                       # each track holds the end date occupying it
+tracks = []                       # each track = last painted day occupying it
 for t in tasksInRow:
-    placed = first track i where tracks[i] <= t.start   # free by t's start
-    if found: tracks[i] = t.end ; subRow(t) = i
-    else:     tracks.push(t.end) ; subRow(t) = len(tracks)-1
-subRowCount(row) = max(1, len(tracks))
+    lastPainted = t.start + widthDays(t) - 1   # widthDays = max(2, end-start+1)
+    placed = first track i where tracks[i] < t.start   # free strictly before start
+    if found: tracks[i] = lastPainted ; subRow(t) = i
+    else:     tracks.push(lastPainted) ; subRow(t) = len(tracks)-1
 ```
 
-If `allowOverlap`, every task gets `subRow = 0` and `subRowCount = 1`.
+Then place milestones on the first track free on their date (not covered by a
+task painted span or an earlier same-row milestone on that day). This may grow
+the lane count so diamonds are not forced onto lane 0 over an occupied bar:
+
+```
+milestonesInRow = doc.milestones where rowId == row.id, sorted by date ascending
+for m in milestonesInRow:
+    placed = first track k in 0..laneCount-1 free on m.date
+    if none: placed = laneCount; laneCount += 1
+    subRow(m) = placed
+subRowCount(row) = max(1, laneCount)
+```
+
+If `allowOverlap`, every task and milestone gets `subRow = 0` and `subRowCount = 1`.
 
 Comparison of dates uses ISO string ordering (lexicographic == chronological for
 `YYYY-MM-DD`).
@@ -112,7 +131,8 @@ For each milestone whose `rowId` is visible:
 ```
 x        = xDay(milestone.date)
 rowIndex = rowIndex(milestone.rowId)
-yCenter  = rowOffset(rowIndex) + 0.5           # vertical center of the row, in slots
+subRow   = subRow(milestone)                   # from Step 2 (may be > 0)
+yCenter  = rowOffset(rowIndex) + subRow + 0.5  # center of that track, in slots
 ```
 
 Rendered as a diamond centered on `(x, yCenter)`.

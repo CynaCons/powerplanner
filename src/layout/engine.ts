@@ -1,9 +1,15 @@
 import type { GanttDocument, Task, Milestone, Bracket, Dependency, Row } from '../types/document';
+import { addDays, diffDays } from '../utils/dates';
 import { dateToX, xToDate } from './timeAxis';
 
 export const ROW_HEIGHT = 36;
 export const BAR_HEIGHT = 22;
 export const MILESTONE_SIZE = 14;
+
+/** Inclusive painted span in days (matches native SpanWidthDays / width formula). */
+export function spanWidthDays(start: string, end: string): number {
+  return Math.max(2, diffDays(start, end) + 1);
+}
 
 export interface SummaryBar {
   rowId: string;
@@ -31,6 +37,8 @@ export interface LaidOutMilestone {
   x: number;
   y: number;
   rowIndex: number;
+  /** Stacking track within the row (same unit as LaidOutTask.subRow). */
+  subRow: number;
 }
 
 export interface LaidOutBracket {
@@ -80,29 +88,74 @@ export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap = false 
   const subRowsPerRow: number[] = visibleRows.map(() => 1);
   const taskSubRow = new Map<string, number>();
 
+  // Milestone sub-rows (Defect D parity with native).
+  const milestoneSubRow = new Map<string, number>();
+
   if (!allowOverlap) {
     for (const row of visibleRows) {
       const tasks = doc.tasks.filter((t) => t.rowId === row.id).sort((a, b) => a.start.localeCompare(b.start));
-      const tracks: string[] = []; // each track = ISO end date currently occupying
+      // Each track holds the last painted ISO day (not raw end): inclusive-end
+      // bars and the 2-day width floor mean a task ending on E paints through E,
+      // and a 1-day task paints start..start+1. Free only when lastPainted < next.start.
+      const tracks: string[] = [];
+      const spans: { start: string; last: string; subRow: number }[] = [];
       for (const t of tasks) {
+        const lastPainted = addDays(t.start, spanWidthDays(t.start, t.end) - 1);
         let placed = -1;
         for (let i = 0; i < tracks.length; i++) {
-          if (tracks[i] <= t.start) {
-            tracks[i] = t.end;
+          if (tracks[i] < t.start) {
+            tracks[i] = lastPainted;
             placed = i;
             break;
           }
         }
         if (placed === -1) {
-          tracks.push(t.end);
+          tracks.push(lastPainted);
           placed = tracks.length - 1;
         }
         taskSubRow.set(t.id, placed);
+        spans.push({ start: t.start, last: lastPainted, subRow: placed });
       }
-      subRowsPerRow[rowIndex.get(row.id)!] = Math.max(1, tracks.length);
+      const milestones = doc.milestones
+        .filter((m) => m.rowId === row.id)
+        .sort((a, b) => a.date.localeCompare(b.date));
+      const msDays: { date: string; subRow: number }[] = [];
+      let laneCount = tracks.length;
+      for (const m of milestones) {
+        let placed = -1;
+        for (let k = 0; k < laneCount; k++) {
+          let free = true;
+          for (const sp of spans) {
+            if (sp.subRow === k && sp.start <= m.date && m.date <= sp.last) {
+              free = false;
+              break;
+            }
+          }
+          if (free) {
+            for (const md of msDays) {
+              if (md.subRow === k && md.date === m.date) {
+                free = false;
+                break;
+              }
+            }
+          }
+          if (free) {
+            placed = k;
+            break;
+          }
+        }
+        if (placed === -1) {
+          placed = laneCount;
+          laneCount += 1;
+        }
+        msDays.push({ date: m.date, subRow: placed });
+        milestoneSubRow.set(m.id, placed);
+      }
+      subRowsPerRow[rowIndex.get(row.id)!] = Math.max(1, laneCount);
     }
   } else {
     for (const t of doc.tasks) taskSubRow.set(t.id, 0);
+    for (const m of doc.milestones) milestoneSubRow.set(m.id, 0);
   }
 
   const rowHeights = subRowsPerRow.map((n) => Math.max(ROW_HEIGHT, n * ROW_HEIGHT));
@@ -131,9 +184,10 @@ export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap = false 
     .filter((m) => rowIndex.has(m.rowId))
     .map((m) => {
       const rIdx = rowIndex.get(m.rowId)!;
+      const subRow = milestoneSubRow.get(m.id) ?? 0;
       const x = dateToX(m.date, viewStart, pxPerDay);
-      const y = rowOffsets[rIdx] + ROW_HEIGHT / 2;
-      return { milestone: m, x, y, rowIndex: rIdx };
+      const y = rowOffsets[rIdx] + subRow * ROW_HEIGHT + ROW_HEIGHT / 2;
+      return { milestone: m, x, y, rowIndex: rIdx, subRow };
     });
 
   // Compute summary bars for group/summary rows (rows that contain other rows)

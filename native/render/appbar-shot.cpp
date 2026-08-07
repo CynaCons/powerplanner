@@ -687,8 +687,10 @@ static bool FindTaskProgressEdge(PowerPoint::_ApplicationPtr& app, const char* t
 	if (!FindTaskBodyRect(app, taskId, &r) || !outScreen) return false;
 	if (percent < 0) percent = 0;
 	if (percent > 100) percent = 100;
+	// Progress grip is bottom-half only (GanttHitTest 1b / Defect B). Aim at the
+	// lower quartile so the harness does not hit the body-only top half.
 	outScreen->x = r.left + (r.right - r.left) * percent / 100;
-	outScreen->y = (r.top + r.bottom) / 2;
+	outScreen->y = r.top + (r.bottom - r.top) * 3 / 4;
 	return true;
 }
 

@@ -81,6 +81,26 @@ static bool RunHitTestChecks() {
 
 	// Task body vs edge bands (edge = bar edge +-4px).
 	ok = zoneCheck(400, 200, HtZone::TaskBody, "task-1", "hit: task center is TaskBody") && ok;
+	// Defect B: progress grip is bottom-half only. At 50% the progress X is the
+	// bar centre — top/mid y must stay TaskBody (date drag); bottom half is
+	// TaskProgressEdge.
+	{
+		HtItem* task1 = nullptr;
+		for (auto& it : snap.items) {
+			if (it.kind == HtItemKind::Task && it.id == "task-1") { task1 = &it; break; }
+		}
+		ok = Check(task1 != nullptr, "hit: task-1 item present for progress checks") && ok;
+		if (task1) {
+			task1->progressPercent = 50;
+			ok = zoneCheck(400, 190, HtZone::TaskBody, "task-1",
+				"hit: top half at 50% progress X is TaskBody (not progress)") && ok;
+			ok = zoneCheck(400, 200, HtZone::TaskBody, "task-1",
+				"hit: vertical mid at 50% progress X is TaskBody (not progress)") && ok;
+			ok = zoneCheck(400, 210, HtZone::TaskProgressEdge, "task-1",
+				"hit: bottom half at 50% progress X is TaskProgressEdge") && ok;
+			task1->progressPercent = -1;
+		}
+	}
 	ok = zoneCheck(300, 200, HtZone::TaskEdgeL, "task-1", "hit: task left edge is TaskEdgeL") && ok;
 	ok = zoneCheck(296, 200, HtZone::TaskEdgeL, "task-1", "hit: 4px outside left edge is TaskEdgeL") && ok;
 	ok = zoneCheck(304, 200, HtZone::TaskEdgeL, "task-1", "hit: 4px inside left edge is TaskEdgeL") && ok;
