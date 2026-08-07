@@ -734,6 +734,67 @@ and the render was unreadable at the same time. Counts are not a rendering gate.
 - [x] L1d: measured expanded vs collapsed — section 179px → 36px; **whole-panel** collapse added because section collapse alone reclaims only vertical space while the 320px column (35% of the window) was the binding constraint. Chart width 580 → 777px (+34%), restores cleanly
 - [ ] L1e (open): the user has not yet seen either fix on screen. Verified by measured geometry, not by looking — the browser pane was not displayed. **Not self-closable**, same rule as the other user visual gates
 
+# Phase 16: Web command bar — retire the inspector column (user directive 2026-08-07)
+
+**Report:** *"I don't really like the panel on the left even though it is
+collapsible, can we rethink the integration of these aspects with the rest of
+the app?"* — plus, on the panel's sections: *"the appearance and the statistics
+and all of that, is it really necessary? I'm not sure."*
+
+**Finding:** the panel is largely **duplicate chrome**. The scale segmented
+control is rendered in `Inspector.tsx`, `ToolPalette.tsx` AND
+`CommandPalette.tsx` — the first two are on screen simultaneously, both wired to
+`setScale`. `Fit` exists in both `Header.tsx` and `ToolPalette.tsx`. Task and
+milestone counts are in both the inspector's Statistics section and
+`StatusBar.tsx`. The 320px column was charging rent for a duplicate.
+
+**Diagnosis:** the inspector is a *contextual property editor that was given a
+permanent column*. `SelectionInspector` — the genuinely useful part — renders
+only on selection; the empty state was padded with document settings and
+read-only stats that already live elsewhere. **The v2.12.1 collapse toggle
+treated the symptom.** This removes the cause and retires that toggle.
+
+**Direction (user choice 2026-08-07):** contextual bottom bar, mirroring the
+native add-in's `onslide-experience-spec.md` §R8 — left group swaps with the
+selection, right group always global. One interaction language across web and
+native. Design: [`docs/web-command-bar-plan.md`](docs/web-command-bar-plan.md).
+
+Chart width goes 580px → full 900px (**+55%**), which is also the largest
+remaining lever on the v2.12.0 legibility problem.
+
+### v2.13.0 — C0: Reclaim the duplicated chrome
+**Goal:** Delete what is already said elsewhere. Worth doing regardless of what happens to the column.
+- [ ] C0a: status bar absorbs Statistics (span + avg complete alongside the existing counts); delete the Statistics section
+- [ ] C0b: File menu gains *Document settings…* (theme, fiscal year start); delete the Appearance and Document sections — the inspector becomes selection-only
+- [ ] C0c: delete the duplicate `Fit` from `Header.tsx`; the bar keeps the canonical one
+- [ ] C0d: confirm no capability is lost — every control removed is reachable at its new home
+
+### v2.13.1 — C1: Command bar shell
+**Goal:** The tool palette becomes a grouped, selection-aware bar. Behaviour unchanged.
+- [ ] C1a: group layout with hairline separators and 9px uppercase group labels, per native R8 anatomy
+- [ ] C1b: right group pinned — scale/zoom/fit never move as the selection changes, which is what makes a contextual bar learnable
+- [ ] C1c: persistent select/pan micro-group (open question 2 — needed *during* a selection)
+- [ ] C1d: narrow-window behaviour — left group wraps or scrolls, right group never wraps
+
+### v2.13.2 — C2: Selection contents move into the bar
+**Goal:** Everything `SelectionInspector` can edit stays reachable.
+- [ ] C2a: task group — label · Edit · swatches · ±1d · ±10% · Link/Unlink · Delete
+- [ ] C2b: milestone / bracket / marker / multi-select groups
+- [ ] C2c: *Edit* popover for the controls that do not reduce to a button — exact dates, percent slider, **notes** (the least button-shaped control; it must not be dropped)
+- [ ] C2d: e2e gate — edit label, dates, colour, percent and notes entirely through the new surface
+
+### v2.13.3 — C3: Delete the column
+**Goal:** The chart gets the width.
+- [ ] C3a: remove the inspector column and the v2.12.1 collapse machinery (`--inspector-w`, rail button, both localStorage keys)
+- [ ] C3b: move header insert actions into the bar's INSERT group
+- [ ] C3c: re-check `app-shell--compact` (task-pane layout already hides the inspector — verify, do not assume)
+- [ ] C3d: measure chart width before/after and re-run the v2.12.0 label-overlap probe at the new width
+- [ ] C3e: **USER VISUAL/FEEL GATE** — not self-closable
+
+### v2.13.4 — C4: Open design questions
+- [ ] C4a: bar floats over the chart (native-style) vs occupies its own grid row — proposal: own grid row for v1
+- [ ] C4b: does the header still earn 48px once insert actions leave it? May merge into the bar
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
