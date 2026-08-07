@@ -48,6 +48,29 @@ The Claude launch targets in `.claude/launch.json` map to:
 
 When web commands change, update this file and `.claude/launch.json` together.
 
+### Web agent bridge (drive the live web app)
+
+An agent can author the chart **in the running web app** through the
+`powerplanner-web` MCP server (`mcp/agent-bridge/server.mjs`, registered in
+`.mcp.json`). Web only — the native add-in has its own agent surface.
+
+1. `npm run dev` (port 5180).
+2. Click **Agent** in the app header. It is an explicit opt-in and doubles as
+   the stop control; a "agent connected" chip appears in the status bar.
+3. Call the tools. `get_status` first — it distinguishes "nothing attached"
+   from "attached to an empty document".
+
+Prefer **`apply_batch`** over many single calls: it applies an ordered list of
+operations as ONE undo frame, so the user reverts your whole turn with a single
+Ctrl+Z, and it is all-or-nothing, so an invalid operation changes nothing.
+Supply ids yourself; later operations may reference entities created by earlier
+ones in the same batch. Never move the viewport as a side effect of editing.
+
+Dev-only by construction: the bridge is dropped from production and portable
+builds (gated by `tests/unit/bridge-build-isolation.test.ts`). Design:
+[`docs/web-agent-bridge-plan.md`](docs/web-agent-bridge-plan.md). Requirements:
+[`spec/srs-web/SRS-agent-bridge.md`](spec/srs-web/SRS-agent-bridge.md).
+
 ## Native Commands
 
 Windows-only. MSVC + ATL + 64-bit PowerPoint. Prefer running from the **repo

@@ -24,6 +24,10 @@
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1"
       }
+    },
+    "powerplanner-web": {
+      "command": "node",
+      "args": ["mcp/agent-bridge/server.mjs"]
     }
   }
 }

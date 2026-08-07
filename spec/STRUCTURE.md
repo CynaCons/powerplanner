@@ -30,6 +30,14 @@ This document defines the canonical layout of the specification and requirements
      `SRS-DependencyEditing.md`, `SRS-RowAndTaskSelection.md`, `SRS-TimeWindow.md`.
    - Must be paired with harness e2e scenarios under `native/tools/scenarios/`.
 
+3b. **Web-specific Requirements — `spec/srs-web/`**
+   - Same table format. Index: `srs-web/README.md`.
+   - Only concerns that cannot or should not apply to native: browser runtime,
+     origin/token security posture, Vite build-output isolation, the web agent
+     surface.
+   - Includes: `SRS-agent-bridge.md` (`ABR`) — MCP agent control of the live web
+     document (PLAN.md Phase 14 / v2.11.x).
+
 4. **Implementation Notes, Plans, Guides — `docs/`**
    - Live plan: repo-root `PLAN.md` (not docs).
    - `native-addin.md`, `native-addin-install.md`, `overlay-architecture-map.md`,
@@ -41,8 +49,7 @@ This document defines the canonical layout of the specification and requirements
    - Do **not** author new "shall" statements here.
 
 5. **Web Implementation** — `src/`
-   - Consumes foundation + shared SRS.
-   - No separate srs-web yet (future if divergence grows).
+   - Consumes foundation + shared SRS + `spec/srs-web/`.
 
 6. **Native Implementation** — `native/PowerPlannerAddin/`
    - C++ COM, Gantt* + Overlay.cpp
