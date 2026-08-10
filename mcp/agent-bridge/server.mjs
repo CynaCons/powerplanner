@@ -17,7 +17,7 @@
 
 import { createServer } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { writeFileSync, unlinkSync } from 'node:fs';
+import { writeFileSync, unlinkSync, readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
@@ -413,7 +413,37 @@ function mcpToolText(id, payload, isError = false) {
   });
 }
 
+/**
+ * Re-assert ownership of the token file.
+ *
+ * Several bridges can exist over a machine's lifetime — an e2e run spawns its
+ * own, and on Windows a killed process never runs its exit cleanup, so a dead
+ * bridge's token can outlive it and shadow a live one. Rather than trying to
+ * make cleanup reliable, the live server simply re-writes the file whenever it
+ * is asked to do work. Self-healing beats coordinated shutdown.
+ */
+function ensureTokenFileOwned() {
+  try {
+    if (existsSync(TOKEN_FILE)) {
+      const current = JSON.parse(readFileSync(TOKEN_FILE, 'utf8'));
+      if (current.pid === process.pid && current.token === SESSION_TOKEN) return;
+    }
+    writeTokenFile();
+  } catch {
+    writeTokenFile();
+  }
+}
+
+function writeTokenFile() {
+  try {
+    writeFileSync(TOKEN_FILE, JSON.stringify({ token: SESSION_TOKEN, port: PORT, pid: process.pid }, null, 2));
+  } catch {
+    /* non-fatal: the page will report the token endpoint failure */
+  }
+}
+
 async function handleToolCall(id, name, args) {
+  ensureTokenFileOwned();
   const known = TOOLS.some((t) => t.name === name);
   if (!known) {
     mcpToolText(id, `Unknown tool: ${name}`, true);
@@ -509,7 +539,7 @@ function cleanup() {
 
 // Loopback only, never a wildcard address (SRS-ABR-002).
 httpServer.listen(PORT, '127.0.0.1', () => {
-  writeFileSync(TOKEN_FILE, JSON.stringify({ token: SESSION_TOKEN, port: PORT, pid: process.pid }, null, 2));
+  writeTokenFile();
   process.stderr.write(`[powerplanner-bridge] listening on 127.0.0.1:${PORT}\n`);
 });
 
