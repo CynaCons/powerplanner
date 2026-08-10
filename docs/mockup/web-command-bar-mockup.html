@@ -1,0 +1,605 @@
+<title>PowerPlanner — command bar dock study</title>
+
+<style>
+  /* ------------------------------------------------------------------
+     Two surfaces, deliberately different.
+
+     The RIG (dark, indigo-biased) is the prototype's own chrome.
+     The STAGE (PowerPlanner's real tokens) is the specimen.
+     Keeping them visually separate stops the switcher being mistaken
+     for product UI — the whole study is invalid if you can't tell
+     which pixels are the proposal.
+     ------------------------------------------------------------------ */
+
+  :root {
+    /* Rig — neutrals biased toward the product accent, not pure grey */
+    --rig-bg: #16161d;
+    --rig-panel: #1e1e28;
+    --rig-line: #2e2e3c;
+    --rig-text: #e8e8f0;
+    --rig-dim: #9a9ab0;
+    --rig-accent: #8b8cf0;
+
+    /* Specimen — PowerPlanner light tokens, verbatim from global.css */
+    --color-bg: #fafbfc;
+    --color-bg-elev: #ffffff;
+    --color-bg-panel: #ffffff;
+    --color-bg-subtle: #f4f5f7;
+    --color-border: #d8dadf;
+    --color-border-hairline: rgba(0, 0, 0, 0.06);
+    --color-text: #0b0c0f;
+    --color-text-soft: #5b6068;
+    --color-text-dim: #8b8f97;
+    --color-accent: #4f46e5;
+    --color-accent-soft: rgba(79, 70, 229, 0.1);
+    --color-deadline: #fbbf24;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.12);
+    --radius: 6px;
+    --radius-lg: 10px;
+
+    --header-h: 48px;
+    --status-h: 26px;
+    --bar-h: 56px;
+    --row-h: 44px;
+    --gutter-w: 132px;
+
+    --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  /* The specimen keeps PowerPlanner's own dark palette when the viewer
+     is in dark mode — same as the product does. */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-bg: #0b0c0f;
+      --color-bg-elev: #15171c;
+      --color-bg-panel: #101216;
+      --color-bg-subtle: #1a1d23;
+      --color-border: #2a2d34;
+      --color-border-hairline: rgba(255, 255, 255, 0.06);
+      --color-text: #f0f1f3;
+      --color-text-soft: #a1a5ad;
+      --color-text-dim: #6b7079;
+      --color-accent: #818cf8;
+      --color-accent-soft: rgba(129, 140, 248, 0.16);
+      --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.42);
+    }
+  }
+  :root[data-theme='dark'] {
+    --color-bg: #0b0c0f;
+    --color-bg-elev: #15171c;
+    --color-bg-panel: #101216;
+    --color-bg-subtle: #1a1d23;
+    --color-border: #2a2d34;
+    --color-border-hairline: rgba(255, 255, 255, 0.06);
+    --color-text: #f0f1f3;
+    --color-text-soft: #a1a5ad;
+    --color-text-dim: #6b7079;
+    --color-accent: #818cf8;
+    --color-accent-soft: rgba(129, 140, 248, 0.16);
+    --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.42);
+  }
+  :root[data-theme='light'] {
+    --color-bg: #fafbfc;
+    --color-bg-elev: #ffffff;
+    --color-bg-panel: #ffffff;
+    --color-bg-subtle: #f4f5f7;
+    --color-border: #d8dadf;
+    --color-border-hairline: rgba(0, 0, 0, 0.06);
+    --color-text: #0b0c0f;
+    --color-text-soft: #5b6068;
+    --color-text-dim: #8b8f97;
+    --color-accent: #4f46e5;
+    --color-accent-soft: rgba(79, 70, 229, 0.1);
+    --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.12);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--rig-bg);
+    color: var(--rig-text);
+    font-family: var(--ui);
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 28px 20px 56px;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+
+  .head h1 {
+    margin: 0 0 6px;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+  .head p { margin: 0; color: var(--rig-dim); max-width: 62ch; }
+  .head code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--rig-panel);
+    border: 1px solid var(--rig-line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  /* ---- controls ---- */
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 14px;
+    background: var(--rig-panel);
+    border: 1px solid var(--rig-line);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  legend {
+    padding: 0;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: var(--rig-dim);
+    font-weight: 600;
+  }
+  .seg { display: flex; gap: 4px; flex-wrap: wrap; }
+  .seg button {
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--rig-dim);
+    background: transparent;
+    border: 1px solid var(--rig-line);
+    border-radius: 7px;
+    padding: 6px 11px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+  .seg button:hover { color: var(--rig-text); border-color: var(--rig-accent); }
+  .seg button[aria-pressed='true'] {
+    background: var(--rig-accent);
+    border-color: var(--rig-accent);
+    color: #14141c;
+    font-weight: 600;
+  }
+  .seg button:focus-visible { outline: 2px solid var(--rig-accent); outline-offset: 2px; }
+
+  /* ---- stage ---- */
+  .stage {
+    background: repeating-linear-gradient(45deg, #101017, #101017 9px, #13131b 9px, #13131b 18px);
+    border: 1px solid var(--rig-line);
+    border-radius: 12px;
+    padding: 22px;
+  }
+
+  .app {
+    height: 430px;
+    display: grid;
+    grid-template-rows: var(--header-h) 1fr var(--bar-h) var(--status-h);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+    font-size: 13px;
+    color: var(--color-text);
+    position: relative;
+  }
+  /* Floating dock: the bar leaves the grid and hovers over the chart. */
+  .app[data-dock='float'] { grid-template-rows: var(--header-h) 1fr var(--status-h); }
+
+  .app__header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 12px; gap: 10px;
+    background: var(--color-bg-panel);
+    border-bottom: 1px solid var(--color-border-hairline);
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 12.5px; }
+  .brand__mark {
+    width: 16px; height: 16px; border-radius: 4px;
+    background: linear-gradient(135deg, var(--color-accent), #8b5cf6);
+  }
+  .brand__title { color: var(--color-text-soft); font-weight: 500; }
+  .header__right { display: flex; gap: 4px; align-items: center; }
+
+  .chip {
+    font-size: 11.5px; color: var(--color-text-soft);
+    border: 1px solid var(--color-border-hairline);
+    background: var(--color-bg-elev);
+    border-radius: var(--radius); padding: 4px 9px; white-space: nowrap;
+  }
+
+  /* ---- chart ---- */
+  .chart { position: relative; overflow: hidden; background: var(--color-bg); }
+  .axis {
+    display: grid; grid-template-columns: var(--gutter-w) 1fr;
+    border-bottom: 1px solid var(--color-border-hairline);
+    height: 30px; align-items: center;
+    background: var(--color-bg-panel);
+  }
+  .axis__ticks { display: flex; }
+  .axis__tick {
+    flex: 1; font-size: 10px; color: var(--color-text-dim);
+    border-left: 1px solid var(--color-border-hairline);
+    padding-left: 6px; letter-spacing: 0.2px;
+  }
+  .row { display: grid; grid-template-columns: var(--gutter-w) 1fr; height: var(--row-h); }
+  .row + .row { border-top: 1px solid var(--color-border-hairline); }
+  .row__label {
+    display: flex; align-items: center; padding: 0 12px;
+    font-size: 11.5px; color: var(--color-text-soft);
+    border-right: 1px solid var(--color-border-hairline);
+    background: var(--color-bg-panel);
+  }
+  .row__track { position: relative; }
+  .bar {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    height: 20px; border-radius: 4px;
+    display: flex; align-items: center; padding: 0 7px;
+    font-size: 10.5px; color: #fff; white-space: nowrap; overflow: hidden;
+    cursor: pointer;
+  }
+  .bar.is-selected { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .ms {
+    position: absolute; top: 50%; width: 13px; height: 13px;
+    transform: translate(-50%, -50%) rotate(45deg);
+    background: var(--color-deadline); border: 1px solid rgba(0,0,0,.25);
+  }
+
+  /* ---- the thing being decided ---- */
+  .cmdbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 10px;
+    background: var(--color-bg-panel);
+    border-top: 1px solid var(--color-border-hairline);
+    overflow-x: auto;
+  }
+  .app[data-dock='float'] .cmdbar {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(var(--status-h) + 8px);
+    width: max-content; max-width: 94%;
+    height: 44px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    box-shadow: var(--shadow-3);
+    z-index: 5;
+  }
+  .grp { display: flex; align-items: center; gap: 4px; padding-right: 10px; flex-shrink: 0; }
+  .grp + .grp { border-left: 1px solid var(--color-border-hairline); padding-left: 10px; }
+  .grp__label {
+    font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.9px;
+    color: var(--color-text-dim); font-weight: 700; margin-right: 3px;
+  }
+  .grp--right { margin-left: auto; }
+  .app[data-dock='float'] .grp--right { margin-left: 0; }
+  .btn {
+    font: inherit; font-size: 11.5px; color: var(--color-text);
+    background: transparent; border: 1px solid transparent;
+    border-radius: var(--radius); padding: 4px 8px; cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover { background: var(--color-bg-subtle); }
+  .btn.is-active { background: var(--color-accent-soft); color: var(--color-accent); font-weight: 600; }
+  .btn--danger { color: #dc2626; }
+  .selname {
+    font-size: 11.5px; font-weight: 600; max-width: 148px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .swatches { display: flex; gap: 3px; }
+  .swatch { width: 13px; height: 13px; border-radius: 3px; border: 1px solid rgba(0,0,0,.2); cursor: pointer; }
+  .scale { display: flex; gap: 2px; background: var(--color-bg-subtle); border-radius: var(--radius); padding: 2px; }
+  .scale button {
+    font: inherit; font-size: 10.5px; width: 21px; height: 20px;
+    border: 0; background: transparent; border-radius: 4px; cursor: pointer; color: var(--color-text-soft);
+  }
+  .scale button.is-active { background: var(--color-bg-panel); color: var(--color-text); box-shadow: var(--shadow-1); font-weight: 600; }
+
+  .app__status {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 12px; font-size: 10.5px; color: var(--color-text-soft);
+    background: var(--color-bg-panel);
+    border-top: 1px solid var(--color-border-hairline);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- verdict ---- */
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .note {
+    background: var(--rig-panel); border: 1px solid var(--rig-line);
+    border-radius: 12px; padding: 15px 17px;
+  }
+  .note h3 { margin: 0 0 9px; font-size: 12px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--rig-accent); }
+  .note ul { margin: 0; padding-left: 17px; color: var(--rig-dim); font-size: 13.5px; }
+  .note li + li { margin-top: 6px; }
+  .note strong { color: var(--rig-text); font-weight: 600; }
+
+  .callout {
+    border-left: 2px solid var(--rig-accent);
+    padding: 2px 0 2px 13px;
+    color: var(--rig-dim);
+    font-size: 13.5px;
+  }
+  .callout strong { color: var(--rig-text); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+  <div class="head">
+    <h1>Command bar — dock study</h1>
+    <p>
+      Three decisions for <code>v2.13.1</code>, shown rather than described. Switch the dock and the
+      selection to see how the bar behaves, and press the <strong>⚙</strong> inside the bar for the
+      document context. Everything below the striped border is drawn with PowerPlanner's own tokens;
+      the dark chrome is the rig.
+    </p>
+  </div>
+
+  <div class="controls">
+    <fieldset>
+      <legend>Dock</legend>
+      <div class="seg" id="seg-dock">
+        <button data-v="row" aria-pressed="true">Own grid row</button>
+        <button data-v="float" aria-pressed="false">Floating</button>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Tools while selected</legend>
+      <div class="seg" id="seg-tools">
+        <button data-v="persistent" aria-pressed="true">Always shown</button>
+        <button data-v="contextual" aria-pressed="false">Only when idle</button>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Selection</legend>
+      <div class="seg" id="seg-sel">
+        <button data-v="none" aria-pressed="true">Nothing</button>
+        <button data-v="task" aria-pressed="false">Task</button>
+        <button data-v="milestone" aria-pressed="false">Milestone</button>
+        <button data-v="row" aria-pressed="false">Row</button>
+        <button data-v="document" aria-pressed="false">Document ⚙</button>
+      </div>
+    </fieldset>
+  </div>
+
+  <div class="stage">
+    <div class="app" id="app" data-dock="row">
+      <div class="app__header">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true"></span>
+          PowerPlanner
+          <span class="brand__title">· CAN Interface roadmap</span>
+        </div>
+        <div class="header__right">
+          <span class="chip">Undo</span>
+          <span class="chip">Redo</span>
+          <span class="chip">File</span>
+        </div>
+      </div>
+
+      <div class="chart">
+        <div class="axis">
+          <div></div>
+          <div class="axis__ticks">
+            <span class="axis__tick">Q4 2026</span>
+            <span class="axis__tick">Q1 2027</span>
+            <span class="axis__tick">Q2 2027</span>
+            <span class="axis__tick">Q3 2027</span>
+            <span class="axis__tick">Q4 2027</span>
+          </div>
+        </div>
+        <div id="rows"></div>
+      </div>
+
+      <div class="cmdbar" id="cmdbar"></div>
+
+      <div class="app__status">
+        <span>32 tasks · 7 milestones · 1.5y span · 0% complete</span>
+        <span id="status-sel">scale: month · 0 selected</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes" id="notes"></div>
+
+  <p class="callout" id="verdict"></p>
+</div>
+
+<script>
+  // Real roadmap content — a layout study on fake data tells you nothing about
+  // whether the bar occludes anything that matters.
+  const ROWS = [
+    { id: 'r-def',  label: 'Definition',  color: '#6366f1', bars: [ {l:'Requirements', x:1, w:12}, {l:'Architecture', x:9, w:15} ] },
+    { id: 'r-hw',   label: 'Hardware',    color: '#0ea5e9', bars: [ {l:'Schematic', x:14, w:16}, {l:'PCB layout', x:27, w:20}, {l:'Rev A fab', x:46, w:12} ], ms: [58] },
+    { id: 'r-fw',   label: 'Firmware',    color: '#10b981', bars: [ {l:'USB stack', x:30, w:15}, {l:'CAN FD driver', x:43, w:19} ] },
+    { id: 'r-val',  label: 'Validation',  color: '#ef4444', bars: [ {l:'Test rig', x:56, w:15}, {l:'Timestamp accuracy', x:69, w:17} ] },
+    { id: 'r-rel',  label: 'Release',     color: '#ec4899', bars: [ {l:'Pilot units', x:74, w:13}, {l:'v1.0 launch', x:87, w:11} ], ms: [98] },
+  ];
+
+  const state = { dock: 'row', tools: 'persistent', sel: 'none' };
+
+  const SEL_META = {
+    none:      { name: null,                  status: '0 selected' },
+    task:      { name: 'Rev A fab',           status: '1 task selected' },
+    milestone: { name: 'Rev A boards in hand',status: '1 milestone selected' },
+    row:       { name: 'Hardware',            status: '1 row selected' },
+    document:  { name: null,                  status: 'document settings' },
+  };
+
+  function renderRows() {
+    document.getElementById('rows').innerHTML = ROWS.map(r => `
+      <div class="row">
+        <div class="row__label">${r.label}</div>
+        <div class="row__track">
+          ${r.bars.map(b => {
+            const isSel = state.sel === 'task' && b.l === 'Rev A fab';
+            return `<div class="bar${isSel ? ' is-selected' : ''}"
+                         style="left:${b.x}%;width:${b.w}%;background:${r.color}">${b.l}</div>`;
+          }).join('')}
+          ${(r.ms || []).map(x => `<div class="ms" style="left:${x}%"></div>`).join('')}
+        </div>
+      </div>`).join('');
+  }
+
+  const TOOLS_GROUP = `
+    <div class="grp">
+      <button class="btn is-active" title="Select (V)">▹</button>
+      <button class="btn" title="Pan (H)">✋</button>
+    </div>`;
+
+  // The gear sits in the GLOBAL group, not the selection group — document
+  // settings are document-scoped, exactly like scale and zoom. Pressing it
+  // clears the selection, because a document context and a selected task
+  // cannot both own the left side of the bar.
+  const rightGroup = () => `
+    <div class="grp grp--right">
+      <span class="grp__label">Scale</span>
+      <div class="scale">
+        <button>D</button><button>W</button><button class="is-active">M</button><button>Q</button><button>Y</button>
+      </div>
+      <button class="btn" title="Zoom out">−</button>
+      <button class="btn" style="font-variant-numeric:tabular-nums">2d/px</button>
+      <button class="btn" title="Zoom in">+</button>
+      <button class="btn">Fit</button>
+      <button class="btn${state.sel === 'document' ? ' is-active' : ''}" id="gear"
+              title="Document settings — clears the selection"
+              aria-pressed="${state.sel === 'document'}">⚙</button>
+    </div>`;
+
+  const SWATCHES = ['#6366f1','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#64748b']
+    .map(c => `<span class="swatch" style="background:${c}"></span>`).join('');
+
+  function leftGroup() {
+    const n = SEL_META[state.sel].name;
+    switch (state.sel) {
+      case 'task': return `
+        <div class="grp">
+          <span class="selname">${n}</span>
+          <button class="btn">Edit…</button>
+          <span class="swatches">${SWATCHES}</span>
+          <button class="btn">−1d</button><button class="btn">+1d</button>
+          <button class="btn">−10%</button><button class="btn">+10%</button>
+          <button class="btn">Link</button>
+          <button class="btn btn--danger">Delete</button>
+        </div>`;
+      case 'milestone': return `
+        <div class="grp">
+          <span class="selname">${n}</span>
+          <button class="btn">Edit…</button>
+          <button class="btn">−1d</button><button class="btn">+1d</button>
+          <button class="btn btn--danger">Delete</button>
+        </div>`;
+      case 'row': return `
+        <div class="grp">
+          <span class="selname">${n}</span>
+          <button class="btn">Rename</button>
+          <button class="btn">Above</button><button class="btn">Below</button>
+          <button class="btn">↑</button><button class="btn">↓</button>
+          <button class="btn btn--danger">Delete</button>
+        </div>`;
+      case 'document': return `
+        <div class="grp">
+          <span class="grp__label">Document</span>
+          <span style="font-size:11.5px;color:var(--color-text-soft)">Theme</span>
+          <div class="scale">
+            <button>Dark</button><button class="is-active">Light</button><button>Print</button>
+          </div>
+          <span style="font-size:11.5px;color:var(--color-text-soft);margin-left:6px">Fiscal year starts</span>
+          <button class="btn" style="border-color:var(--color-border)">Jan ▾</button>
+        </div>`;
+      default: return `
+        <div class="grp">
+          <span class="grp__label">Insert</span>
+          <button class="btn">Row</button><button class="btn">Task</button>
+          <button class="btn">Milestone</button><button class="btn">Marker</button>
+          <button class="btn">Bracket</button>
+        </div>`;
+    }
+  }
+
+  function renderBar() {
+    // Tools are about manipulating the canvas; they have no meaning while the
+    // bar is showing document settings.
+    const showTools = (state.tools === 'persistent' || state.sel === 'none') && state.sel !== 'document';
+    document.getElementById('cmdbar').innerHTML =
+      (showTools ? TOOLS_GROUP : '') + leftGroup() + rightGroup();
+    document.getElementById('status-sel').textContent = 'scale: month · ' + SEL_META[state.sel].status;
+
+    document.getElementById('gear').addEventListener('click', () => {
+      setSel(state.sel === 'document' ? 'none' : 'document');
+    });
+  }
+
+  function setSel(v) {
+    state.sel = v;
+    const group = document.getElementById('seg-sel');
+    [...group.querySelectorAll('button')].forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+    render();
+  }
+
+  function renderNotes() {
+    const dockNote = state.dock === 'row'
+      ? { h: 'Own grid row', li: [
+          'The bar <strong>never covers the chart</strong> — the Release row stays fully visible.',
+          'Chart loses 56px of height, permanently, whether or not anything is selected.',
+          'Simplest to build: it is the tool palette&rsquo;s existing slot.',
+        ]}
+      : { h: 'Floating', li: [
+          'Chart keeps the full height; the bar hovers only where it is needed.',
+          '<strong>It occludes the bottom row.</strong> Look at Release &mdash; that is the trade.',
+          'Matches the native add-in, which docks its bar over the slide.',
+        ]};
+
+    const toolsNote = state.tools === 'persistent'
+      ? { h: 'Tools always shown', li: [
+          'Pan and Select stay reachable <strong>while editing</strong> a task.',
+          'Costs ~70px of the bar&rsquo;s left end at every selection state.',
+          'The bar&rsquo;s left edge stays put as the selection changes — less jumpy.',
+        ]}
+      : { h: 'Tools only when idle', li: [
+          'Maximum room for the selected item&rsquo;s own verbs.',
+          '<strong>Pan needs a deselect first</strong> — click away, pan, re-select.',
+          'The bar&rsquo;s left edge shifts as you select and deselect.',
+        ]};
+
+    const gearNote = { h: 'Gear → document context', li: [
+      'Theme and fiscal year are <strong>document</strong> settings, not file operations — the File menu was the wrong home for them.',
+      'Fits the same grammar as everything else: the bar shows the context you are in, and “document” is a context.',
+      'It <strong>clears your selection</strong>, and nothing brings it back. That is the one real cost.',
+    ]};
+
+    document.getElementById('notes').innerHTML = [dockNote, toolsNote, gearNote]
+      .map(n => `<div class="note"><h3>${n.h}</h3><ul>${n.li.map(x => `<li>${x}</li>`).join('')}</ul></div>`)
+      .join('');
+
+    const verdict = state.sel === 'document'
+      ? '<strong>This replaces the File → Document settings dialog</strong>, it does not sit alongside it. Two homes for one setting is the duplication this whole phase exists to remove.'
+      : state.dock === 'float'
+        ? '<strong>Try selecting a Task now.</strong> With the bar floating, the Release row sits underneath it — on a long chart that is the row you are most likely to be editing.'
+        : '<strong>Press the ⚙ in the bar</strong> to see the document context, then switch the dock to Floating and watch the Release row go under the bar.';
+    document.getElementById('verdict').innerHTML = verdict;
+  }
+
+  function render() {
+    document.getElementById('app').dataset.dock = state.dock;
+    renderRows(); renderBar(); renderNotes();
+  }
+
+  [['seg-dock','dock'],['seg-tools','tools'],['seg-sel','sel']].forEach(([id, key]) => {
+    const group = document.getElementById(id);
+    group.addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      [...group.querySelectorAll('button')].forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+      state[key] = btn.dataset.v;
+      render();
+    });
+  });
+
+  render();
+</script>

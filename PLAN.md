@@ -773,10 +773,18 @@ remaining lever on the v2.12.0 legibility problem.
 
 ### v2.13.1 — C1: Command bar shell
 **Goal:** The tool palette becomes a grouped, selection-aware bar. Behaviour unchanged.
-- [ ] C1a: group layout with hairline separators and 9px uppercase group labels, per native R8 anatomy
-- [ ] C1b: right group pinned — scale/zoom/fit never move as the selection changes, which is what makes a contextual bar learnable
-- [ ] C1c: persistent select/pan micro-group (open question 2 — needed *during* a selection)
-- [ ] C1d: narrow-window behaviour — left group wraps or scrolls, right group never wraps
+**Decisions (user, 2026-08-07, from the interactive prototype
+`docs/mockup/web-command-bar-mockup.html`):** floating dock · tools only when
+idle · gear opens a document context and the selection loss is accepted.
+
+- [x] C1a: group layout with hairline separators and 9px uppercase group labels, per native R8 anatomy
+- [x] C1b: right group pinned — scale/zoom/fit never move as the selection changes, which is what makes a contextual bar learnable
+- [x] C1c: **tools only when idle** (user chose over the persistent micro-group). Pan therefore needs a deselect first; accepted
+- [x] C1d: narrow-window behaviour — left group scrolls, right group never wraps
+- [x] C1e: **floating dock** — bar hovers over the chart, centred on the chart column (not the shell, or the inspector pushes it off-centre) and width-capped to that column
+- **Correction:** the planned scroll-padding mitigation is **not possible** — `ChartArea` sizes its SVG to `clientHeight` and clips; there is no vertical scrolling, so there is nothing to scroll clear. Padding would have corrupted the SVG sizing. The occlusion is therefore **accepted as chosen**, and is milder than the prototype implied: rows lay out from the top, so the band under the bar is usually empty. Revisit if vertical scrolling is ever added
+- [x] C1f: **gear → document context** (user proposal). Theme + fiscal year move from the C0 dialog into the bar's left group; pressing the gear clears the selection, since a document context and a selection cannot both own the left side
+- [x] C1g: **delete `DocumentSettings.tsx` and its File menu item.** The gear replaces that dialog rather than sitting beside it — two homes for one setting is the duplication this phase exists to remove
 
 ### v2.13.2 — C2: Selection contents move into the bar
 **Goal:** Everything `SelectionInspector` can edit stays reachable.

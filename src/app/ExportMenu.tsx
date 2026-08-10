@@ -1,12 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
 import { exportJson, exportYaml, exportSvg, exportPng, saveToFile, saveAs, openFile } from '../persistence/fileIo';
-import { ChevronDown, Download, Save, FolderOpen, SlidersHorizontal } from 'lucide-react';
-import { DocumentSettings } from './DocumentSettings';
+import { ChevronDown, Download, Save, FolderOpen } from 'lucide-react';
 
 export function ExportMenu() {
   const [open, setOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const doc = useDocumentStore((s) => s.doc);
   const setDocument = useDocumentStore((s) => s.setDocument);
@@ -60,14 +58,6 @@ export function ExportMenu() {
           <MenuItem icon={<Save size={14} />} label="Save as…" onClick={onSaveAs} />
           <MenuItem icon={<FolderOpen size={14} />} label="Open file…" onClick={onOpen} />
           <Divider />
-          {/* Theme + fiscal year, relocated from the inspector (v2.13.0 / C0b) —
-              document-level settings belong with the document-level actions. */}
-          <MenuItem
-            icon={<SlidersHorizontal size={14} />}
-            label="Document settings…"
-            onClick={() => { setSettingsOpen(true); setOpen(false); }}
-          />
-          <Divider />
           <MenuItem icon={<Download size={14} />} label="Export JSON" onClick={() => { exportJson(doc); setOpen(false); }} />
           <MenuItem icon={<Download size={14} />} label="Export YAML" onClick={() => { exportYaml(doc); setOpen(false); }} />
           <MenuItem icon={<Download size={14} />} label="Export SVG" onClick={() => { exportSvg(); setOpen(false); }} />
@@ -76,7 +66,6 @@ export function ExportMenu() {
           <MenuItem icon={<Download size={14} />} label="Print / PDF" onClick={() => { window.print(); setOpen(false); }} />
         </div>
       )}
-      <DocumentSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

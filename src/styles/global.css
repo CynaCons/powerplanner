@@ -217,16 +217,16 @@ kbd {
 /* App shell */
 .app-shell {
   display: grid;
-  grid-template-rows: var(--header-h) 1fr var(--tool-palette-h) var(--status-h);
+  grid-template-rows: var(--header-h) 1fr var(--status-h);
   grid-template-columns: var(--inspector-w) 1fr;
   grid-template-areas:
     'header header'
     'inspector chart'
-    'inspector palette'
     'status status';
   height: 100vh;
   width: 100vw;
   background: var(--color-bg);
+  position: relative;
 }
 
 .app-shell--compact {
@@ -235,7 +235,6 @@ kbd {
   grid-template-areas:
     'header'
     'chart'
-    'palette'
     'status';
   height: 100%;
   width: 100%;
@@ -408,85 +407,141 @@ kbd {
   background: var(--color-bg);
 }
 
-/* Tool palette (bottom toolbar) */
-.tool-palette {
-  grid-area: palette;
+/* ------------------------------------------------------------------
+   Command bar (PLAN.md Phase 16 / v2.13.1)
+
+   Replaces the tool palette. FLOATING dock, chosen from the prototype:
+   the bar hovers over the chart rather than taking a grid row, so the
+   chart keeps the full height. The known cost is that it covers the
+   bottom of the chart — mitigated by .chart-area scroll padding below,
+   so the last row can always be scrolled clear of it.
+   ------------------------------------------------------------------ */
+.cmdbar {
+  position: absolute;
+  /* Centred on the chart column, not the shell — otherwise the inspector
+     pushes the bar off-centre relative to the chart it commands. */
+  left: calc(var(--inspector-w) + (100% - var(--inspector-w)) / 2);
+  transform: translateX(-50%);
+  bottom: calc(var(--status-h) + 10px);
+  z-index: 20;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 0 16px;
+  gap: 8px;
+  /* Relative to the CHART column, not the shell — otherwise the bar
+     overhangs the inspector it does not command. */
+  max-width: calc(100% - var(--inspector-w) - 24px);
+  height: 42px;
+  padding: 0 8px;
   background: var(--color-bg-panel);
-  border-top: 1px solid var(--color-border-hairline);
-}
-.tool-palette__group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  background: var(--color-bg-elev);
-  border: 1px solid var(--color-border-hairline);
-  border-radius: 10px;
-  padding: 4px;
-}
-.tool-palette__divider {
-  width: 1px;
-  height: 22px;
-  background: var(--color-border-hairline);
-  margin: 0 8px;
-}
-.tool-palette__btn {
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  color: var(--color-text-soft);
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
-}
-.tool-palette__btn:hover {
-  background: var(--color-bg-subtle);
-  color: var(--color-text);
-}
-.tool-palette__btn.is-active {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-.tool-palette__btn:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-}
-.tool-palette__scale-label {
-  font-size: 11px;
-  font-weight: 600;
-  font-feature-settings: 'tnum';
-  letter-spacing: 0.4px;
-}
-.tool-palette__zoom-readout {
-  font-size: 11px;
-  font-feature-settings: 'tnum';
-  color: var(--color-text-soft);
-  min-width: 56px;
-  text-align: center;
-  user-select: none;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-3);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
-/* Status bar */
-.app-status {
-  grid-area: status;
+.cmdbar__group {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 14px;
+  gap: 3px;
+  flex-shrink: 0;
+  padding-right: 8px;
+}
+.cmdbar__group + .cmdbar__group,
+.cmdbar__group--right {
+  border-left: 1px solid var(--color-border-hairline);
+  padding-left: 8px;
+}
+/* The global group is pinned right and never wraps — it must not move as
+   the selection changes, or the bar becomes unlearnable. */
+.cmdbar__group--right { margin-left: auto; flex-shrink: 0; }
+
+.cmdbar__group-label {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+  margin-right: 2px;
+  white-space: nowrap;
+}
+.cmdbar__field-label {
   font-size: 11px;
   color: var(--color-text-soft);
-  border-top: 1px solid var(--color-border-hairline);
+  white-space: nowrap;
+}
+
+.cmdbar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--color-text);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.cmdbar__btn:hover:not(:disabled) { background: var(--color-bg-subtle); }
+.cmdbar__btn.is-active {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.cmdbar__btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+.cmdbar__scale {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-bg-subtle);
+  border-radius: var(--radius);
+}
+.cmdbar__scale button {
+  padding: 3px 7px;
+  font-size: 10.5px;
+  border: none;
+  border-radius: 4px;
+  color: var(--color-text-soft);
+  min-width: 22px;
+}
+.cmdbar__scale button.is-active {
   background: var(--color-bg-panel);
-  font-feature-settings: 'tnum';
+  color: var(--color-text);
+  box-shadow: var(--shadow-1);
+  font-weight: 600;
+}
+
+.cmdbar__select {
+  width: auto;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+.cmdbar__zoom {
+  font-size: 10.5px;
+  color: var(--color-text-soft);
+  font-variant-numeric: tabular-nums;
+  min-width: 46px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.cmdbar__selname {
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmdbar__hint {
+  font-size: 11px;
+  color: var(--color-text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .app-status-right {
@@ -642,7 +697,7 @@ kbd {
 }
 
 @media print {
-  .app-header, .app-status, .inspector, .tool-palette { display: none !important; }
+  .app-header, .app-status, .inspector, .cmdbar { display: none !important; }
   .app-shell { grid-template-rows: 1fr; grid-template-columns: 1fr; grid-template-areas: 'chart'; }
   .chart-area { overflow: visible; }
 }

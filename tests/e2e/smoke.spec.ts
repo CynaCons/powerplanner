@@ -25,23 +25,37 @@ test.describe('PowerPlanner smoke', () => {
     await page.goto('/');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
-    // Theme moved from the inspector's Appearance section to
-    // File → Document settings (PLAN.md v2.13.0 / C0b): it is a once-per-document
-    // setting and did not earn a permanent column.
+    // Theme now lives in the command bar's document context (v2.13.1 / C1f).
     await openDocumentSettings(page);
-    await page.locator('[role="dialog"] [role="radio"]:has-text("Dark")').click();
+    await page.locator('.cmdbar [role="radio"]:has-text("Dark")').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-    await page.locator('[role="dialog"] [role="radio"]:has-text("Light")').click();
+    await page.locator('.cmdbar [role="radio"]:has-text("Light")').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
 
   test('fiscal year start is reachable from document settings', async ({ page }) => {
     await page.goto('/');
     await openDocumentSettings(page);
-    const select = page.locator('[role="dialog"] select');
+    const select = page.locator('.cmdbar select');
     await expect(select).toHaveValue('1');
     await select.selectOption('4');
     await expect(select).toHaveValue('4');
+  });
+
+  test('the gear clears the selection, since both cannot own the left group', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('.chart-area svg .task-bar-body').first().click();
+    await expect(page.locator('.app-status')).toContainText('1 selected');
+    await page.locator('.cmdbar button[aria-label="Document settings"]').click();
+    await expect(page.locator('.app-status')).toContainText('0 selected');
+    await expect(page.locator('.cmdbar [role="radiogroup"]')).toBeVisible();
+  });
+
+  test('tools appear only when nothing is selected', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('.cmdbar button[title^="Pan"]')).toBeVisible();
+    await page.locator('.chart-area svg .task-bar-body').first().click();
+    await expect(page.locator('.cmdbar button[title^="Pan"]')).toHaveCount(0);
   });
 
   test('no control is rendered in two places at once (v2.13.0 / C0)', async ({ page }) => {
@@ -81,9 +95,14 @@ test.describe('PowerPlanner smoke', () => {
   });
 });
 
-/** Open File → Document settings…, where the relocated document-level settings live. */
+/**
+ * Enter the command bar's document context.
+ *
+ * These settings have moved twice: inspector section -> File menu dialog (C0b)
+ * -> command bar gear (C1f). The gear replaced the dialog rather than joining
+ * it; two homes for one setting is the duplication Phase 16 exists to remove.
+ */
 async function openDocumentSettings(page: import('@playwright/test').Page) {
-  await page.locator('button[title="File menu"]').click();
-  await page.locator('[role="menu"] button', { hasText: 'Document settings' }).click();
-  await page.locator('[role="dialog"]').waitFor();
+  await page.locator('.cmdbar button[aria-label="Document settings"]').click();
+  await page.locator('.cmdbar [role="radiogroup"]').waitFor();
 }

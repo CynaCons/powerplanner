@@ -4,7 +4,7 @@ import { Inspector } from './Inspector';
 import { Header } from './Header';
 import { StatusBar } from './StatusBar';
 import { RestoreBanner } from './RestoreBanner';
-import { ToolPalette } from './ToolPalette';
+import { CommandBar } from './CommandBar';
 import { ChartContextMenu } from './ChartContextMenu';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { CommandPalette } from './CommandPalette';
@@ -86,7 +86,7 @@ export function App({ compact = false }: AppProps) {
       <Header />
       <Inspector />
       <ChartArea />
-      <ToolPalette />
+      <CommandBar />
       <StatusBar />
       {pendingRestore && (
         <RestoreBanner
