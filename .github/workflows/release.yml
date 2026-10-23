@@ -1,0 +1,52 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The gates run locally before tagging (docs/RELEASING.md) and in web-ci.yml
+    # on main and PRs. Publishing an intentional tag only proves the committed
+    # single-file artifact can be reproduced and uploaded.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Fails the release if src/version.ts and package.json have drifted
+      # (DECISIONS.md D5) - an unattributable build must not reach a tag.
+      - run: npm test
+
+      - run: npm run build:template
+
+      - name: Copy release artifact
+        run: cp dist-template/index.html PowerPlanner.html
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            PowerPlanner.html
+          generate_release_notes: true
+          body: |
+            ## PowerPlanner ${{ github.ref_name }}
+
+            **Download `PowerPlanner.html`** below — open it in a browser and start planning.
+
+            Calendar-true Gantt charts you can actually present. No install, no account,
+            no server: one file that holds the app and your chart together.
+
+            Your plan is saved inside the file itself — save a personalized copy and
+            reopen it anywhere.

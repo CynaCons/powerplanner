@@ -3,6 +3,7 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { computeDocStats } from '../utils/docStats';
+import { APP_VERSION } from '../version';
 
 export function StatusBar() {
   const doc = useDocumentStore((s) => s.doc);
@@ -36,6 +37,8 @@ export function StatusBar() {
         <span>
           scale: {scale} · {pxPerDay.toFixed(2)} px/day · {selection.length} selected
         </span>
+        {/* A released single-file HTML must say which build it is. */}
+        <span className="app-status-version">v{APP_VERSION}</span>
       </div>
     </footer>
   );
