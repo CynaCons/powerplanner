@@ -9,7 +9,7 @@ import { dateToX } from '../layout/timeAxis';
 import type { DragPreviewMap } from '../app/useChartInteractions';
 import { InlineLabel } from '../app/InlineLabel';
 import { computeCriticalPath } from '../layout/criticalPath';
-import { computeSpaceRight, fitLabel, type Placement } from './labelFit';
+import { computeSpaceRight, fitLabel, type RequestedPlacement } from './labelFit';
 
 interface Props {
   layout: LayoutResult;
@@ -17,6 +17,8 @@ interface Props {
 }
 
 const HANDLE_W = 5;
+/** Drawn height of a task bar. Smaller than the row band it is hit-tested in. */
+const BAR_DRAWN_H = 11;
 /** Half-width of a milestone diamond — must match SIZE in Milestones.tsx. */
 const MILESTONE_HALF = 11;
 
@@ -106,7 +108,9 @@ export function TaskBars({ layout, dragPreview }: Props) {
                 pointerEvents="none"
               />
             )}
-            {/* Bar body */}
+            {/* Hit target. Full row-band height so a bar stays easy to grab and
+                drag, even though the drawn bar below is deliberately thin —
+                visual weight and target size are different problems. */}
             <rect
               className="task-bar-body"
               data-pp-kind="task"
@@ -115,19 +119,29 @@ export function TaskBars({ layout, dragPreview }: Props) {
               y={y}
               width={width}
               height={h}
-              rx={4}
-              fill={color}
-              opacity={selected ? 1 : 0.92}
+              fill="transparent"
               style={{ cursor: 'grab' }}
             />
-            {/* Percent fill */}
+            {/* The drawn bar (direction B, owner's choice 2026-10-23): a thin
+                solid span. Remaining work is the same hue held back, completed
+                work is solid, and the label sits outside — which is what lets
+                the bar stay this quiet without losing its reading. */}
+            <rect
+              x={x}
+              y={y + (h - BAR_DRAWN_H) / 2}
+              width={width}
+              height={BAR_DRAWN_H}
+              fill={color}
+              style={{ fillOpacity: 'var(--bar-track-a)' }}
+              pointerEvents="none"
+            />
             {pct > 0 && (
               <rect
                 x={x}
-                y={y + h - 4}
+                y={y + (h - BAR_DRAWN_H) / 2}
                 width={fillWidth}
-                height={4}
-                fill="var(--color-bar-progress)"
+                height={BAR_DRAWN_H}
+                fill={color}
                 pointerEvents="none"
               />
             )}
@@ -221,7 +235,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
                   y={y}
                   barWidth={width}
                   barHeight={h}
-                  placement={t.labelPlacement ?? 'on-bar'}
+                  placement={t.labelPlacement ?? 'auto-right'}
                   spaceRight={spaceRight.get(t.id) ?? Infinity}
                 />
               </g>
@@ -239,7 +253,7 @@ interface LabelProps {
   y: number;
   barWidth: number;
   barHeight: number;
-  placement: Placement;
+  placement: RequestedPlacement;
   /** Free space before the next bar in this lane; Infinity if nothing follows. */
   spaceRight: number;
 }
@@ -288,8 +302,11 @@ function LabelText({ text, x, y, barWidth, barHeight, placement, spaceRight }: L
       </text>
     );
   }
+  // On-bar labels are ink, not white. White forced every bar to carry a
+  // saturated fill to keep contrast; over a tint, ink reads cleanly in both
+  // themes and whatever the stream colour is.
   return (
-    <text x={x + 8} y={y + barHeight / 2 + 4} {...baseProps} fill="white">
+    <text x={x + 8} y={y + barHeight / 2 + 4} {...baseProps}>
       {title}
       <tspan>{fit.text}</tspan>
     </text>

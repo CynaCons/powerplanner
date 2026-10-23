@@ -10,15 +10,15 @@ test.describe('PowerPlanner smoke', () => {
     // Chart SVG renders (first svg = main chart, second = minimap)
     await expect(page.locator('.chart-area > svg').first()).toBeVisible();
     // Sample tasks rendered
-    await expect(page.locator('text=Wireframes').first()).toBeVisible();
+    await expect(page.locator('text=Stakeholder requirements').first()).toBeVisible();
     // Status bar shows task count
-    await expect(page.locator('.app-status')).toContainText('6 tasks');
+    await expect(page.locator('.app-status')).toContainText('33 tasks');
   });
 
   test('adds a task via the toolbar', async ({ page }) => {
     await page.goto('/');
     await page.locator('.app-header button[title^="Add task"]').click();
-    await expect(page.locator('.app-status')).toContainText('7 tasks');
+    await expect(page.locator('.app-status')).toContainText('34 tasks');
   });
 
   test('defaults to light theme and can switch themes', async ({ page }) => {
@@ -72,7 +72,7 @@ test.describe('PowerPlanner smoke', () => {
   test('status bar carries the statistics the inspector used to show', async ({ page }) => {
     await page.goto('/');
     const status = page.locator('.app-status');
-    await expect(status).toContainText('6 tasks');
+    await expect(status).toContainText('33 tasks');
     await expect(status).toContainText('milestones');
     await expect(status).toContainText('span');
     await expect(status).toContainText('% complete');
@@ -91,7 +91,7 @@ test.describe('PowerPlanner smoke', () => {
     await page.keyboard.press('Enter');
     // The palette should close and we should now have 3 milestones
     await expect(page.locator('[aria-label="Command palette"]')).toHaveCount(0);
-    await expect(page.locator('.app-status')).toContainText('3 milestones');
+    await expect(page.locator('.app-status')).toContainText('8 milestones');
   });
 });
 

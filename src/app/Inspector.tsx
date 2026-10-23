@@ -13,11 +13,18 @@ const PANEL_KEY = 'powerplanner:inspector:panelCollapsed:v1';
  * Collapsing the panel hands that width back.
  */
 export function Inspector() {
+  // Collapsed by default. With nothing selected the panel is one sentence in a
+  // 320px column — a fifth of the window saying "select something" — which was
+  // the loudest part of the owner's 2026-10-23 report on how the app looks.
+  // It stays a click away rather than being deleted, because C2 has not yet
+  // moved colour, dates, percent and notes into the command bar; deleting the
+  // column before then would make them unreachable (PLAN.md v2.13.2/v2.13.3).
   const [panelCollapsed, setPanelCollapsed] = useState(() => {
     try {
-      return localStorage.getItem(PANEL_KEY) === '1';
+      const stored = localStorage.getItem(PANEL_KEY);
+      return stored === null ? true : stored === '1';
     } catch {
-      return false;
+      return true;
     }
   });
 

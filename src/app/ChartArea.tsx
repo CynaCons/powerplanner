@@ -71,6 +71,10 @@ export function ChartArea() {
     [doc, viewStart, pxPerDay],
   );
 
+  /** Where the chart sheet ends: after the last row, or at the viewport edge
+   *  when the plan is taller than the window. */
+  const sheetBottom = Math.min(size.height, AXIS_TOTAL_H + layout.chartHeight);
+
   const axis = useMemo(
     () => buildAxis(viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.fiscalYearStart),
     [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.fiscalYearStart],
@@ -129,9 +133,23 @@ export function ChartArea() {
         {/* Background */}
         <rect x={0} y={0} width={size.width} height={size.height} fill="var(--color-bg)" />
 
-        {/* Row gutter background */}
-        <rect x={0} y={0} width={ROW_GUTTER_W} height={size.height} fill="var(--color-bg-panel)" />
-        <line x1={ROW_GUTTER_W} y1={0} x2={ROW_GUTTER_W} y2={size.height} stroke="var(--color-border-soft)" />
+        {/*
+          The chart is a bounded sheet, not a surface that runs to the bottom of
+          the window. The gutter panel and the division rule used to paint the
+          full viewport height, so a five-row plan dissolved into several
+          hundred pixels of empty panel and the chart never looked finished
+          (owner report 2026-10-23). They now end with the content, and what is
+          below the last row is plainly outside the sheet.
+        */}
+        <rect x={0} y={0} width={ROW_GUTTER_W} height={sheetBottom} fill="var(--color-bg-panel)" />
+        <line x1={ROW_GUTTER_W} y1={0} x2={ROW_GUTTER_W} y2={sheetBottom} stroke="var(--color-border-soft)" />
+        <line
+          x1={0}
+          y1={sheetBottom}
+          x2={size.width}
+          y2={sheetBottom}
+          stroke="var(--color-border-soft)"
+        />
 
         {/* Weekend stripes (in chart area) */}
         <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H})`}>

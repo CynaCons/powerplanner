@@ -9,15 +9,15 @@ export function Summaries({ layout }: Props) {
     <g>
       {layout.summaries.map((s) => (
         <g key={s.rowId}>
-          <rect x={s.x} y={s.y} width={s.width} height={6} fill="var(--color-text-soft)" opacity={0.6} rx={1} />
+          <rect x={s.x} y={s.y} width={s.width} height={6} fill="var(--color-text-dim)" opacity={0.42} rx={1} />
           <polygon
             points={`${s.x},${s.y + 6} ${s.x + 6},${s.y + 6} ${s.x},${s.y + 12}`}
-            fill="var(--color-text-soft)"
+            fill="var(--color-text-dim)"
             opacity={0.6}
           />
           <polygon
             points={`${s.x + s.width},${s.y + 6} ${s.x + s.width - 6},${s.y + 6} ${s.x + s.width},${s.y + 12}`}
-            fill="var(--color-text-soft)"
+            fill="var(--color-text-dim)"
             opacity={0.6}
           />
         </g>
