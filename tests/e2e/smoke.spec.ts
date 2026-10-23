@@ -15,10 +15,18 @@ test.describe('PowerPlanner smoke', () => {
     await expect(page.locator('.app-status')).toContainText('33 tasks');
   });
 
-  test('adds a task via the toolbar', async ({ page }) => {
+  test('adds a task from the command bar', async ({ page }) => {
     await page.goto('/');
-    await page.locator('.app-header button[title^="Add task"]').click();
+    await page.locator('.chart-area svg').first().waitFor({ state: 'visible' });
+    // Inserting lives in the bar's INSERT group now, not in the header, where
+    // it was a duplicate that dropped everything on row one (DECISIONS.md D7).
+    await page.locator('.cmdbar').getByTitle('Add task (T)').click();
     await expect(page.locator('.app-status')).toContainText('34 tasks');
+  });
+
+  test('the header no longer duplicates the insert actions', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('.app-header').getByTitle(/^Add /)).toHaveCount(0);
   });
 
   test('defaults to light theme and can switch themes', async ({ page }) => {

@@ -1,19 +1,6 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useEditStore } from '../stores/editStore';
-import {
-  Undo2,
-  Redo2,
-  Plus,
-  Diamond,
-  Magnet,
-  Rows3,
-  Brackets as BracketIcon,
-  Flag,
-  HelpCircle,
-} from 'lucide-react';
-import { useSelectionStore } from '../stores/selectionStore';
-import { newId } from '../utils/ids';
-import { todayISO, addDays } from '../utils/dates';
+import { Undo2, Redo2, Magnet, HelpCircle } from 'lucide-react';
 import { ExportMenu } from './ExportMenu';
 import { BrandLogo } from './BrandLogo';
 import { lazy, Suspense } from 'react';
@@ -38,63 +25,14 @@ export function Header() {
   const redo = useDocumentStore((s) => s.redo);
   const canUndo = useDocumentStore((s) => s.past.length > 0);
   const canRedo = useDocumentStore((s) => s.future.length > 0);
-  const addTask = useDocumentStore((s) => s.addTask);
-  const addMilestone = useDocumentStore((s) => s.addMilestone);
-  const addRow = useDocumentStore((s) => s.addRow);
-  const addBracket = useDocumentStore((s) => s.addBracket);
-  const addMarker = useDocumentStore((s) => s.addMarker);
-  const selection = useSelectionStore((s) => s.items);
-  const rows = useDocumentStore((s) => s.doc.rows);
-  const doc = useDocumentStore((s) => s.doc);
   const snapEnabled = useEditStore((s) => s.snapEnabled);
   const setSnap = useEditStore((s) => s.setSnap);
 
 
-  const onAddTask = () => {
-    if (rows.length === 0) return;
-    const today = todayISO();
-    addTask({
-      id: newId('task'),
-      rowId: rows[0].id,
-      label: 'New task',
-      start: today,
-      end: addDays(today, 7),
-      percentComplete: 0,
-    });
-  };
 
-  const onAddMilestone = () => {
-    if (rows.length === 0) return;
-    addMilestone({ id: newId('ms'), rowId: rows[0].id, label: 'New milestone', date: todayISO() });
-  };
 
-  const onAddRow = () => {
-    addRow({ id: newId('row'), label: `Row ${rows.length + 1}`, groupId: null });
-  };
 
-  const onAddBracket = () => {
-    const selectedTaskIds = selection.filter((s) => s.kind === 'task').map((s) => s.id);
-    const tasks = doc.tasks.filter((t) => selectedTaskIds.includes(t.id));
-    if (tasks.length === 0) {
-      const today = todayISO();
-      addBracket({
-        id: newId('br'),
-        label: 'Phase',
-        start: today,
-        end: addDays(today, 14),
-        rowIds: rows.length > 0 ? [rows[0].id] : [],
-      });
-      return;
-    }
-    const start = tasks.reduce((a, t) => (t.start < a ? t.start : a), tasks[0].start);
-    const end = tasks.reduce((a, t) => (t.end > a ? t.end : a), tasks[0].end);
-    const rowIds = Array.from(new Set(tasks.map((t) => t.rowId)));
-    addBracket({ id: newId('br'), label: 'Phase', start, end, rowIds });
-  };
 
-  const onAddDeadline = () => {
-    addMarker({ id: newId('mk'), type: 'deadline', label: 'Deadline', date: todayISO() });
-  };
 
   return (
     <header className="app-header">
@@ -105,29 +43,11 @@ export function Header() {
       </div>
 
       <div className="toolbar">
-        <Cluster>
-          <IconBtn onClick={onAddTask} title="Add task (T)" icon={<Plus size={14} strokeWidth={1.75} />} label="Task" />
-          <IconBtn
-            onClick={onAddMilestone}
-            title="Add milestone (Y)"
-            icon={<Diamond size={14} strokeWidth={1.75} />}
-            label="Milestone"
-          />
-          <IconBtn
-            onClick={onAddBracket}
-            title="Add bracket from selection (B)"
-            icon={<BracketIcon size={14} strokeWidth={1.75} />}
-            label="Bracket"
-          />
-          <IconBtn
-            onClick={onAddDeadline}
-            title="Add deadline marker"
-            icon={<Flag size={14} strokeWidth={1.75} />}
-            label="Deadline"
-          />
-          <IconBtn onClick={onAddRow} title="Add row" icon={<Rows3 size={14} strokeWidth={1.75} />} label="Row" />
-        </Cluster>
-
+        {/* Inserting lives in the command bar's INSERT group, on the chart's
+            right-click menu, and on T / Y / B. It was in the header too, where
+            it dropped everything on the first row at today's date and left the
+            user to drag it into place — the worst of the three (DECISIONS.md
+            D7, PLAN.md v2.13.4 / C4b). */}
         <Cluster>
           <IconBtn
             onClick={() => setSnap(!snapEnabled)}

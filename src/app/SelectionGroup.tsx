@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Trash2, SlidersHorizontal } from 'lucide-react';
+import { Trash2, SlidersHorizontal, Brackets as BracketIcon } from 'lucide-react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { addDays } from '../utils/dates';
+import { newId } from '../utils/ids';
 import { ColorPalette } from './ColorPalette';
 import { LabelPositionPicker } from './LabelPositionPicker';
 import type { Task, Milestone, Bracket, LabelPlacement } from '../types/document';
@@ -154,6 +155,26 @@ function RowSelect({ value, onChange }: { value: string; onChange: (v: string) =
   );
 }
 
+function WrapInBracket({ taskIds }: { taskIds: string[] }) {
+  const doc = useDocumentStore((s) => s.doc);
+  const addBracket = useDocumentStore((s) => s.addBracket);
+  const tasks = doc.tasks.filter((t) => taskIds.includes(t.id));
+  if (tasks.length === 0) return null;
+
+  const wrap = () => {
+    const start = tasks.reduce((a, t) => (t.start < a ? t.start : a), tasks[0].start);
+    const end = tasks.reduce((a, t) => (t.end > a ? t.end : a), tasks[0].end);
+    const rowIds = Array.from(new Set(tasks.map((t) => t.rowId)));
+    addBracket({ id: newId('br'), label: 'Phase', start, end, rowIds });
+  };
+
+  return (
+    <button className="cmdbar__btn" title="Wrap in bracket (B)" aria-label="Wrap in bracket" onClick={wrap}>
+      <BracketIcon size={14} strokeWidth={1.75} />
+    </button>
+  );
+}
+
 function TaskFields({ task }: { task: Task }) {
   const updateTask = useDocumentStore((s) => s.updateTask);
   const deleteTask = useDocumentStore((s) => s.deleteTask);
@@ -173,6 +194,7 @@ function TaskFields({ task }: { task: Task }) {
       <Nudge label="+1d" title="Move a day later" onClick={() => shift(1)} />
       <Nudge label="−10%" title="Ten percent less complete" onClick={() => bump(-10)} />
       <Nudge label="+10%" title="Ten percent more complete" onClick={() => bump(10)} />
+      <WrapInBracket taskIds={[task.id]} />
       <EditPopover title="Edit task">
         <RowSelect value={task.rowId} onChange={(rowId) => updateTask(task.id, { rowId })} />
         <Field label="Start">
@@ -273,6 +295,7 @@ function MultiFields({ count }: { count: number }) {
   return (
     <Group label="Selection">
       <span className="cmdbar__selname">{count} items selected</span>
+      <WrapInBracket taskIds={items.filter((i) => i.kind === 'task').map((i) => i.id)} />
       <DeleteButton what="selection" onClick={deleteAll} />
     </Group>
   );

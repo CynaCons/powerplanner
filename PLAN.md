@@ -840,7 +840,10 @@ This is the first slice run under the v2.15 working model, so it follows DECISIO
 - [x] Move selection editing from the inspector into the command bar [agent: claude]
 - [x] Align the colour swatches with the stream palette [agent: claude]
 - [x] Portal the edit popover, which the bar was clipping away [agent: claude]
-- [ ] Decide whether the header keeps its insert actions now the bar has them
+- [x] Decide whether the header keeps its insert actions now the bar has them [agent: claude]
+- [ ] Home bracket-from-selection in the selection group, where it belongs
+- [ ] Let the document title use the room the header freed up
+- [ ] Settle the two open design questions about the bar and the header
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition

@@ -121,3 +121,80 @@ equivalent of.
 
 **What would reopen it.** Shipping the agent bridge as an installable package,
 which would add the npm and Registry surfaces to the runbook.
+
+---
+
+## D6 — One hue per discipline, not colour reserved for risk
+
+**Date:** 2026-10-23 · **Owner choice between two built alternatives**
+
+**Context.** Two colour strategies were drawn against the same 34-row AUTOSAR
+plan: a hue per workstream, and a graphite field with colour reserved for the
+two regulated streams (ISO 26262, ISO 21434).
+
+**Decision.** A hue per discipline. The stream palette lives in
+`global.css` as `--stream-1..8` and in `sample.ts`; the two must stay in step.
+
+**Known cost, accepted.** Eight hues cannot all separate in greyscale —
+prussian, plum and rust sit close in lightness — so a mono print or a poor
+projector will merge some streams. The risk palette did not have this problem.
+If printing becomes a real use, revisit.
+
+**What would reopen it.** Printing in mono mattering, or a plan whose stream
+count grows past what eight hues can carry.
+
+---
+
+## D7 — Inserting does not live in the header
+
+**Date:** 2026-10-23 · **Delegated to Claude by the owner**
+
+**Context.** After C2 moved selection editing into the command bar, the header
+still carried Task / Milestone / Bracket / Deadline / Row, duplicating the
+bar's INSERT group. The question was whether always-available insert is worth
+the duplication, given the bar shows INSERT only when nothing is selected.
+
+**Decision.** Remove them. Three facts decided it:
+
+1. The header's buttons were the **worst** of the insert paths: they dropped
+   every new item on `rows[0]` at today's date, leaving the user to drag it
+   into place. The chart's right-click menu inserts at the row and date you
+   actually clicked.
+2. Insert remains reachable three ways — the bar's INSERT group (visible
+   exactly when nothing is selected, which is the state you are in when
+   adding), the right-click menu, and `T` / `Y` / `B`.
+3. On first load nothing is selected, so a new user sees INSERT in the bar
+   immediately. Discoverability does not depend on the header.
+
+**One capability genuinely moved rather than being deleted:** bracket-from-
+selection. It cannot live in an idle-only INSERT group, because it needs a
+selection to span, so it is now a button in the selection group and still on
+`B`.
+
+**The cost, accepted.** Adding something while an item is selected needs an
+Escape first, or the right-click path. This is the same trade the owner
+already accepted for tools in C1c.
+
+**What would reopen it.** Evidence that people hunt the header for insert and
+do not find the bar.
+
+---
+
+## D8 — The command bar floats, and the header stays
+
+**Date:** 2026-10-23 · Closes the open questions in PLAN.md v2.13.4 (C4)
+
+**C4a — floating bar or its own grid row?** Floating, as the owner chose from
+the interactive prototype in C1e. The plan's original proposal was a grid row;
+the prototype changed the owner's mind, and nothing since has argued against
+it. The known cost is that the bar occludes a band of chart, which is mild
+because rows lay out from the top.
+
+**C4b — does the header still earn its height now insert has left it?** Yes.
+What remains is not duplicated anywhere: the brand, the document title, snap,
+undo/redo, shortcuts, the agent toggle and the File menu. Undo/redo in
+particular wants a fixed, always-visible home rather than a bar whose contents
+change with the selection.
+
+**What would reopen it.** The header losing another cluster, at which point
+what is left may be better merged into the bar.
