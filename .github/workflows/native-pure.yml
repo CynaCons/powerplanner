@@ -1,19 +1,18 @@
 name: native-pure
 
 # Phase 13 v2.8.4: pure-layer native gates (no PowerPoint required).
+#
+# Manual dispatch only while the native add-in is parked (DECISIONS.md D1).
+# It had failed on every run since 2026-08-07 — `ilammy/msvc-dev-cmd` cannot
+# find vcvars on the current windows-latest image — so it reported red on
+# pushes that merely touched spec/fixtures, for a component nobody is working
+# on. A permanently red check teaches people to ignore checks.
+#
+# Unparking native means fixing the MSVC setup step and restoring the push and
+# pull_request triggers on the paths below:
+#   native/**, spec/fixtures/**, docs/design-tokens.md, this file.
 on:
-  push:
-    paths:
-      - "native/**"
-      - "spec/fixtures/**"
-      - "docs/design-tokens.md"
-      - ".github/workflows/native-pure.yml"
-  pull_request:
-    paths:
-      - "native/**"
-      - "spec/fixtures/**"
-      - "docs/design-tokens.md"
-      - ".github/workflows/native-pure.yml"
+  workflow_dispatch:
 
 jobs:
   pure:

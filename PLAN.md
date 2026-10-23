@@ -1,63 +1,17 @@
 # PowerPlanner Implementation Plan
 
-## Quick Summary
+## Current Status
 
-**Current Version:** v2.7.3 (COMPLETE 2026-07-12) — time-window W0–W3 shipped
-**Active product polish:** v2.7.4 (W4 settings + cold walkthrough + user feel gate)
-**Active iteration:** **v2.10.x** — dense-chart / overlay product fixes + residual recorder R1; v2.9.1 live task-unit still needs live recording sign-off
-**Quality program:** Phase 13 / v2.8.x **COMPLETE 2026-07-17** (continuous-feel baseline intentional RED; UG-01..05 user gates open)
-**Web agent bridge (web-only):** Phase 14 / **v2.11.x** — v2.11.0–v2.11.3 + v2.11.5 **COMPLETE 2026-08-07**; shipped and live-verified. v2.11.4 open on **one user visual/feel gate (B4e-user)**; v2.11.6 release in progress. See [`docs/web-agent-bridge-plan.md`](docs/web-agent-bridge-plan.md) · [`spec/srs-web/SRS-agent-bridge.md`](spec/srs-web/SRS-agent-bridge.md)
+The current iteration is the last heading below that is not marked COMPLETE.
 
-### Key Metrics
-- **Web foundation:** complete (v0–v2)
-- **Native on-slide:** production-grade UX program v2.5–v2.6 complete (harness-green); time window v2.7.0–v2.7.3 complete
-- **Focus:** v2.7.4 product polish (v2.9.0 task-bar unit shipped)
-- **Test harness:** `python native/tools/harness_driver.py` — scenarios, operation traces, invariants, walkthroughs, golden compare (see `native/tools/`)
+**Product focus (user directive 2026-10-23): the web app.** PowerPlanner ships as
+a single-file HTML application in PowerScroll's release format. The native
+PowerPoint add-in under `native/` is **parked** — see [DECISIONS.md](DECISIONS.md) D1.
 
-### Recent Achievements (compressed)
-- ✅ v2.5.0–v2.5.3 — overlay lifecycle, calm chrome, creation flows, ≤200 ms single-op latency (nudge/color)
-- ✅ v2.6.0–v2.6.8 — UX overhaul (selection integrity, direct manip, docking, multi-select, linking, theme surfaces, scale settings, walkthrough gate)
-- ✅ v2.7.0–v2.7.3 — explicit time window (ports, two-phase drag, lossless clip, undo, commit budget)
-- ✅ Phase 13 / v2.8.x quality infrastructure COMPLETE 2026-07-17
-- ⚠️ v2.9.0 — task bar unit: harness-green, but live verify 2026-07-18 FAILED (native label-child grips; silent drag-create death) — reopened as v2.9.1/v2.9.2
-- ✅ Ribbon hotfix 2026-07-15 — customUI apostrophe broke PowerPlanner tab
-
-### Next Up (EXECUTION ORDER)
-1. **Live verify v2.9.1 / v2.9.2** after Alt/alpha fixes — record Alt+Tab + task click + drag-create; assert via session_report
-2. **Residual R1 recorder** — entity text/style/chrome, idle snapshots, meta-acceptance of 2026-07-18 failures
-3. **Defect C lane churn** (persisted lane) + overlay Defects E/F/G (event-driven reposition / DPI)
-4. **v2.7.4** — time-window W4 + user gates UG-01…UG-05
-5. **v2.11.4 B4e-user** — user visual/feel gate on the web agent bridge (agent cannot self-close)
-6. **Product backlog** — cloud, Excel link, installer, etc.
-
-### Test Status
-Native: `python native/tools/harness_driver.py scenario <name>` · `trace <profile> --check-invariants` · `walkthrough all`
-Web: `npm test` · `npm run dev` (port 5180)
-
-### Quick Links
-- [Product Requirements](PRD.md)
-- [README](README.md)
-- [Specification (concept layer)](spec/README.md)
-- [Native SRS](spec/srs-native/README.md)
-- [Native add-in notes](docs/native-addin.md)
-- Implementation History: `git log`
-- [Time window design](docs/time-window-plan.md)
-
----
-
-## 📝 Format Rules
-
-**Format Rules:**
-- Iterations: Version number + brief title
-- Goal: One-line objective statement (optional)
-- Status: Complete/In Progress (only if in progress)
-- Tasks: Simple checkbox items only (no sub-bullets, no implementation details)
-- NO "Files Modified" sections (use git for that)
-- NO "Impact" sections (tasks describe the work)
-- NO "Key Accomplishments" or verbose summaries
-- Known Issues: Brief bullet points only
-- Close iterations chronologically - don't skip ahead
-- Move incomplete tasks to future iterations, don't leave them in closed ones
+- How this plan is operated, the gates, the showcase rule, the commands: [AGENTS.md](AGENTS.md)
+- Requirements: [spec/srs/](spec/srs/README.md) · Decisions: [DECISIONS.md](DECISIONS.md)
+- Landmines the next agent would otherwise rediscover: [docs/agents/memories/](docs/agents/memories/)
+- Release runbook: [docs/RELEASING.md](docs/RELEASING.md) · observed state: [docs/DEPLOYMENTS.md](docs/DEPLOYMENTS.md)
 
 ---
 
@@ -314,6 +268,7 @@ Web: `npm test` · `npm run dev` (port 5180)
 - [x] UF-03: Ctrl+click toggles, Shift+click row ranges; ownSel = primary + ordered extras (full back-compat for single-select consumers)
 - [x] Multi chrome on every member + AppBarSel::Multi ('N selected' + Delete); bulk delete via bar/Del/menu in ONE undo entry
 - [x] E2E: trace_multi_row_delete PASS (shift-range=5 rows, ctrl-toggle=2, bulk delete 6->4 rows, selection cleared; profile clicks the left rail — band-center clicks hit the TODAY marker band)
+
 ### v2.6.5 - Iteration U5: Linking + Creation Discoverability (absorbs v2.5.4)
 **Goal:** Linking and creation are visible, guided, standard. SRS: SRS_DependencyEditing → tables.
 **Status:** COMPLETE 2026-07-12 (58c3cb8) except user milestone gate. Coordinator fix-ups: 2 stale-global traps in the link-drop path (hover target + fromId read after ResetDragGestureState); ground-truth affordance rects (ports/adder chips) published in the chrome dump so profiles click exactly where the overlay hit-tests. Note: the Blank-vs-Sample insert prompt is a Win32 MessageBox — review under SR-THEME in U6 (pragmatic exception: pre-insert, no overlay exists yet)
@@ -423,7 +378,7 @@ Web: `npm test` · `npm run dev` (port 5180)
 
 ---
 
-### v2.8.0 - Q0: Docs & agent surface hygiene (ACTIVE)
+### v2.8.0 — Q0: Docs & agent surface hygiene (COMPLETE 2026-07-17) (COMPLETE)
 **Goal:** PLAN/AGENTS/docs are a trustworthy cockpit so agents stop re-scoping finished work. Covers eval docs hygiene + user #1–#3.
 
 - [x] Fix PLAN Quick Summary to current truth (v2.7.3 shipped / Phase 13 next / v2.7.4 polish)
@@ -545,6 +500,7 @@ Web: `npm test` · `npm run dev` (port 5180)
 - [x] Remove the Alt escape hatch from `OverlayWndProc` `WM_NCHITTEST` entirely (user directive 2026-07-18); switch remaining modifier reads in `RecModsJson` and empty-cell double-click create to `GetAsyncKeyState`
 - [ ] Acceptance: live recorded session after Alt+Tab away-and-back shows `WM_LBUTTONDOWN`/`WM_LBUTTONUP` reaching the overlay and a gesture committing — the harness cannot gate this (it sets `g_cursorOverrideEnabled`, which evaluates a different branch of the exact faulty expression)
 - [x] **THIRD DEFECT (alpha-0 click-through):** layered ULW_ALPHA hit-tests per-pixel alpha; chart rect filled at alpha 1 before other paint so plot area captures input (not only the painted rail)
+
 ### v2.9.2 - Live create-commit repair (blocked on v2.10 R1 recorder)
 - [ ] Drag-create + double-click-create commit live — **code path present** (`CommitCreateGesture` + recorder errors); re-verify after alpha-1 capture (was zero button events)
 - [ ] Preview renders real-height bar live (UF-05 live parity); stale preview paint cleaned on gesture end
@@ -553,7 +509,7 @@ Web: `npm test` · `npm run dev` (port 5180)
 # Phase 15: Session recorder — agent visibility into live sessions (v2.10.x)
 **Directive (user, 2026-07-18):** current testing paradigm insufficient — agents can't validate live behavior. Record button captures every input, state transition, paint, and visual into a session an agent can parse. Full design: docs/session-recorder-spec.md
 
-### v2.10.0 - R0+R1: SRS + entity dump + capture core (IN PROGRESS)
+### v2.10.0 — R0+R1: SRS + entity dump + capture core
 **Primary channel = entity dump (user directive 2026-07-18):** every rendered
 primitive as a generic entity {id, kind, parentId, rowId, slideRect, screenRect,
 z, style, text, flags(selectedOwn/Native, hover, clipped, visible)} — full dump
@@ -574,6 +530,7 @@ the existing Prim/PP_KIND model — NOT a renderer rewrite.
 - [x] R1 frame gap: post-paint screen-composited chart+chrome frames replace isolated overlay/app-bar PNGs; latest session wrote three interpretable 1299x516 frames
 - [x] R1 harness evidence 2026-07-18: recorder dir/schema/types/ownSel/gesture/dedupe/error/REC gates PASS; latest session had 12 snapshots (5 full, 7 deduped), no false empty entity arrays, and a readable generated `report.md`
 - [ ] **Intentional RED — do not soft-pass:** latest optimized recorder run measured 23.10 Hz (36 paints / 1515 ms, p50 31 ms, p95 78 ms), still below SR-SMO-09 >=30 Hz. The rejected full-chart refresh measured 0.89 Hz; cached task-component bindings restored the prior performance range while retaining child-move evidence.
+
 ### v2.10.1 - R2: session_report.py + invariant replay over recordings [worker: grok-4.5] ✅ (2026-07-18)
 - [x] Timeline + entity/snapshot diffs; --assert mode; harness invariants replayable against live recordings
 - [x] `native/tools/session_report.py` (stdlib): report.md, `--assert`, `--selftest`
@@ -582,6 +539,7 @@ the existing Prim/PP_KIND model — NOT a renderer rewrite.
 - [x] Assert rules: `task_label_selects_task_unit`, `task_body_selects_same_unit`, `gesture_commits_or_cancels`, `no_silent_errors` (fixture expects all FAIL)
 - [ ] Implement live assertions for the remaining task-unit scenario rules, including `task_group_child_selects_task_unit`, `task_label_click_selects_task`, `task_progress_selects_task_unit`, and `task_label_drag_moves_dates`; current runner reports them as unknown
 - Gate: `python native/tools/session_report.py --selftest` → exit 0
+
 ### v2.10.2 - R3: project-local recorder management MCP ✅ (2026-07-18)
 **Goal:** Recordings are easy for users and agents to find, analyze, and safely remove without spelunking through AppData.
 - [x] Store development recordings under gitignored `native/records/<session-id>/`; support `POWERPLANNER_RECORDS_DIR` override and retain an installed-build fallback
@@ -805,6 +763,81 @@ idle · gear opens a document context and the selection loss is accepted.
 - [ ] C4a: bar floats over the chart (native-style) vs occupies its own grid row — proposal: own grid row for v1
 - [ ] C4b: does the header still earn 48px once insert actions leave it? May merge into the bar
 
+## v2.14 — Parked: native PowerPoint add-in
+> **Frozen by user directive 2026-10-23** — the owner no longer uses PowerPoint, so the on-slide C++ COM add-in under `native/` is second priority and nothing in it is scheduled. See [DECISIONS.md](DECISIONS.md) D1.
+
+Frozen phases, left in place with their open boxes intact rather than flattened into the backlog, because their task text carries root-cause analysis that a one-line backlog entry would destroy:
+
+- **Phase 14 (v2.9.x)** — task bar as unit; v2.9.1 / v2.9.2 live repair, each awaiting a live recording sign-off.
+- **Phase 15 (v2.10.x)** — session recorder, native launch freshness, sub-row lane positioning, overlay position defects. v2.10.5 carries four open defects (C lane churn, E poll-only reposition, F no declared DPI awareness, G process-wide `g_dpi`), two of which need a design change rather than a patch.
+
+Unparking means re-reading [docs/agents/memories/harness-blind-spots.md](docs/agents/memories/harness-blind-spots.md) first: the native trace harness has missed five defects by construction and ships three invalid gates, so a green harness is not evidence for anything in this major.
+
+## v2.15 — Web-first working model
+> **User directive 2026-10-23:** *"we have this power scroll project where actually the development flow there is very, very good. We need to enforce power flow, our development flow... I really like the design demos that we do in PowerScroll. I think we should include them here... the PowerPoint version now becomes second prio because in my company they don't use PowerPoint... we really need that HTML web interface instead. Same format as PowerScroll, basically, same release and so on."*
+
+The web app is the product. It ships as a single-file HTML application in PowerScroll's release format, and every iteration closes with a showcase artifact built from screenshots of the running app.
+
+### v2.15.0 — PowerFlow retrofit (COMPLETE 2026-10-23) (COMPLETE)
+**Goal:** The plan, the instructions and the release path tell the truth about a web-first project run the PowerFlow way.
+- [x] Replace the stale plan header with a Current Status header [agent: claude]
+- [x] Close the finished quality iteration and clear duplicate active markers [agent: claude]
+- [x] Park the native add-in as a frozen major [agent: claude]
+- [x] Rewrite AGENTS.md around PowerFlow and the web-first focus [agent: claude]
+- [x] Make the showcase artifact a required close-the-loop gate [agent: claude]
+- [x] Record the working-model decisions in DECISIONS.md [agent: claude]
+- [x] Move the harness blind-spot register into agent memories [agent: claude]
+- [x] Add a single version source for the web app [agent: claude]
+- [x] Add the release workflow that publishes the single-file HTML [agent: claude]
+- [x] Write the release runbook and the deployment ledger [agent: claude]
+- [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
+- [x] Add web CI, which the project never had [agent: claude]
+- [x] Stop the parked native CI failing on every push [agent: claude]
+
+## v2.16 — Visual reboot
+> **Owner report 2026-10-23, verbatim:** *"You have to understand, I don't like at all the design of the app at the moment, okay? Or at least of the default templates, the default items that we show. They are not looking good, okay? So use the design front-end design skills to enhance the visuals, okay? We are rebooting kind of the app, and we need here to do this change."*
+
+Two targets, and the owner named them in order: the **default template** — the sample chart every new document opens on, which is the first and often only thing anyone sees — and the **app's visual design** around it.
+
+This is the first slice run under the v2.15 working model, so it follows DECISIONS.md D3: a design demo settles the direction before the direction is implemented, and a showcase artifact proves it shipped.
+
+### v2.16.0 — Chart and default template (current) (ACTIVE)
+**Goal:** The chart looks like something you would put in front of people, and the default document opens on a live plan.
+- [x] Anchor the default template to today instead of a fixed quarter [agent: claude]
+- [x] Replace the bar hue bag with a palette staged by lightness [agent: claude]
+- [x] Make the month band the chart's strongest element [agent: claude]
+- [x] Make milestones read as moments rather than another colour [agent: claude]
+- [x] Drop the webfont that was never loaded and set a type scale [agent: claude]
+- [x] Fix the dark-mode contrast on the darkest stream [agent: claude]
+- [x] Collapse the inspector column by default to give the chart the width [agent: claude]
+- [ ] USER VISUAL GATE: owner sign-off on the new look
+- [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
+- [x] Restyle the task bars so progress fills the span [agent: claude]
+- [x] End the chart sheet after the last row instead of at the window edge [agent: claude]
+- [ ] Delete the inspector column once C2 moves editing into the bar
+- [x] Publish a design demo of bar and shell directions for the owner to pick [agent: claude]
+- [x] Build out the bar and shell direction the owner chooses [agent: claude]
+- [ ] Owner report 2026-10-23: likes bar B, but the colours and the left gutter are not good
+- [x] Test the design at real density with an AUTOSAR ECU plan [agent: claude]
+- [x] Give the row gutter a group hierarchy instead of flat rows [agent: claude]
+- [x] Put two colour strategies to the owner and build the chosen one [agent: claude]
+- [x] Audit the bridge operation set against the owner's list [agent: claude]
+- [x] Design the chart at day scale for a two-week plan [agent: claude]
+- [x] Add a row reorder operation, missing from the bridge and the UI alike [agent: claude]
+- [x] Let a user create a section and move rows into it [agent: claude]
+- [x] Add calendar operations for working days and holidays [agent: claude]
+- [x] Make rows right-clickable so row operations have a home [agent: claude]
+- [x] Fix context menu items colliding when a label wraps [agent: claude]
+- [x] Add milestones to the design canvas artboards [agent: claude]
+- [x] Allocate milestone labels across the lane so none overlap [agent: claude]
+- [x] Let a user pin a label above, below, left, right or hidden [agent: claude]
+- [x] Fix a racy e2e test that clicked before the app had hydrated [agent: claude]
+- [ ] Let a user drag a label to a free position of their own
+- [x] Draw a leader from an off-line label back to its milestone [agent: claude]
+- [ ] Surface label position in the command bar, since right-click is the only path
+- [x] Replace the label position word list with a visual picker [agent: claude]
+- [x] Draw the picker's marker as a bar for tasks and a diamond for milestones [agent: claude]
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
@@ -813,11 +846,10 @@ idle · gear opens a document context and the selection loss is accepted.
 - Installer MSI (v2.4.4) if not pulled forward by release needs
 
 See git for full historical web iterations (v0–v2).
-- **SR-SMO-09 gate is not a valid measurement** — `paint_cadence_min_hz` swings 1.59/7.33/7.48/10.41 Hz across four runs of *identical* code, with p95Ms 281→3141ms, while `paintCount` stays deterministic at 35. The gate measures machine scheduling jitter, not paint behaviour, so it can neither detect a regression nor validate a fix. Make the metric sound before doing any recorder-overhead optimisation work (currently task #10): either measure under controlled load, or gate on a deterministic quantity (work-per-paint / paints-per-gesture) instead of wall-clock Hz. Measured 2026-07-18.
-- **The harness has now missed three consecutive defects by construction** (2026-07-18): the Alt latch (harness takes the `g_cursorOverrideEnabled` branch, so it evaluates a different expression than production on the exact faulty line), the unowned-topmost z-order bug (no foreground-app semantics in-harness), and the alpha-0 click-through bug (no real layered-window compositor, so per-pixel-alpha hit-testing is never exercised). All three were found from live recordings or user reports instead. Consider promoting recorded live sessions to the primary acceptance gate for anything touching input routing, window styles, or compositing, with the trace harness demoted to a fast regression check for pure layout/selection logic.
-- **`window_preview_header_pixel_diff` is an INVERTED gate — it passes only on a dirty machine** (measured 2026-07-19, 6 runs). The determining variable is `appBarWindowCount`, not the code: every run with a stale orphan app-bar window left over from a previous harness process (count=2) PASSES, and every clean run (count=1) FAILS — *including runs of unmodified code*. It is therefore measuring app-bar window cleanup, not whether the header preview repaints during a window-edge drag. Two consequences: (1) do not treat a red here as a regression signal, and (2) the question it was meant to answer — **does the axis header preview actually repaint mid-drag?** — is currently unanswered and may itself be a real product defect. Needs its own investigation. Do not "fix" it by re-baselining against a contaminated run.
-- **`no_large_sel_drop_to_empty` is a false positive on any profile with leading no-selection steps** (2026-08-07). The rule name says *drop* to empty, but `harness_driver.py:686` flags **any** step after index 0 whose `ownSelKind` is blank — it never checks that selection was non-empty first. `subrow-dense` legitimately runs `pre` and `before` with nothing selected, so it reports FAIL on a sequence `[('pre',''), ('before',''), ('date-drag','TASK'), …]` where selection only ever *gains*. Harmless today because scenarios gate only their own declared invariants (`trace_subrow_dense` is PASS, exit 0), but it is noise in every trace report and would mask a real drop. Fix: track whether a non-empty kind was seen before flagging a later blank.
-- **The web e2e suite has the same shape of blind spot as the native harness** (2026-08-07, Phase 14): both agent-bridge defects (unhandled reconnect rejection; stale token file after a Windows kill) live in the *server goes away mid-session* state, which the Playwright suite never enters — it spawns a bridge, uses it, and disposes it at test end. Every automated layer was green while a session that outlived its server was broken. Same pattern as the native register below: **infrastructure that cannot observe the failure mode reports green.** Mitigation applied: the live run is a required gate in v2.11.4, and a mid-session server-kill test now exists.
-- **That mitigation test was itself invalid on first write** (2026-08-07): the kill-and-restart e2e passed *with the fix removed*, because the replacement server came back before any reconnect attempt reached the failing path. It only became a gate after inserting a deliberate 6 s outage so several backoff attempts run against a dead server — verified RED without the fix, GREEN with it. Recorded because it is the register's own pattern happening one level up: **a regression test written for a defect is not a gate until it has been observed to fail.** Red-check new gates by reverting the fix; do not accept green as evidence on its own.
-- **Harness blind-spot count is now five defects plus three invalid gates** (2026-07-19): add the header-band overshoot (no PowerPoint shapes in-harness, so there is no painted band for the derived band to disagree with) to the three above, and add `window_preview_header_pixel_diff` (inverted, above) and the `trace` subcommand's opt-in `--check-invariants` (a bare `trace` run reports PASS with zero invariants evaluated) to `paint_cadence_min_hz`. The pattern is consistent enough to act on: **infrastructure that cannot observe the failure mode reports green, and green is being read as evidence.**
 - Agent bridge: let a tool attach a short "what I'm doing" caption to the status indicator (design F9) — the user currently sees bars move without stated intent
+- powerplan has no renumber tool, so the duplicate v2.5.5 iteration version cannot be fixed through the API — raise it in the powerplan repo
+- Number the Playwright specs NN-topic from the SRS allocator, as PowerScroll does
+- Open question (D4): does the web app still need to put charts into PowerPoint decks? Parked by the user 2026-10-23 until it bites
+- Seed the Pages site with a live app demo on a sample chart, as PowerScroll does
+- Fix the MSVC setup step in native-pure CI when native is unparked
+- RED GATE: 3 of 51 e2e tests fail on the tablet and mobile projects — `text=Wireframes` resolves to a hidden SVG <title> on narrow WebKit viewports, and the header Add-task button is absent in the compact layout. Desktop is fully green. First full-suite run since the browsers were installed, 2026-10-23
