@@ -6,6 +6,16 @@ export type DependencyType = 'finish-to-start' | 'start-to-start' | 'finish-to-f
 
 export type LabelPlacement = 'on-bar' | 'left' | 'right' | 'above' | 'below' | 'hidden';
 
+/**
+ * A label dragged somewhere of the user's own choosing, in px from the
+ * marker it belongs to. It overrides `labelPlacement`; clearing it returns
+ * the label to automatic placement.
+ */
+export interface LabelOffset {
+  dx: number;
+  dy: number;
+}
+
 export type ThemeName = 'light' | 'dark' | 'print';
 
 export interface CalendarSettings {
@@ -31,6 +41,7 @@ export interface Task {
   percentComplete?: number;
   color?: string;
   labelPlacement?: LabelPlacement;
+  labelOffset?: LabelOffset | null;
   notes?: string;
 }
 
@@ -40,6 +51,7 @@ export interface Milestone {
   label: string;
   date: ISODate;
   labelPlacement?: LabelPlacement;
+  labelOffset?: LabelOffset | null;
   color?: string;
 }
 

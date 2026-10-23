@@ -198,7 +198,9 @@ export function ChartContextMenu() {
     items.push(
       labelPositionItem(
         task.labelPlacement,
-        (p) => docActions.updateTask(task.id, { labelPlacement: p }),
+        // Choosing a position also releases a dragged label, or it could
+        // never be handed back to the allocator.
+        (p) => docActions.updateTask(task.id, { labelPlacement: p, labelOffset: null }),
         'task',
       ),
     );
@@ -223,7 +225,7 @@ export function ChartContextMenu() {
     items.push(
       labelPositionItem(
         m.labelPlacement,
-        (p) => docActions.updateMilestone(m.id, { labelPlacement: p }),
+        (p) => docActions.updateMilestone(m.id, { labelPlacement: p, labelOffset: null }),
         'milestone',
       ),
     );

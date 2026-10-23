@@ -4,14 +4,16 @@ import { useSelectionStore } from '../stores/selectionStore';
 import type { LayoutResult } from '../layout/engine';
 import { dateToX } from '../layout/timeAxis';
 import { allocateLabels, type Placement } from './labelFit';
+import type { DragPreviewMap } from '../app/useChartInteractions';
 
 interface Props {
   layout: LayoutResult;
+  dragPreview?: DragPreviewMap | null;
 }
 
 const SIZE = 11;
 
-export function Milestones({ layout }: Props) {
+export function Milestones({ layout, dragPreview }: Props) {
   const viewStart = useViewportStore((s) => s.startDate);
   const pxPerDay = useViewportStore((s) => s.pxPerDay);
   const isSelected = useSelectionStore((s) => s.isSelected);
@@ -27,7 +29,7 @@ export function Milestones({ layout }: Props) {
           x: dateToX(lm.milestone.date, viewStart, pxPerDay) + pxPerDay / 2,
           text: lm.milestone.label,
           lane: `${lm.milestone.rowId}#${lm.subRow ?? 0}`,
-          requested: lm.milestone.labelPlacement,
+          requested: lm.milestone.labelOffset ? 'hidden' : lm.milestone.labelPlacement,
         })),
         SIZE,
       ),
@@ -58,7 +60,14 @@ export function Milestones({ layout }: Props) {
               strokeWidth={selected ? 2 : 1}
               style={{ cursor: 'grab' }}
             />
-            <MilestoneLabel id={m.id} x={x} y={y} placement={alloc?.placement} text={m.label} />
+            <MilestoneLabel
+              id={m.id}
+              x={x}
+              y={y}
+              placement={alloc?.placement}
+              text={m.label}
+              offset={dragPreview?.labels.get(m.id) ?? m.labelOffset ?? null}
+            />
           </g>
         );
       })}
@@ -73,50 +82,74 @@ interface MlProps {
   text: string;
   /** Resolved by the lane allocator. Undefined means it could not be placed. */
   placement: Placement | undefined;
+  /** A place the user dragged it to, which overrides the allocator. */
+  offset: { dx: number; dy: number } | null;
 }
 
-function MilestoneLabel({ id, x, y, text, placement }: MlProps) {
-  if (!placement || placement === 'hidden') return null;
+/** Where a label's anchor sits for each automatic placement, in px from the
+ *  marker centre. Dragging seeds its offset from here, so a label does not
+ *  jump the moment it is grabbed. */
+function anchorFor(placement: Placement): { dx: number; dy: number } {
+  switch (placement) {
+    case 'above':
+      return { dx: 0, dy: -SIZE - 8 };
+    case 'below':
+      return { dx: 0, dy: SIZE + 17 };
+    case 'left':
+      return { dx: -SIZE - 4, dy: 4 };
+    default:
+      return { dx: SIZE + 4, dy: 4 };
+  }
+}
 
-  const baseProps = {
-    fontSize: 11,
-    fill: 'var(--color-text)',
-    pointerEvents: 'none' as const,
-  };
+function MilestoneLabel({ id, x, y, text, placement, offset }: MlProps) {
+  const dragged = offset != null;
+  if (!dragged && (!placement || placement === 'hidden')) return null;
 
-  // A label that has stepped off the line needs to say which diamond it belongs
-  // to. Left and right sit against their own marker and need no help; above and
-  // below are centred over it, and in a crowded lane that centring alone is not
-  // enough to read (owner directive 2026-10-23).
-  const leader = (y1: number, y2: number) => (
-    <line
-      data-pp-leader={id}
-      x1={x}
-      y1={y1}
-      x2={x}
-      y2={y2}
-      stroke="var(--color-text-mute)"
-      strokeWidth={1}
-      pointerEvents="none"
-    />
+  const anchor = dragged ? offset : anchorFor(placement ?? 'right');
+  const tx = x + anchor.dx;
+  const ty = y + anchor.dy;
+
+  // A dragged label can end up anywhere, so it always keeps a leader; the
+  // automatic vertical placements keep the short one they had.
+  const needsLeader = dragged || placement === 'above' || placement === 'below';
+  const len = Math.hypot(anchor.dx, anchor.dy) || 1;
+  const ux = anchor.dx / len;
+  const uy = anchor.dy / len;
+  const edge = SIZE + 1;
+  const stop = Math.max(edge + 2, len - 4);
+
+  const anchorAttr = dragged ? 'start' : placement === 'above' || placement === 'below' ? 'middle' : placement === 'left' ? 'end' : 'start';
+
+  return (
+    <>
+      {needsLeader && (
+        <line
+          data-pp-leader={id}
+          x1={x + ux * edge}
+          y1={y + uy * edge}
+          x2={x + ux * stop}
+          y2={y + uy * stop}
+          stroke="var(--color-text-mute)"
+          strokeWidth={1}
+          pointerEvents="none"
+        />
+      )}
+      <text
+        data-pp-kind="label"
+        data-pp-id={id}
+        data-pp-owner="milestone"
+        data-pp-dx={anchor.dx}
+        data-pp-dy={anchor.dy}
+        x={tx}
+        y={ty}
+        textAnchor={anchorAttr}
+        fontSize={11}
+        fill="var(--color-text)"
+        style={{ cursor: 'grab' }}
+      >
+        {text}
+      </text>
+    </>
   );
-
-  if (placement === 'above')
-    return (
-      <>
-        {leader(y - SIZE - 1, y - SIZE - 7)}
-        <text x={x} y={y - SIZE - 8} textAnchor="middle" {...baseProps}>{text}</text>
-      </>
-    );
-  if (placement === 'below')
-    return (
-      <>
-        {leader(y + SIZE + 1, y + SIZE + 7)}
-        <text x={x} y={y + SIZE + 17} textAnchor="middle" {...baseProps}>{text}</text>
-      </>
-    );
-  if (placement === 'left')
-    return <text x={x - SIZE - 4} y={y + 4} textAnchor="end" {...baseProps}>{text}</text>;
-  return <text x={x + SIZE + 4} y={y + 4} {...baseProps}>{text}</text>;
 }
-

@@ -210,7 +210,7 @@ export function ChartArea() {
           <Summaries layout={layout} />
           <Baseline layout={layout} />
           <TaskBars layout={layout} dragPreview={dragPreview} />
-          <Milestones layout={layout} />
+          <Milestones layout={layout} dragPreview={dragPreview} />
           <Dependencies layout={layout} />
           <Markers doc={doc} viewStart={viewStart} pxPerDay={pxPerDay} chartHeight={layout.chartHeight} />
           {depDrag && depDrag.depStartX != null && depDrag.depCurrentX != null && (

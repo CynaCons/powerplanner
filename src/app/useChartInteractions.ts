@@ -39,6 +39,7 @@ export type DragKind =
   | 'bracket-resize-start'
   | 'bracket-resize-end'
   | 'dep-create'
+  | 'label-move'
   | 'lasso';
 
 export interface DragState {
@@ -61,12 +62,20 @@ export interface DragState {
   lassoStartY?: number;
   lassoCurrentX?: number;
   lassoCurrentY?: number;
+  /** label-move: what the label belongs to, and where it started. */
+  labelOwner?: 'task' | 'milestone';
+  labelStartDx?: number;
+  labelStartDy?: number;
+  labelDx?: number;
+  labelDy?: number;
 }
 
 export interface DragPreviewMap {
   tasks: Map<string, { start: string; end: string }>;
   milestones: Map<string, string>;
   brackets: Map<string, { start: string; end: string }>;
+  /** A label being dragged, so it follows the cursor before it is committed. */
+  labels: Map<string, { dx: number; dy: number }>;
 }
 
 export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layout }: InteractionOptions) {
@@ -205,6 +214,29 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
         return;
       }
 
+      // A label dragged to a place of the user's own choosing. The offset is
+      // seeded from where the label is already drawn, so grabbing it does not
+      // make it jump (PLAN.md v2.16).
+      if (kind === 'label') {
+        const owner = datasetEl.dataset.ppOwner === 'task' ? 'task' : 'milestone';
+        const anchorDx = Number(datasetEl.dataset.ppDx ?? 0);
+        const anchorDy = Number(datasetEl.dataset.ppDy ?? 0);
+        dragRef.current = {
+          kind: 'label-move',
+          targetId: id,
+          labelOwner: owner,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          labelStartDx: anchorDx,
+          labelStartDy: anchorDy,
+          labelDx: anchorDx,
+          labelDy: anchorDy,
+          deltaDays: 0,
+        };
+        attachWindowListeners(handleWindowMove, handleWindowUp);
+        return;
+      }
+
       // Selection on click
       const selStore = useSelectionStore.getState();
       const additive = e.shiftKey || e.metaKey || e.ctrlKey;
@@ -318,6 +350,20 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
       return;
     }
 
+    if (state.kind === 'label-move') {
+      state.labelDx = (state.labelStartDx ?? 0) + dx;
+      state.labelDy = (state.labelStartDy ?? 0) + (e.clientY - state.startClientY);
+      if (state.targetId) {
+        setDragPreview({
+          tasks: new Map(),
+          milestones: new Map(),
+          brackets: new Map(),
+          labels: new Map([[state.targetId, { dx: state.labelDx, dy: state.labelDy }]]),
+        });
+      }
+      return;
+    }
+
     if (state.kind === 'lasso') {
       const svg = svgRef.current;
       if (!svg) return;
@@ -329,7 +375,7 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
     }
 
     state.deltaDays = dDays;
-    const next: DragPreviewMap = { tasks: new Map(), milestones: new Map(), brackets: new Map() };
+    const next: DragPreviewMap = { tasks: new Map(), milestones: new Map(), brackets: new Map(), labels: new Map() };
 
     if (state.kind === 'task-move' && state.originalStart && state.originalEnd && state.targetId) {
       next.tasks.set(state.targetId, {
@@ -368,6 +414,20 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
       return;
     }
     const docStore = useDocumentStore.getState();
+
+    if (state.kind === 'label-move') {
+      const offset = { dx: Math.round(state.labelDx ?? 0), dy: Math.round(state.labelDy ?? 0) };
+      if (state.targetId) {
+        if (state.labelOwner === 'task') {
+          docStore.updateTask(state.targetId, { labelOffset: offset });
+        } else {
+          docStore.updateMilestone(state.targetId, { labelOffset: offset });
+        }
+      }
+      setDragPreview(null);
+      return;
+    }
+
     const edit = useEditStore.getState();
     const scale = docStore.doc.calendar.scale;
     const snappedDelta = edit.snapEnabled ? snapDelta(state.deltaDays, scale) : state.deltaDays;
@@ -461,6 +521,14 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
         const id = datasetEl.dataset.ppId as string;
         if (kind === 'row') {
           ctx.show(e.clientX, e.clientY, { kind: 'row', id });
+          return;
+        }
+        // A label belongs to its marker: right-clicking it offers the marker's
+        // menu, which is where label position lives.
+        if (kind === 'label') {
+          const owner = datasetEl.dataset.ppOwner === 'task' ? 'task' : 'milestone';
+          if (!sel.isSelected(id)) sel.setSelection([{ kind: owner, id }]);
+          ctx.show(e.clientX, e.clientY, { kind: owner, id });
           return;
         }
         if (kind === 'task' || kind === 'milestone' || kind === 'bracket' || kind === 'dependency' || kind === 'marker') {

@@ -832,7 +832,7 @@ This is the first slice run under the v2.15 working model, so it follows DECISIO
 - [x] Allocate milestone labels across the lane so none overlap [agent: claude]
 - [x] Let a user pin a label above, below, left, right or hidden [agent: claude]
 - [x] Fix a racy e2e test that clicked before the app had hydrated [agent: claude]
-- [ ] Let a user drag a label to a free position of their own
+- [x] Let a user drag a label to a free position of their own [agent: claude]
 - [x] Draw a leader from an off-line label back to its milestone [agent: claude]
 - [ ] Surface label position in the command bar, since right-click is the only path
 - [x] Replace the label position word list with a visual picker [agent: claude]
