@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type ContextTargetKind = 'background' | 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker';
+export type ContextTargetKind = 'background' | 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker' | 'row';
 
 export interface ContextTarget {
   kind: ContextTargetKind;

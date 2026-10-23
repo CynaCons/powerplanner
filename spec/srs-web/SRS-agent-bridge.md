@@ -32,6 +32,9 @@ session recorder and is out of scope here.
 | SRS-ABR-014 | Entity-creating tools shall return the identifier of each created entity, and shall accept a caller-supplied identifier. | Without returned ids an agent cannot wire dependencies to the tasks it just created. | Test | B3c |
 | SRS-ABR-015 | Deleting a row shall cascade to its tasks and milestones, and deleting a task shall cascade to its dependencies, identically to user-initiated deletion. | Agent edits must not be able to leave dangling references that user edits cannot produce. | Test | `documentStore.ts`; B1e |
 | SRS-ABR-016 | View operations (viewport, selection) shall not create undo history frames, and no document mutation shall move the viewport as a side effect. | Undo is for document changes; an agent must not fight a user who is scrolling. | Test | design §10 decision 3 |
+| SRS-ABR-017 | The operation set shall include moving a row to a new position in the row order. | Row order is part of the document and was the one structural property no caller could change: it is array position, and no operation addressed it. | Test | `src/stores/docOps.ts`; v2.16.0 |
+| SRS-ABR-018 | The operation set shall include setting the calendar's working days and its holiday list. | Weekend and holiday shading is derived from the calendar, so a plan authored entirely by an agent could not state when work does not happen. | Test | `src/stores/docOps.ts`; v2.16.0 |
+| SRS-ABR-019 | Every document operation available to an agent shall also be reachable by a user through the UI, without the bridge. | Owner directive 2026-10-23. The bridge is a convenience, never the only way to author: an operation a person cannot perform is a dependency on an agent being available. | Review + Test (e2e) | v2.16.0 |
 
 ## Concurrency & idempotency
 

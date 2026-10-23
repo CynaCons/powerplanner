@@ -67,6 +67,10 @@ interface DocumentState {
   addRow: (r: Row) => void;
   updateRow: (id: string, patch: Partial<Row>) => void;
   deleteRow: (id: string) => void;
+  /** Move a row (with its packages, if it is a section) to a new position. */
+  moveRow: (id: string, toIndex: number) => void;
+  setWorkingDays: (days: number[]) => void;
+  setHolidays: (dates: string[]) => void;
 
   captureBaseline: () => void;
   clearBaseline: () => void;
@@ -171,6 +175,12 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       tasks: d.tasks.filter((t) => t.rowId !== id),
       milestones: d.milestones.filter((m) => m.rowId !== id),
     })),
+
+  // Order, sections and the calendar go through the same op reducer the bridge
+  // uses, so a user action and an agent action cannot diverge (SRS-ABR-019).
+  moveRow: (id, toIndex) => mutate(set, (d) => applyOps(d, [{ op: 'move_row', id, toIndex }])),
+  setWorkingDays: (days) => mutate(set, (d) => applyOps(d, [{ op: 'set_working_days', days }])),
+  setHolidays: (dates) => mutate(set, (d) => applyOps(d, [{ op: 'set_holidays', dates }])),
 
   captureBaseline: () => mutate(set, (d) => ({
     ...d,

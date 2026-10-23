@@ -26,6 +26,7 @@ import type {
   Row,
   TimeScale,
   ThemeName,
+  ISODate,
 } from '../types/document';
 
 export type DocOp =
@@ -36,6 +37,9 @@ export type DocOp =
   | { op: 'add_row'; row: Row }
   | { op: 'update_row'; id: string; patch: Partial<Row> }
   | { op: 'delete_row'; id: string }
+  | { op: 'move_row'; id: string; toIndex: number }
+  | { op: 'set_working_days'; days: number[] }
+  | { op: 'set_holidays'; dates: ISODate[] }
   | { op: 'add_task'; task: Task }
   | { op: 'update_task'; id: string; patch: Partial<Task> }
   | { op: 'delete_task'; id: string }
@@ -114,6 +118,39 @@ export function applyOp(doc: GanttDocument, op: DocOp): GanttDocument {
 
     case 'update_row':
       return { ...doc, rows: patched(doc.rows, op.id, op.patch, 'row') };
+
+    /**
+     * Row order is array position, and until now nothing could change it
+     * (SRS-ABR-017). A section moves with its packages: moving a group header
+     * and leaving its children behind would silently dismantle the grouping,
+     * which is never what the caller meant.
+     */
+    case 'move_row': {
+      requireIndex(doc.rows, op.id, 'row');
+      const moving = doc.rows.filter((r) => r.id === op.id || r.groupId === op.id);
+      const movingIds = new Set(moving.map((r) => r.id));
+      const rest = doc.rows.filter((r) => !movingIds.has(r.id));
+      const at = Math.max(0, Math.min(rest.length, Math.trunc(op.toIndex)));
+      return { ...doc, rows: [...rest.slice(0, at), ...moving, ...rest.slice(at)] };
+    }
+
+    case 'set_working_days': {
+      const days = op.days;
+      if (!Array.isArray(days) || days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+        throw new Error('workingDays must be integers 0-6 (0 = Sunday)');
+      }
+      return {
+        ...doc,
+        calendar: { ...doc.calendar, workingDays: [...new Set(days)].sort((a, b) => a - b) },
+      };
+    }
+
+    case 'set_holidays': {
+      if (!Array.isArray(op.dates) || op.dates.some((d) => !/^\d{4}-\d{2}-\d{2}$/.test(d))) {
+        throw new Error('holidays must be ISO dates (YYYY-MM-DD)');
+      }
+      return { ...doc, calendar: { ...doc.calendar, holidays: [...op.dates].sort() } };
+    }
 
     case 'delete_row': {
       requireIndex(doc.rows, op.id, 'row');

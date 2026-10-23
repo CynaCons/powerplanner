@@ -230,9 +230,66 @@ function DocumentGroup() {
           <option key={label} value={i + 1}>{label}</option>
         ))}
       </select>
+      <WorkingDays />
     </Group>
   );
 }
+
+const DOW = [
+  { day: 1, label: 'M' },
+  { day: 2, label: 'T' },
+  { day: 3, label: 'W' },
+  { day: 4, label: 'T' },
+  { day: 5, label: 'F' },
+  { day: 6, label: 'S' },
+  { day: 0, label: 'S' },
+];
+
+/**
+ * Working days drive the weekend shading, so until now a plan could be shaded
+ * wrong with no way to correct it from the UI — the agent bridge could set it
+ * and a person could not (SRS-ABR-019, owner directive 2026-10-23).
+ */
+function WorkingDays() {
+  const workingDays = useDocumentStore((s) => s.doc.calendar.workingDays);
+  const setWorkingDays = useDocumentStore((s) => s.setWorkingDays);
+
+  const toggle = (day: number) => {
+    const next = workingDays.includes(day)
+      ? workingDays.filter((d) => d !== day)
+      : [...workingDays, day];
+    setWorkingDays(next);
+  };
+
+  return (
+    <>
+      <span className="cmdbar__field-label">Working days</span>
+      <div className="cmdbar__scale" role="group" aria-label="Working days">
+        {DOW.map(({ day, label }) => (
+          <button
+            key={day}
+            aria-pressed={workingDays.includes(day)}
+            aria-label={`${FULL_DOW[day]}, ${workingDays.includes(day) ? 'a working day' : 'not a working day'}`}
+            className={workingDays.includes(day) ? 'is-active' : ''}
+            onClick={() => toggle(day)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+const FULL_DOW: Record<number, string> = {
+  0: 'Sunday',
+  1: 'Monday',
+  2: 'Tuesday',
+  3: 'Wednesday',
+  4: 'Thursday',
+  5: 'Friday',
+  6: 'Saturday',
+};
 
 /** Placeholder until C2 ports the per-selection editing contents in. */
 function SelectionGroup({ count, kind }: { count: number; kind: string }) {
