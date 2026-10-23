@@ -459,6 +459,10 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
       if (datasetEl) {
         const kind = datasetEl.dataset.ppKind as string;
         const id = datasetEl.dataset.ppId as string;
+        if (kind === 'row') {
+          ctx.show(e.clientX, e.clientY, { kind: 'row', id });
+          return;
+        }
         if (kind === 'task' || kind === 'milestone' || kind === 'bracket' || kind === 'dependency' || kind === 'marker') {
           if (!sel.isSelected(id)) sel.setSelection([{ kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id }]);
           ctx.show(e.clientX, e.clientY, { kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id });

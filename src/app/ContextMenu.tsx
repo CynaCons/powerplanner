@@ -10,6 +10,10 @@ export interface ContextMenuItem {
   danger?: boolean;
   separator?: boolean;
   disabled?: boolean;
+  /** Marks the current value in a set of mutually exclusive choices. */
+  active?: boolean;
+  /** Renders in place of the usual row. For choices a word cannot show. */
+  custom?: React.ReactNode;
 }
 
 interface ContextMenuProps {
@@ -57,6 +61,9 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       }}
     >
       {items.map((it) => {
+        if (it.custom) {
+          return <div key={it.id}>{it.custom}</div>;
+        }
         if (it.separator) {
           return <div key={it.id} style={{ height: 1, margin: '4px 6px', background: 'var(--color-border-hairline)' }} />;
         }
@@ -71,13 +78,17 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
               display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '5px 8px',
               border: 'none', borderRadius: 'var(--radius)', background: 'transparent',
               color: it.danger ? '#ef4444' : 'inherit', textAlign: 'left',
-              cursor: it.disabled ? 'not-allowed' : 'pointer', opacity: it.disabled ? 0.4 : 1, height: 26,
+              cursor: it.disabled ? 'not-allowed' : 'pointer', opacity: it.disabled ? 0.4 : 1,
+              // minHeight, not height: a label long enough to wrap used to
+              // overflow a fixed 26px row and collide with the item below it.
+              minHeight: 26, lineHeight: 1.35,
             }}
             onMouseEnter={(e) => { if (!it.disabled) e.currentTarget.style.background = 'var(--color-bg-subtle)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
           >
             {Icon ? <Icon size={14} strokeWidth={1.75} /> : <span style={{ width: 14 }} />}
             <span style={{ flex: 1 }}>{it.label}</span>
+            {it.active && <span aria-hidden="true" style={{ color: 'var(--color-accent)' }}>&#10003;</span>}
             {it.shortcut && <kbd>{it.shortcut}</kbd>}
           </button>
         );
