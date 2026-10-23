@@ -814,7 +814,7 @@ This is the first slice run under the v2.15 working model, so it follows DECISIO
 - [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
 - [x] Restyle the task bars so progress fills the span [agent: claude]
 - [x] End the chart sheet after the last row instead of at the window edge [agent: claude]
-- [ ] Delete the inspector column once C2 moves editing into the bar
+- [x] Delete the inspector column once C2 moves editing into the bar [agent: claude]
 - [x] Publish a design demo of bar and shell directions for the owner to pick [agent: claude]
 - [x] Build out the bar and shell direction the owner chooses [agent: claude]
 - [ ] Owner report 2026-10-23: likes bar B, but the colours and the left gutter are not good
@@ -834,9 +834,13 @@ This is the first slice run under the v2.15 working model, so it follows DECISIO
 - [x] Fix a racy e2e test that clicked before the app had hydrated [agent: claude]
 - [x] Let a user drag a label to a free position of their own [agent: claude]
 - [x] Draw a leader from an off-line label back to its milestone [agent: claude]
-- [ ] Surface label position in the command bar, since right-click is the only path
+- [x] Surface label position in the command bar, since right-click is the only path [agent: claude]
 - [x] Replace the label position word list with a visual picker [agent: claude]
 - [x] Draw the picker's marker as a bar for tasks and a diamond for milestones [agent: claude]
+- [x] Move selection editing from the inspector into the command bar [agent: claude]
+- [x] Align the colour swatches with the stream palette [agent: claude]
+- [x] Portal the edit popover, which the bar was clipping away [agent: claude]
+- [ ] Decide whether the header keeps its insert actions now the bar has them
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition

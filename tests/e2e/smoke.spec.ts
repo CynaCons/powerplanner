@@ -5,8 +5,8 @@ test.describe('PowerPlanner smoke', () => {
     await page.goto('/');
     // Header brand
     await expect(page.locator('.app-header').getByText('PowerPlanner')).toBeVisible();
-    // Inspector visible (in desktop viewport)
-    await expect(page.locator('.inspector')).toBeVisible();
+    // The inspector column is gone; editing lives in the command bar (C3).
+    await expect(page.locator('.inspector')).toHaveCount(0);
     // Chart SVG renders (first svg = main chart, second = minimap)
     await expect(page.locator('.chart-area > svg').first()).toBeVisible();
     // Sample tasks rendered
@@ -65,8 +65,7 @@ test.describe('PowerPlanner smoke', () => {
     await expect(page.locator('button', { hasText: /^[DWMQY]$/ })).toHaveCount(5);
     await expect(page.locator('button[title*="Fit" i]')).toHaveCount(1);
     // The retired sections must not come back.
-    await expect(page.locator('.inspector')).not.toContainText('Statistics');
-    await expect(page.locator('.inspector')).not.toContainText('Appearance');
+    await expect(page.locator('.inspector')).toHaveCount(0);
   });
 
   test('status bar carries the statistics the inspector used to show', async ({ page }) => {

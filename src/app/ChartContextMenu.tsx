@@ -177,7 +177,7 @@ export function ChartContextMenu() {
     const task = doc.tasks.find((t) => t.id === target.id);
     if (!task) { close(); return null; }
     items.push({ id: 'edit', label: 'Edit label', icon: Pencil, shortcut: 'F2', onClick: () => beginEdit(task.id) });
-    items.push({ id: 'color', label: 'Change color in inspector…', icon: Palette, onClick: () => setSelection([{ kind: 'task', id: task.id }]) });
+    items.push({ id: 'color', label: 'Select, to edit in the bar', icon: Palette, onClick: () => setSelection([{ kind: 'task', id: task.id }]) });
     items.push({
       id: 'dup',
       label: 'Duplicate',
@@ -234,7 +234,7 @@ export function ChartContextMenu() {
   }
 
   if (target.kind === 'bracket' && target.id) {
-    items.push({ id: 'edit', label: 'Edit in inspector', icon: Pencil, onClick: () => setSelection([{ kind: 'bracket', id: target.id! }]) });
+    items.push({ id: 'edit', label: 'Select, to edit in the bar', icon: Pencil, onClick: () => setSelection([{ kind: 'bracket', id: target.id! }]) });
     items.push({ id: 's1', separator: true });
     items.push({ id: 'del', label: 'Delete bracket', icon: Trash2, danger: true, onClick: () => docActions.deleteBracket(target.id!) });
   }

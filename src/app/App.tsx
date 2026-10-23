@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChartArea } from './ChartArea';
-import { Inspector } from './Inspector';
 import { Header } from './Header';
 import { StatusBar } from './StatusBar';
 import { RestoreBanner } from './RestoreBanner';
@@ -16,7 +15,7 @@ import { saveToFile } from '../persistence/fileIo';
 import type { GanttDocument } from '../types/document';
 
 interface AppProps {
-  /** Chart-first layout for narrow Office task panes (hides the inspector column). */
+  /** Chart-first layout for narrow Office task panes. */
   compact?: boolean;
 }
 
@@ -84,7 +83,6 @@ export function App({ compact = false }: AppProps) {
   return (
     <div className={compact ? 'app-shell app-shell--compact' : 'app-shell'}>
       <Header />
-      <Inspector />
       <ChartArea />
       <CommandBar />
       <StatusBar />

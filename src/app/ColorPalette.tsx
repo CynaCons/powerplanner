@@ -6,15 +6,18 @@ interface ColorPaletteProps {
   onChange: (color: string) => void;
 }
 
+// The stream palette, one hue per discipline (DECISIONS.md D6). These used to
+// be a different, softer set left over from before the 2026-10-23 rebuild, so
+// picking a colour by hand produced one that no bar in the chart used.
 const PRESETS: { name: string; hex: string }[] = [
-  { name: 'Dusty rose', hex: '#c47b7b' },
-  { name: 'Sage', hex: '#8aa68a' },
-  { name: 'Slate', hex: '#6b7a8f' },
-  { name: 'Ochre', hex: '#c69749' },
-  { name: 'Indigo', hex: '#7a82c9' },
-  { name: 'Terracotta', hex: '#c47a55' },
-  { name: 'Plum', hex: '#9a6b9a' },
-  { name: 'Teal', hex: '#5fa19a' },
+  { name: 'Prussian', hex: '#1F4E79' },
+  { name: 'Teal', hex: '#17736B' },
+  { name: 'Moss', hex: '#4F7A2A' },
+  { name: 'Rust', hex: '#A8452B' },
+  { name: 'Plum', hex: '#6B3F7A' },
+  { name: 'Amber', hex: '#C07A14' },
+  { name: 'Steel', hex: '#6E8299' },
+  { name: 'Graphite', hex: '#3D4551' },
 ];
 
 function eqHex(a: string, b: string): boolean {

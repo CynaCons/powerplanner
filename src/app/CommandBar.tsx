@@ -8,6 +8,7 @@ import { useViewportStore } from '../stores/viewportStore';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { newId } from '../utils/ids';
+import { SelectionGroup } from './SelectionGroup';
 import { todayISO, addDays } from '../utils/dates';
 import type { TimeScale, ThemeName } from '../types/document';
 
@@ -92,7 +93,7 @@ export function CommandBar() {
       {docContext ? (
         <DocumentGroup />
       ) : selection.length > 0 ? (
-        <SelectionGroup count={selection.length} kind={selection[0].kind} />
+        <SelectionGroup />
       ) : (
         <>
           {/* Tools only when idle (user choice). Pan therefore needs a
@@ -290,18 +291,6 @@ const FULL_DOW: Record<number, string> = {
   5: 'Friday',
   6: 'Saturday',
 };
-
-/** Placeholder until C2 ports the per-selection editing contents in. */
-function SelectionGroup({ count, kind }: { count: number; kind: string }) {
-  return (
-    <Group label={count > 1 ? 'Selection' : kind}>
-      <span className="cmdbar__selname">
-        {count > 1 ? `${count} items selected` : `1 ${kind} selected`}
-      </span>
-      <span className="cmdbar__hint">Editing moves here in C2 — use the inspector for now</span>
-    </Group>
-  );
-}
 
 function Group({ label, children }: { label?: string; children: React.ReactNode }) {
   return (

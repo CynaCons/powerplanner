@@ -119,7 +119,7 @@ export function fitLabel({ text, requested, barWidth, spaceRight }: FitInput): F
   if (clippedRight) return { placement: 'right', text: clippedRight, truncated: true };
 
   // 4. Nothing legible fits. Drawing it anyway is what produced the unreadable
-  //    chart; the label remains reachable via hover and the inspector.
+  //    chart; the label remains reachable on hover.
   return { placement: 'hidden', text: '', truncated: true };
 }
 
