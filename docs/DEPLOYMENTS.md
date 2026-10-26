@@ -7,27 +7,47 @@ workflow's exit text implied or from what you expect to be true. The runbook is
 
 Repository: `CynaCons/powerplanner`
 
-## Current state — observed 2026-10-23
+## Current state — observed 2026-10-26
 
 | Surface | State | Observed |
 |---|---|---|
-| GitHub release (latest) | `v2.11.0` — "Web Agent Bridge (MCP)", non-draft, published 2026-08-07 | `gh release view v2.11.0` |
-| Release assets | **none** — zero assets on every release | `gh release view v2.11.0 --json assets` → `[]` |
+| GitHub release (latest) | `v2.16.0`, non-draft, published 2026-10-26 | `gh release view v2.16.0` |
+| Release assets | `PowerPlanner.html`, 355,051 bytes | `gh release view v2.16.0 --json assets` |
 | GitHub Pages | `status: built`, from `main` `/`, HTTPS enforced | `gh api repos/CynaCons/powerplanner/pages` |
 | Pages URL | https://cynacons.github.io/powerplanner/ | same |
 | Pages content | landing site from `site/`; no live app demo | `deploy-site.yml` |
-| `src/version.ts` | `2.11.0` | repo |
-| `package.json` | `2.11.0` — matches | repo |
-| `dist-template/PowerPlanner.html` | built 2026-08-10, **stale** vs `main` | filesystem |
+| `src/version.ts` | `2.16.0` | repo |
+| `package.json` | `2.16.0` — matches | repo |
+| `dist-template/index.html` | tracked, rebuilt at the tag, 355,051 bytes | repo |
 | npm | not a surface — nothing published | DECISIONS.md D5 |
 | MCP Registry | not a surface — nothing published | DECISIONS.md D5 |
 
+## Update route — the one the in-app updater uses
+
+Verified live on 2026-10-26, not inferred:
+
+```
+curl -I https://raw.githubusercontent.com/CynaCons/powerplanner/v2.16.0/dist-template/index.html
+  → HTTP 200, 355,051 bytes
+  → access-control-allow-origin: *
+```
+
+That header is why this route exists. Release-asset downloads do not carry it,
+so a page cannot fetch them (DECISIONS.md D9). If this route ever stops
+serving, updating breaks for every build already in the wild.
+
 ## What this ledger made visible
 
-**No release has ever carried a downloadable artifact.** Every tag from v1.0.0
-to v2.11.0 has zero assets, so the single-file HTML the product *is* has never
-been published. `release.yml` (added 2026-10-23) is the fix; it has not run yet,
-because it only triggers on a new tag.
+**Fixed 2026-10-26.** Every tag from v1.0.0 to v2.11.0 had zero assets, so the
+single-file HTML the product *is* had never been published. `v2.16.0` is the
+first release to carry one.
+
+Its first run failed, on its own tag: the SRS-ABR-050 portable-build gate read
+`dist-template/PowerPlanner.html`, which the same change had made an untracked
+artifact, and `npm test` ran before `npm run build:template`. Nothing had
+published — no release object, no assets — so the tag was recut rather than
+burning a version. The gate now reads the committed `index.html` and the
+workflow builds before testing.
 
 **The published app is three iterations behind the code.** Tag `v2.11.0` predates
 the v2.12 legibility work and the v2.13 command-bar work (C0 and C1, committed
