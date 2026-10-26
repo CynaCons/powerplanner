@@ -747,3 +747,82 @@ kbd {
   resize: vertical;
   outline: none;
 }
+
+/* Settings dialog — about and in-app updates (PLAN.md v2.17.0). */
+.settings-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+.settings-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  background: var(--color-bg-elev);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+.settings-dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.settings-dialog__head h2 { margin: 0; font-size: var(--text-row); font-weight: 600; }
+.settings-dialog__close {
+  background: transparent;
+  border: none;
+  color: var(--color-text-soft);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius);
+}
+.settings-dialog__close:hover { background: var(--color-bg-subtle); }
+
+.settings-section { padding: 16px 18px 20px 18px; }
+.settings-section h3 {
+  margin: 0 0 10px 0;
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--color-text);
+}
+.settings-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0 0 14px 0;
+  font-size: var(--text-label);
+}
+.settings-facts dt { color: var(--color-text-dim); }
+.settings-facts dd { margin: 0; color: var(--color-text); font-variant-numeric: tabular-nums; }
+
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.settings-btn {
+  font: inherit;
+  font-size: var(--text-label);
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.settings-btn:hover:not(:disabled) { background: var(--color-bg-subtle); }
+.settings-btn:disabled { opacity: 0.5; cursor: default; }
+.settings-btn--primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+.settings-note {
+  margin: 12px 0 0 0;
+  font-size: var(--text-micro);
+  line-height: 1.5;
+  color: var(--color-text-soft);
+}

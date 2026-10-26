@@ -1,9 +1,10 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useEditStore } from '../stores/editStore';
-import { Undo2, Redo2, Magnet, HelpCircle } from 'lucide-react';
+import { Undo2, Redo2, Magnet, HelpCircle, Settings } from 'lucide-react';
 import { ExportMenu } from './ExportMenu';
 import { BrandLogo } from './BrandLogo';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useState } from 'react';
+import { SettingsDialog } from './SettingsDialog';
 
 /**
  * Agent bridge toggle — dev builds only.
@@ -27,6 +28,7 @@ export function Header() {
   const canRedo = useDocumentStore((s) => s.future.length > 0);
   const snapEnabled = useEditStore((s) => s.snapEnabled);
   const setSnap = useEditStore((s) => s.setSnap);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
 
 
@@ -76,6 +78,11 @@ export function Header() {
         </Cluster>
 
         <IconBtn
+          onClick={() => setSettingsOpen(true)}
+          title="Settings, about and updates"
+          icon={<Settings size={14} strokeWidth={1.75} />}
+        />
+        <IconBtn
           onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true }))}
           title="Keyboard shortcuts (?)"
           icon={<HelpCircle size={14} strokeWidth={1.75} />}
@@ -87,6 +94,7 @@ export function Header() {
         )}
         <ExportMenu />
       </div>
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
     </header>
   );
 }

@@ -845,6 +845,25 @@ This is the first slice run under the v2.15 working model, so it follows DECISIO
 - [x] Let the document title use the room the header freed up [agent: claude]
 - [x] Settle the two open design questions about the bar and the header [agent: claude]
 
+## v2.17 — Release model and in-app update, as PowerScroll does it
+> **Owner directive 2026-10-26:** *"I want the release model to be the same as what I'm using in PowerScroll. That means basically an embedded HTML application all in one file... Do a first release and then once you're done with that first release, check how the software update is working in PowerScroll. With the settings and the update panels, pop-ups and processes, I want all of that taken over one-to-one."*
+
+Web only. The release half shipped as v2.16.0 on 2026-10-26 — the first PowerPlanner release to carry a downloadable artifact. This major covers the update half: a settings popup with an About & updates section that checks GitHub, and an A/B swap that rewrites the open file in place.
+
+The whole mechanism rests on one fact, learned the hard way in PowerScroll and recorded as DECISIONS.md D9: GitHub sends no CORS header on release-asset downloads, so the only route a page can fetch a new build from is the committed `dist-template/index.html` on raw.githubusercontent.com, pinned to the release tag.
+
+### v2.17.0 — In-app update, ported from PowerScroll (current) (ACTIVE)
+**Goal:** A plan can update itself in place to the newest release, the way a PowerScroll notebook does.
+- [x] Make the document injector take any template, not just the live page [agent: claude]
+- [x] Check GitHub for a newer release, cached against the rate limit [agent: claude]
+- [x] Fetch the new build from the one route that sends CORS headers [agent: claude]
+- [x] Swap the open file in place when the browser allows it [agent: claude]
+- [x] Fall back to downloading the updated plan [agent: claude]
+- [x] Add a settings popup with an About and updates section [agent: claude]
+- [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
+- [x] Stop the download revoking its own object URL before the browser reads it [agent: claude]
+- [ ] USER GATE: run a real update from an older build to a newer one
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration

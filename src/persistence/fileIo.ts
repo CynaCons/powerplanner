@@ -17,7 +17,7 @@ interface FileSystemWritableFileStreamLike {
   close: () => Promise<void>;
 }
 
-interface FileSystemFileHandleLike {
+export interface FileSystemFileHandleLike {
   createWritable: () => Promise<FileSystemWritableFileStreamLike>;
   getFile: () => Promise<File>;
 }
@@ -81,10 +81,59 @@ export function downloadFile(name: string, content: string | Blob, mime = 'text/
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
+  a.rel = 'noopener';
+  a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // The revoke MUST NOT be synchronous. Revoking before the browser has read
+  // the blob cancels the download outright — a whole single-file plan is
+  // ~355 KB today and grows with the document. Long enough for the bytes to
+  // be taken, short enough not to leak if the page stays open.
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 60_000);
+}
+
+/** The file this plan is bound to, if the user opened or saved one. */
+export function getCurrentHandle(): FileSystemFileHandleLike | null {
+  return currentHandle;
+}
+
+/**
+ * Does this handle still allow writing?
+ *
+ * `requestPermission` needs transient user activation, so callers must ask
+ * BEFORE any slow work — a download in between expires the activation and the
+ * request is denied with no prompt.
+ */
+export async function verifyWritePermission(handle: FileSystemFileHandleLike): Promise<boolean> {
+  const h = handle as unknown as {
+    queryPermission?: (d: { mode: string }) => Promise<PermissionState>;
+    requestPermission?: (d: { mode: string }) => Promise<PermissionState>;
+  };
+  try {
+    if (await h.queryPermission?.({ mode: 'readwrite' }) === 'granted') return true;
+    return (await h.requestPermission?.({ mode: 'readwrite' })) === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+/** Overwrite a handle's file. Returns false rather than throwing. */
+export async function writeHtmlToHandle(
+  handle: FileSystemFileHandleLike,
+  html: string,
+): Promise<boolean> {
+  try {
+    const writable = await handle.createWritable();
+    await writable.write(html);
+    await writable.close();
+    return true;
+  } catch (e) {
+    console.warn('[PowerPlanner Update] Write to handle failed', e);
+    return false;
+  }
 }
 
 export async function openFile(): Promise<GanttDocument | null> {
