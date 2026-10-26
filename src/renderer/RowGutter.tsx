@@ -66,6 +66,8 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
             data-pp-kind="row"
             data-pp-id={row.id}
             transform={`translate(0 ${rowOffsets[i]})`}
+            onDoubleClick={() => setEditing(row.id)}
+            style={{ cursor: 'default' }}
           >
             <rect
               x={0}
@@ -98,7 +100,6 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
                   fill="var(--color-text)"
                   fontSize={12}
                   fontWeight={600}
-                  onDoubleClick={() => setEditing(row.id)}
                   style={{ cursor: 'text' }}
                 >
                   {row.label}
@@ -110,7 +111,6 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
                 y={h / 2 + 4}
                 fill="var(--color-text-soft)"
                 fontSize={11}
-                onDoubleClick={() => setEditing(row.id)}
                 style={{ cursor: 'text' }}
               >
                 {row.label}

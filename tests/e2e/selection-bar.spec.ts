@@ -20,8 +20,9 @@ test.describe('selection editing in the command bar', () => {
   });
 
   test('a row is renamed by double-clicking its name in the row list', async ({ page }) => {
-    const name = page.locator('text=MCAL integration').first();
-    await name.dblclick();
+    // Address the ROW, not the glyphs: renaming triggers from anywhere on the
+    // row, and on a narrow gutter the row's own background is the hit target.
+    await page.locator('[data-pp-kind="row"][data-pp-id="row-mcal"]').dblclick();
     const editor = page.locator('.chart-area input, .chart-area textarea').first();
     await expect(editor).toBeVisible();
   });
