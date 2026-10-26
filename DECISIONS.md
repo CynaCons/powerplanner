@@ -198,3 +198,36 @@ change with the selection.
 
 **What would reopen it.** The header losing another cluster, at which point
 what is left may be better merged into the bar.
+
+---
+
+## D9 — The built template is committed, because updating depends on it
+
+**Date:** 2026-10-26 · **Owner directive** (*"exactly like PowerScroll"*)
+
+**Context.** PowerPlanner ignored `dist-template/` entirely. PowerScroll
+commits it, with a one-line comment in its `.gitignore` explaining why, and
+that comment turns out to be load-bearing.
+
+GitHub does **not** send `Access-Control-Allow-Origin` on release-asset
+downloads. Both `browser_download_url` and the API's octet-stream asset
+endpoint 302 to `objects.githubusercontent.com`, and neither response carries
+the header. From a page — which is all a single-file app ever is — both fail
+with a bare `TypeError: Failed to fetch`. `raw.githubusercontent.com` *does*
+send it. So the only route an in-app updater can actually use is the built
+file committed in the repository, fetched at the release tag.
+
+**Decision.** `dist-template/index.html` is tracked and rebuilt at every
+release tag. `PowerPlanner.html` stays ignored: it is a byte-identical copy the
+release workflow makes from `index.html`, and committing both would double the
+weight for nothing.
+
+**Pinned to the tag, never to main.** An update must install the version it
+just told the user about, and `main` can be ahead of the newest release.
+
+**The trap this leaves.** The updater ships *inside* each saved file, so a
+build released with a broken download route cannot repair itself — users on it
+must fetch the new build by hand once. That is why this route is settled before
+the first release rather than after.
+
+**What would reopen it.** GitHub serving CORS headers on release assets.

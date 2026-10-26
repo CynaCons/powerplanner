@@ -1,6 +1,11 @@
 node_modules
 dist
-dist-template
+# dist-template/index.html is COMMITTED, not ignored: the in-app updater
+# fetches it from raw.githubusercontent.com at the release tag, which is the
+# only route GitHub serves with CORS headers. Ignoring it breaks updating for
+# every build that ships (DECISIONS.md D9). PowerPlanner.html is a byte-identical
+# copy the release workflow makes from it, so only one of the two is tracked.
+dist-template/PowerPlanner.html
 .vite
 *.log
 .env
