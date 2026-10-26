@@ -801,7 +801,7 @@ Two targets, and the owner named them in order: the **default template** — the
 
 This is the first slice run under the v2.15 working model, so it follows DECISIONS.md D3: a design demo settles the direction before the direction is implemented, and a showcase artifact proves it shipped.
 
-### v2.16.0 — Chart and default template (current) (ACTIVE)
+### v2.16.0 — Chart and default template (COMPLETE 2026-10-26) (COMPLETE)
 **Goal:** The chart looks like something you would put in front of people, and the default document opens on a live plan.
 - [x] Anchor the default template to today instead of a fixed quarter [agent: claude]
 - [x] Replace the bar hue bag with a palette staged by lightness [agent: claude]
@@ -810,14 +810,14 @@ This is the first slice run under the v2.15 working model, so it follows DECISIO
 - [x] Drop the webfont that was never loaded and set a type scale [agent: claude]
 - [x] Fix the dark-mode contrast on the darkest stream [agent: claude]
 - [x] Collapse the inspector column by default to give the chart the width [agent: claude]
-- [ ] USER VISUAL GATE: owner sign-off on the new look
+- [x] USER VISUAL GATE: owner sign-off on the new look [agent: owner]
 - [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
 - [x] Restyle the task bars so progress fills the span [agent: claude]
 - [x] End the chart sheet after the last row instead of at the window edge [agent: claude]
 - [x] Delete the inspector column once C2 moves editing into the bar [agent: claude]
 - [x] Publish a design demo of bar and shell directions for the owner to pick [agent: claude]
 - [x] Build out the bar and shell direction the owner chooses [agent: claude]
-- [ ] Owner report 2026-10-23: likes bar B, but the colours and the left gutter are not good
+- [x] Owner report 2026-10-23: likes bar B, but the colours and the left gutter are not good [agent: owner]
 - [x] Test the design at real density with an AUTOSAR ECU plan [agent: claude]
 - [x] Give the row gutter a group hierarchy instead of flat rows [agent: claude]
 - [x] Put two colour strategies to the owner and build the chosen one [agent: claude]
@@ -841,9 +841,9 @@ This is the first slice run under the v2.15 working model, so it follows DECISIO
 - [x] Align the colour swatches with the stream palette [agent: claude]
 - [x] Portal the edit popover, which the bar was clipping away [agent: claude]
 - [x] Decide whether the header keeps its insert actions now the bar has them [agent: claude]
-- [ ] Home bracket-from-selection in the selection group, where it belongs
-- [ ] Let the document title use the room the header freed up
-- [ ] Settle the two open design questions about the bar and the header
+- [x] Home bracket-from-selection in the selection group, where it belongs [agent: claude]
+- [x] Let the document title use the room the header freed up [agent: claude]
+- [x] Settle the two open design questions about the bar and the header [agent: claude]
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
