@@ -871,6 +871,20 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Confirm the published build carries the updater, not just the repo [agent: claude]
 - [ ] USER GATE: update an installed build to a newer release and keep the plan
 
+### v2.18.0 — PowerGantt: rebrand and canvas controls
+**Goal:** The app is PowerGantt, and the canvas behaves the way the owner expects to drive it.
+- [x] Rebrand every display name to PowerGantt [agent: claude]
+- [x] Keep the data, storage and repository identifiers unchanged [agent: claude]
+- [x] Ship the old asset name alongside the new one [agent: claude]
+- [x] Make the wheel scroll and ctrl-wheel zoom at the pointer [agent: claude]
+- [x] Sweep the time axis to zoom to a window [agent: claude]
+- [x] Select a bar and its row together, in both directions [agent: claude]
+- [x] Give a selected row its own quick actions [agent: claude]
+- [x] Move renaming onto the name in the row list [agent: claude]
+- [x] Make the row list resizable and remember its width [agent: claude]
+- [x] Fix the stale width that made the axis sweep zoom out [agent: claude]
+- [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
