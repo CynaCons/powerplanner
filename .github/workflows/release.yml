@@ -25,11 +25,14 @@ jobs:
 
       - run: npm ci
 
+      # Build first, then test: the portable-build gate (SRS-ABR-050) reads
+      # dist-template/index.html, so testing before building would check the
+      # committed bytes rather than the ones about to ship.
+      - run: npm run build:template
+
       # Fails the release if src/version.ts and package.json have drifted
       # (DECISIONS.md D5) - an unattributable build must not reach a tag.
       - run: npm test
-
-      - run: npm run build:template
 
       - name: Copy release artifact
         run: cp dist-template/index.html PowerPlanner.html

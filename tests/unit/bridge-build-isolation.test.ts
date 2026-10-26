@@ -16,7 +16,14 @@ import { fileURLToPath } from 'node:url';
  */
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const PORTABLE = resolve(REPO_ROOT, 'dist-template/PowerPlanner.html');
+/**
+ * `index.html`, not `PowerPlanner.html`: the former is committed (the in-app
+ * updater fetches it from raw.githubusercontent.com at the release tag,
+ * DECISIONS.md D9) while the latter is an untracked copy the release workflow
+ * makes. Pointing at the tracked file means this gate is never skipped for
+ * want of a local build — which is what it did on a fresh CI checkout.
+ */
+const PORTABLE = resolve(REPO_ROOT, 'dist-template/index.html');
 
 /**
  * Connection machinery — none of this may appear.
@@ -49,9 +56,9 @@ describe('agent bridge build isolation (SRS-ABR-050)', () => {
     if (!existsSync(PORTABLE)) {
       expect.soft(
         false,
-        `dist-template/PowerPlanner.html not built — run "npm run build:template" before trusting SRS-ABR-050`,
+        `dist-template/index.html missing — run "npm run build:template" before trusting SRS-ABR-050`,
       ).toBe(true);
     }
-    expect(PORTABLE).toContain('PowerPlanner.html');
+    expect(PORTABLE).toContain('dist-template');
   });
 });
