@@ -213,7 +213,7 @@ Consequences:
 3. **The only thing keeping it off other apps is a 150 ms poll.** `Tick()` →
    `IsHostActiveForOverlayChrome()` → `HideOverlay()` at `9150-9163`. There is **no**
    `WM_ACTIVATEAPP` handler and no foreground WinEvent hook anywhere in
-   `native/PowerGanttAddin` (grep: zero hits). Nothing is event-driven.
+   `native/PowerRoadmapAddin` (grep: zero hits). Nothing is event-driven.
 4. **`SetWindowPos` is not re-issued on a steady chart.** `6777` computes
    `needUpdate = dpiChanged || !wasShown || !hadWindow || moved || resized`; with a
    stationary chart, z-order is never reasserted. Not the cause here, but it means

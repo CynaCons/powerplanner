@@ -36,23 +36,27 @@ jobs:
 
       - name: Copy release artifact
         run: |
+          cp dist-template/index.html PowerRoadmap.html
+          # Byte-identical compatibility aliases, one per name the app has had.
+          # Each older build looks for the name that existed when it shipped,
+          # and the updater inside it cannot be changed retroactively:
+          #   <= 2.17.x  PowerPlanner.html
+          #      2.18.x  PowerGantt.html
           cp dist-template/index.html PowerGantt.html
-          # Byte-identical compatibility alias. Builds released before the
-          # rename look for an asset called PowerPlanner.html, and the updater
-          # inside them cannot be changed retroactively.
           cp dist-template/index.html PowerPlanner.html
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            PowerRoadmap.html
             PowerGantt.html
             PowerPlanner.html
           generate_release_notes: true
           body: |
-            ## PowerGantt ${{ github.ref_name }}
+            ## PowerRoadmap ${{ github.ref_name }}
 
-            **Download `PowerGantt.html`** below — open it in a browser and start planning.
+            **Download `PowerRoadmap.html`** below — open it in a browser and start planning.
 
             Calendar-true Gantt charts you can actually present. No install, no account,
             no server: one file that holds the app and your chart together.

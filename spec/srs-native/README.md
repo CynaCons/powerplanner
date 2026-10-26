@@ -1,6 +1,6 @@
 # Native SRS (PowerPoint On-Slide)
 
-This directory holds **native-specific** ASPICE-style Software Requirements Specifications for the PowerPoint COM add-in (the "native" implementation under `native/PowerGanttAddin/`).
+This directory holds **native-specific** ASPICE-style Software Requirements Specifications for the PowerPoint COM add-in (the "native" implementation under `native/PowerRoadmapAddin/`).
 
 These refine or extend the shared foundation requirements in `../srs/`. They do **not** apply to the web implementation.
 

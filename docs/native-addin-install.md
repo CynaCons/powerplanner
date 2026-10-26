@@ -1,6 +1,6 @@
 # Native Add-in — Build & Install (test on any Windows PC)
 
-How to get the PowerGantt native add-in running in PowerPoint, either by
+How to get the PowerRoadmap native add-in running in PowerPoint, either by
 building from source or by copying a prebuilt DLL to another machine.
 
 The add-in is a 64-bit, **statically-linked** COM DLL — it depends only on
@@ -14,11 +14,11 @@ redistributable, and **no administrator rights** are needed to *register* it.
 Use this to test on a machine that doesn't have the build tools.
 
 1. Copy two files to the target PC (any folder), side by side:
-   - `PowerGanttAddin.dll` (from `native/build/` after a build, or a release)
+   - `PowerRoadmapAddin.dll` (from `native/build/` after a build, or a release)
    - `native/register.bat`
 2. Double-click **`register.bat`** (or run it in a terminal). It runs
    `regsvr32` per-user — no admin prompt.
-3. Start **PowerPoint** → a **PowerGantt** tab appears on the ribbon.
+3. Start **PowerPoint** → a **PowerRoadmap** tab appears on the ribbon.
 4. New slide → **Insert Gantt**. Select the chart to see the on-slide overlay;
    move a bar and click **Reflow**; **Pull from slide** reads it back.
 
@@ -45,7 +45,7 @@ From the repo root:
 native\build.bat
 ```
 
-This compiles the x64 DLL to `native\build\PowerGanttAddin.dll`. Then register
+This compiles the x64 DLL to `native\build\PowerRoadmapAddin.dll`. Then register
 it for the current user:
 
 ```bat
@@ -56,9 +56,9 @@ native\register.bat
 
 ### Verify it loaded
 - PowerPoint → File → Options → Add-ins → *Manage: COM Add-ins* → **Go…** —
-  "PowerGantt" should be listed and checked.
+  "PowerRoadmap" should be listed and checked.
 - Or check the registry key
-  `HKCU\Software\Microsoft\Office\PowerPoint\AddIns\PowerGantt.Connect`
+  `HKCU\Software\Microsoft\Office\PowerPoint\AddIns\PowerRoadmap.Connect`
   (`LoadBehavior` = 3).
 - The add-in also writes a log to `%TEMP%\powerplanner-addin.log` on connect.
 
@@ -73,13 +73,13 @@ native\register.bat
 | **Reflow** | Reads moved/resized bars back into dates and rebuilds the chart (dependencies, summary, and embedded data stay in sync). |
 
 Selecting the chart shows the on-slide overlay (selection frame + handles + a
-"PowerGantt" badge), which tracks zoom/scroll.
+"PowerRoadmap" badge), which tracks zoom/scroll.
 
 ---
 
 ## Troubleshooting
 
-- **No PowerGantt tab:** ensure you registered the **x64** DLL and PowerPoint
+- **No PowerRoadmap tab:** ensure you registered the **x64** DLL and PowerPoint
   is **64-bit** (bitness must match). Re-run `register.bat`. Check that
   `LoadBehavior` is 3 (PowerPoint sets it to 2 if a load failed).
 - **`regsvr32` says it can't find entry point / module:** the DLL bitness

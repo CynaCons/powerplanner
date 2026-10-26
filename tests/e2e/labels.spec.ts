@@ -39,7 +39,7 @@ test.describe('dragging a label', () => {
   // tablet and mobile is not a gate, it is a permanently red test for a
   // capability the app does not claim. The real gap ("drags do not work on
   // touch") is in the backlog where it can be seen.
-  test.skip(({}, testInfo) => testInfo.project.name !== 'desktop', 'drag is mouse-only; touch support is unbuilt');
+  test.skip(({ isMobile }) => !!isMobile, 'drag is mouse-only; touch support is unbuilt');
 
   test('a label can be dragged to a place of the user own choosing', async ({ page }) => {
     await page.goto('/');

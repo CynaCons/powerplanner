@@ -102,7 +102,7 @@ Each cycle is **rehydrate → integrity → pick → dispatch → validate → r
 
 Sub-agents are **stateless** — paste, don't reference:
 - **Goal**: the single outcome and its acceptance gate (`gate_command` + `pass_signal`).
-- **Context**: relevant files (e.g. `native/PowerGanttAddin/Overlay.cpp`,
+- **Context**: relevant files (e.g. `native/PowerRoadmapAddin/Overlay.cpp`,
   `GanttBuilder.cpp`, `Connect.cpp`), the data model, and discovery findings already
   recorded in the coordinator log.
 - **Constraints**: do the work (don't advise); change only files within the unit's

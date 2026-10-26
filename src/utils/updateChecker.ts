@@ -24,11 +24,16 @@ import {
  */
 export const GITHUB_REPO = 'CynaCons/powerplanner';
 /**
- * Both names, newest first. The app was PowerPlanner until 2026-10-26 and the
- * release still ships a byte-identical alias under the old name, because the
- * updater lives inside each saved file and older builds look for that one.
+ * Every name the app has had, newest first: PowerPlanner until 2026-10-26,
+ * PowerGantt for one release, PowerRoadmap since. The release ships a
+ * byte-identical alias under each, because the updater lives inside every
+ * saved file and an old build only knows the name it shipped with.
  */
-export const RELEASE_ASSET_NAMES = ['PowerGantt.html', 'PowerPlanner.html'] as const;
+export const RELEASE_ASSET_NAMES = [
+  'PowerRoadmap.html',
+  'PowerGantt.html',
+  'PowerPlanner.html',
+] as const;
 
 /**
  * How long a check is trusted before asking GitHub again.

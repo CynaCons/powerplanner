@@ -1,4 +1,4 @@
-# PowerGantt Native PowerPoint Add-in (C++ COM)
+# PowerRoadmap Native PowerPoint Add-in (C++ COM)
 
 A native COM add-in for PowerPoint desktop, in the architectural style of
 think-cell: the chart lives **on the slide as native shapes**, and the editing
@@ -41,14 +41,14 @@ In-process COM server (DLL) implementing:
 
 Registration is **per-user** (`AtlSetPerUserRegistration(true)`), so no admin
 rights are needed: the COM class lands under `HKCU\Software\Classes` and the
-load entry under `HKCU\Software\Microsoft\Office\PowerPoint\AddIns\PowerGantt.Connect`
+load entry under `HKCU\Software\Microsoft\Office\PowerPoint\AddIns\PowerRoadmap.Connect`
 with `LoadBehavior=3`.
 
 ## Roadmap
 
 | Phase | Deliverable |
 |-------|-------------|
-| **N1** | Loadable add-in: DLL loads in PowerPoint, "PowerGantt" ribbon tab, button click reaches native code |
+| **N1** | Loadable add-in: DLL loads in PowerPoint, "PowerRoadmap" ribbon tab, button click reaches native code |
 | **N2** | "Insert Gantt" emits native shapes (rectangles/diamonds/connectors/text) via the PowerPoint object model — C++ port of `src/taskpane/officeBridge.ts` |
 | **N3** | C++ data model + JSON round-trip embedded in a shape tag (`PP_DOC`) |
 | **N4** | On-slide overlay: layered child window over the slide-edit pane, selection/mouse hooks, contextual handles aligned to chart shapes |
@@ -70,16 +70,16 @@ no Visual Studio needed to register).
 ./build.ps1 -Unregister
 ```
 
-`native\start.bat` always rebuilds `PowerGanttAddin.dll` before registration
+`native\start.bat` always rebuilds `PowerRoadmapAddin.dll` before registration
 and launch so PowerPoint cannot load a stale add-in binary.
 
 Verify load: open PowerPoint → File → Options → Add-ins → COM Add-ins, or check
-`HKCU\Software\Microsoft\Office\PowerPoint\AddIns\PowerGantt.Connect`.
+`HKCU\Software\Microsoft\Office\PowerPoint\AddIns\PowerRoadmap.Connect`.
 
 ## Status
 
 - [x] Toolchain verified, type libraries located, x64 target chosen
-- [x] N1 — loadable skeleton + ribbon. Verified in PowerPoint desktop: "PowerGantt"
+- [x] N1 — loadable skeleton + ribbon. Verified in PowerPoint desktop: "PowerRoadmap"
       ribbon tab renders, "Insert Gantt" button click reaches native `DoInsertGantt`,
       and `OnConnection` logs from inside `POWERPNT.EXE`.
 

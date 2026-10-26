@@ -1,27 +1,27 @@
-# PowerGantt Product Requirements Document
+# PowerRoadmap Product Requirements Document
 
 ## Executive Summary
-PowerGantt is a Gantt chart authoring tool built for people who actually present plans. It produces calendar-accurate, editable Gantt charts with the polish of a hand-built slide — task bars, milestones, brackets, dependency arrows, deadlines, today lines, percent-complete fills — while keeping every element directly editable by dragging or typing. PowerGantt ships first as a **single-file portable HTML app** (offline, no install, no account), then expands into a hosted web app, a PowerNote node type, and a PowerPoint task-pane add-in that emits native, vector-editable shapes.
+PowerRoadmap is a Gantt chart authoring tool built for people who actually present plans. It produces calendar-accurate, editable Gantt charts with the polish of a hand-built slide — task bars, milestones, brackets, dependency arrows, deadlines, today lines, percent-complete fills — while keeping every element directly editable by dragging or typing. PowerRoadmap ships first as a **single-file portable HTML app** (offline, no install, no account), then expands into a hosted web app, a PowerNote node type, and a PowerPoint task-pane add-in that emits native, vector-editable shapes.
 
 ## Product Vision
-Planning tools today force a choice: spreadsheet-driven Gantt apps that look like Gantt apps, or hand-drawn boxes in slide software that look great but break the moment a date moves. PowerGantt removes that trade-off. The same chart is:
+Planning tools today force a choice: spreadsheet-driven Gantt apps that look like Gantt apps, or hand-drawn boxes in slide software that look great but break the moment a date moves. PowerRoadmap removes that trade-off. The same chart is:
 - **Calendar-true** — bars are positioned and sized by date, not by drag-and-drop guesswork.
 - **Directly editable** — drag a bar to change its dates, or type a date to move the bar. No data sheet round-trips required.
 - **Presentation-grade** — output is vector, sharp, and styled for slides and reports, not a "Gantt grid."
 - **Portable** — the whole app fits in a single HTML file you can email, archive, or open offline. The same data model and renderer power every downstream surface (web, PowerNote, PowerPoint).
 
-PowerGantt is for project leads, consultants, PMOs, and engineers who present timelines often, hate retyping the same chart in three tools, and want their Gantt charts to be both correct and beautiful.
+PowerRoadmap is for project leads, consultants, PMOs, and engineers who present timelines often, hate retyping the same chart in three tools, and want their Gantt charts to be both correct and beautiful.
 
 ## Delivery Surfaces
 
-PowerGantt targets one engine across four surfaces. Each surface reuses the same data model, layout engine, and SVG renderer.
+PowerRoadmap targets one engine across four surfaces. Each surface reuses the same data model, layout engine, and SVG renderer.
 
 | Surface | Status | Description |
 |---|---|---|
-| **Portable HTML** | Primary (v0.x) | Single self-contained `PowerGantt.html`. Open in any browser. Notes embedded in the file via Ctrl+S, mirroring PowerNote's model. |
+| **Portable HTML** | Primary (v0.x) | Single self-contained `PowerRoadmap.html`. Open in any browser. Notes embedded in the file via Ctrl+S, mirroring PowerNote's model. |
 | **Web app** | Phase 8 | Hosted edition with accounts, cloud persistence, sharing — mirrors PowerTimeline. |
 | **PowerNote node** | Phase 6 | Gantt chart as an embeddable node inside a PowerNote canvas — same data model, rendered into PowerNote's Konva surface. |
-| **PowerPoint add-in** | Phase 7 | Office.js task pane. Edits in PowerGantt, "Insert into slide" emits native PowerPoint vector shapes that remain editable in PowerPoint without PowerGantt installed. |
+| **PowerPoint add-in** | Phase 7 | Office.js task pane. Edits in PowerRoadmap, "Insert into slide" emits native PowerPoint vector shapes that remain editable in PowerPoint without PowerRoadmap installed. |
 
 ## Core Features
 
@@ -113,14 +113,14 @@ PowerGantt targets one engine across four surfaces. Each surface reuses the same
 - As a user, I can show or hide weekends and custom non-working days.
 
 ### Persistence & Portability
-- As a user, I can download a single `PowerGantt.html` file and start using the app immediately offline.
+- As a user, I can download a single `PowerRoadmap.html` file and start using the app immediately offline.
 - As a user, I can press Ctrl+S and have my chart embedded inside the HTML file itself.
 - As a user, I can email the saved file to a colleague who opens it and edits the chart with no install.
 - As a user, I can export the chart as PNG, SVG, or PDF for inclusion in a report.
 
 ### Integration
 - As a PowerNote user, I can drop a "Gantt" node onto my canvas and edit it inline.
-- As a PowerPoint user, I can open the PowerGantt task pane, edit my chart, and click "Insert into slide" to get a native, editable shape group.
+- As a PowerPoint user, I can open the PowerRoadmap task pane, edit my chart, and click "Insert into slide" to get a native, editable shape group.
 - As a web user, I can sign in, save my charts to the cloud, and share a read-only link.
 
 ## Technical Architecture
@@ -216,20 +216,20 @@ A single JSON document represents a chart. Versioned schema; designed for human 
 - **PNG**: rasterize the SVG via canvas at configurable DPI.
 - **SVG**: serialize the rendered SVG directly (text stays as text).
 - **PDF**: SVG → PDF via a small client-side library (no server round-trip).
-- **PowerPoint (Phase 7)**: map SVG primitives to OOXML shapes via Office.js; bars → autoshapes, milestones → diamonds, connectors → connector shapes, text → text frames. Output remains editable in PowerPoint with no PowerGantt runtime.
+- **PowerPoint (Phase 7)**: map SVG primitives to OOXML shapes via Office.js; bars → autoshapes, milestones → diamonds, connectors → connector shapes, text → text frames. Output remains editable in PowerPoint with no PowerRoadmap runtime.
 - **JSON / YAML**: direct serialization of the document.
 
 ### Integration Architecture
 
 **PowerNote node (Phase 6):**
-- A new PowerNote node type `gantt` whose payload is the PowerGantt document JSON.
-- PowerGantt ships a "compact renderer" component (SVG, same renderer, smaller chrome) embeddable inside a PowerNote Konva `<Html>` portal.
-- Editing in PowerNote opens the full PowerGantt inspector as an overlay.
+- A new PowerNote node type `gantt` whose payload is the PowerRoadmap document JSON.
+- PowerRoadmap ships a "compact renderer" component (SVG, same renderer, smaller chrome) embeddable inside a PowerNote Konva `<Html>` portal.
+- Editing in PowerNote opens the full PowerRoadmap inspector as an overlay.
 
 **PowerPoint add-in (Phase 7):**
 - Office.js task pane add-in. The task pane hosts the same React app.
 - "Insert into slide" walks the layout output and calls `Office.js` shape APIs to create native shapes on the active slide.
-- The add-in also supports "Pull from slide" — reading a previously inserted shape group back into a PowerGantt document via shape metadata tags.
+- The add-in also supports "Pull from slide" — reading a previously inserted shape group back into a PowerRoadmap document via shape metadata tags.
 
 **Web app (Phase 8):**
 - React app deployed to Firebase Hosting.
@@ -244,7 +244,7 @@ A single JSON document represents a chart. Versioned schema; designed for human 
 - **SRS-style** per-feature requirements docs (`docs/SRS_*.md`) — mirrors the convention used across the other power* projects.
 
 ### Build & Distribution
-- **Portable HTML build** (`vite.export.config.ts`): inlines all JS/CSS/assets into a single `PowerGantt.html`. Same pattern as PowerNote.
+- **Portable HTML build** (`vite.export.config.ts`): inlines all JS/CSS/assets into a single `PowerRoadmap.html`. Same pattern as PowerNote.
 - **Web build**: standard Vite production build, deployed to Firebase Hosting.
 - **PowerPoint add-in build**: the same Vite app, packaged with an Office add-in manifest.
 - **GitHub Releases**: each tagged version publishes the portable HTML asset.
@@ -318,4 +318,4 @@ These are not committed but live on the roadmap once the core engine is stable:
 - A first-party plugin marketplace.
 
 ### Explicitly Not a Replacement For
-- Spreadsheet-driven project schedulers used for cost/time tracking. PowerGantt is a **chart authoring** tool, not a project accounting tool.
+- Spreadsheet-driven project schedulers used for cost/time tracking. PowerRoadmap is a **chart authoring** tool, not a project accounting tool.

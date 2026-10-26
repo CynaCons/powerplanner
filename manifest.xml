@@ -10,7 +10,7 @@
   <Version>1.0.0.0</Version>
   <ProviderName>CynaCons</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
-  <DisplayName DefaultValue="PowerGantt" />
+  <DisplayName DefaultValue="PowerRoadmap" />
   <Description DefaultValue="Insert calendar-true Gantt charts as native, vector-editable PowerPoint shapes." />
   <IconUrl DefaultValue="https://localhost:5180/assets/icon-32.png" />
   <HighResolutionIconUrl DefaultValue="https://localhost:5180/assets/icon-80.png" />
@@ -62,7 +62,7 @@
                     <bt:Image size="80" resid="Icon.80" />
                   </Icon>
                   <Action xsi:type="ShowTaskpane">
-                    <TaskpaneId>PowerGanttPane</TaskpaneId>
+                    <TaskpaneId>PowerRoadmapPane</TaskpaneId>
                     <SourceLocation resid="Taskpane.Url" />
                   </Action>
                 </Control>
@@ -83,13 +83,13 @@
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:5180/taskpane.html" />
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GetStarted.Title" DefaultValue="PowerGantt is ready" />
-        <bt:String id="Group.Label" DefaultValue="PowerGantt" />
-        <bt:String id="Btn.Label" DefaultValue="Open PowerGantt" />
+        <bt:String id="GetStarted.Title" DefaultValue="PowerRoadmap is ready" />
+        <bt:String id="Group.Label" DefaultValue="PowerRoadmap" />
+        <bt:String id="Btn.Label" DefaultValue="Open PowerRoadmap" />
       </bt:ShortStrings>
       <bt:LongStrings>
         <bt:String id="GetStarted.Description" DefaultValue="Edit calendar-true Gantt charts inside PowerPoint. Insert renders as native, vector-editable shapes." />
-        <bt:String id="Btn.Tooltip" DefaultValue="Open the PowerGantt task pane to author or insert a Gantt chart." />
+        <bt:String id="Btn.Tooltip" DefaultValue="Open the PowerRoadmap task pane to author or insert a Gantt chart." />
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

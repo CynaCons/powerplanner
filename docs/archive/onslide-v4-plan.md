@@ -127,7 +127,7 @@ coordinator/user visual checks on the exported PNG or live PowerPoint.
 *Spec: R2 (rendering), R3, R4 (visual), tokens ┬º1ÔÇô5. This slice makes a
 freshly inserted chart resemble the mockup.*
 
-- [x] **s1-theme-tokens** ÔÇö Create `native/PowerGanttAddin/GanttTheme.h`
+- [x] **s1-theme-tokens** ÔÇö Create `native/PowerRoadmapAddin/GanttTheme.h`
   (header-only): every token from `docs/design-tokens.md` ┬º1ÔÇô5 as named
   constants (BGR helpers where needed) + `BlendOnWhite(rgb, alpha)`. Re-point
   `Scene.h`'s `Theme`/`MaterialLight()` fields and ALL hardcoded colors in

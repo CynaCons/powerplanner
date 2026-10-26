@@ -1,9 +1,9 @@
-# PowerGantt Design Tokens (normative)
+# PowerRoadmap Design Tokens (normative)
 
 Single source of truth for every color, dimension, and type size in the native
 on-slide editor. The interactive mockup at `docs/mockup/onslide-mockup.html`
 uses these exact values in its CSS `:root` block; the native add-in consumes
-them via `native/PowerGanttAddin/GanttTheme.h`. **A change here must land in
+them via `native/PowerRoadmapAddin/GanttTheme.h`. **A change here must land in
 both places in the same commit.** No other file may hardcode a color.
 
 Values were authored in CSS px on a 16:9 mock; the pt column is the normative
@@ -108,7 +108,7 @@ Calm on-slide selection chrome (SR-CHR-01..05). Native source: `GanttTheme.h` `c
 | `chromeHairline` | `#CBD5E1` | Overall (CHART_ROOT) selection frame — 1 px hairline only |
 | `chromeRowWashSelect` | 18 (alpha) | Row band wash when a row is selected |
 | `chromeRowWashHover` | 10 (alpha) | Row band wash on hover |
-| `chromeChipAlpha` | 235 | Hover-only "PowerGantt" chip fill (`primary` @ alpha) |
+| `chromeChipAlpha` | 235 | Hover-only "PowerRoadmap" chip fill (`primary` @ alpha) |
 | `chromeChipRadius` | 3 px @96dpi | Hover chip corner radius (DPI-scaled) |
 | `chromeChipFontPx` | 10 px @96dpi | Hover chip label (DPI-scaled) |
 | `chromeItemFramePx` | 1 px @96dpi | Task/milestone/marker/text selection frame (`primary`) |

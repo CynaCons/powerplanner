@@ -1,6 +1,6 @@
 # Deployment ledger
 
-**Observed** state of every PowerGantt deployment surface. Update it from what
+**Observed** state of every PowerRoadmap deployment surface. Update it from what
 you actually saw — a query, a fetch, a page you opened — never from what a
 workflow's exit text implied or from what you expect to be true. The runbook is
 [`RELEASING.md`](RELEASING.md).
@@ -12,7 +12,7 @@ Repository: `CynaCons/powerplanner`
 | Surface | State | Observed |
 |---|---|---|
 | GitHub release (latest) | `v2.17.0`, non-draft, published 2026-10-26 | `gh release view v2.17.0` |
-| Release assets | `PowerGantt.html` — 363,694 bytes on v2.17.0, 355,051 on v2.16.0 | `gh release view --json assets` |
+| Release assets | `PowerRoadmap.html` — 363,694 bytes on v2.17.0, 355,051 on v2.16.0 | `gh release view --json assets` |
 | GitHub Pages | `status: built`, from `main` `/`, HTTPS enforced | `gh api repos/CynaCons/powerplanner/pages` |
 | Pages URL | https://cynacons.github.io/powerplanner/ | same |
 | Pages content | landing site from `site/`; no live app demo | `deploy-site.yml` |
@@ -59,7 +59,7 @@ single-file HTML the product *is* had never been published. `v2.16.0` is the
 first release to carry one.
 
 Its first run failed, on its own tag: the SRS-ABR-050 portable-build gate read
-`dist-template/PowerGantt.html`, which the same change had made an untracked
+`dist-template/PowerRoadmap.html`, which the same change had made an untracked
 artifact, and `npm test` ran before `npm run build:template`. Nothing had
 published — no release object, no assets — so the tag was recut rather than
 burning a version. The gate now reads the committed `index.html` and the

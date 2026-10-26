@@ -1,6 +1,6 @@
-# PowerGantt On-Slide Direct Editing UI/UX Plan
+# PowerRoadmap On-Slide Direct Editing UI/UX Plan
 
-This document serves as the master implementation plan and guidance manual for the **Coordinator Agent** and its specialized **Sub-agents** to transition PowerGantt from a task-pane-driven workflow into a **fully on-slide contextual Gantt editor**, mirroring the interaction model of **think-cell**.
+This document serves as the master implementation plan and guidance manual for the **Coordinator Agent** and its specialized **Sub-agents** to transition PowerRoadmap from a task-pane-driven workflow into a **fully on-slide contextual Gantt editor**, mirroring the interaction model of **think-cell**.
 
 ---
 
@@ -49,7 +49,7 @@ To achieve a true think-cell UX, the user must never leave the slide area. The e
      ```xml
      <contextMenus>
        <contextMenu idMso="ContextMenuShape">
-         <menu id="ppContextMenu" label="PowerGantt Actions" imageMso="ChartTypeColumnInsertGallery">
+         <menu id="ppContextMenu" label="PowerRoadmap Actions" imageMso="ChartTypeColumnInsertGallery">
            <button id="ppCtxAddRow" label="Add Row Below" onAction="OnCtxAddRow"/>
            <button id="ppCtxDeleteTask" label="Delete Task" onAction="OnCtxDeleteTask"/>
            <button id="ppCtxChangeScale" label="Change Time Scale..." onAction="OnCtxChangeScale"/>

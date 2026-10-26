@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PowerGantt Web Agent Bridge — MCP server.
+ * PowerRoadmap Web Agent Bridge — MCP server.
  *
  * One process, two faces:
  *   - an MCP stdio server, spawned by the agent host via .mcp.json;
@@ -286,7 +286,7 @@ function handleClientMessage(client, raw, socket) {
 function pickClient(requestedId) {
   const list = [...clients];
   if (list.length === 0) {
-    throw bridgeFailure('NO_CLIENT', 'No PowerGantt page is connected. Open the app and switch the Agent toggle on.');
+    throw bridgeFailure('NO_CLIENT', 'No PowerRoadmap page is connected. Open the app and switch the Agent toggle on.');
   }
   if (requestedId) {
     const found = list.find((c) => c.id === requestedId);

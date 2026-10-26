@@ -1,6 +1,6 @@
-# PowerGantt Specification (the concept layer)
+# PowerRoadmap Specification (the concept layer)
 
-This directory is the **single source of truth** for what a PowerGantt Gantt
+This directory is the **single source of truth** for what a PowerRoadmap Gantt
 chart *is* — independent of any rendering technology. It is the generic
 concept/design layer. Everything else is an *implementation* of this spec:
 

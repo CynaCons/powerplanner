@@ -4,7 +4,7 @@ Native-specific requirements for the explicit, user-controlled time window on th
 
 Traces up to: `docs/time-window-plan.md` (review-amended design, findings C1–C3/M1–M5/m1–m10), `PLAN.md` (Phase 12, v2.7.0–v2.7.4), `../data-model.md`, `../schema/document.schema.json`, `SRS-InteractionConventions.md` (SR-IXC-03/04/07/12), `SRS-InteractionSmoothness.md` (SR-SMO-01/02/06/08).
 
-Reference impl: `native/PowerGanttAddin/` (GanttScene.h projection + clip stage, GanttBuilder.cpp UpdateGantt/ReconcileChartRoot/ReflowFromSlide, Overlay.cpp gesture + preview paint, GanttHitTest.*, GanttOps.*, GanttJson.cpp), `native/tools/harness_driver.py` + `native/tools/scenarios/trace_window_*.json`.
+Reference impl: `native/PowerRoadmapAddin/` (GanttScene.h projection + clip stage, GanttBuilder.cpp UpdateGantt/ReconcileChartRoot/ReflowFromSlide, Overlay.cpp gesture + preview paint, GanttHitTest.*, GanttOps.*, GanttJson.cpp), `native/tools/harness_driver.py` + `native/tools/scenarios/trace_window_*.json`.
 
 ## Explicit Window & Persistence
 

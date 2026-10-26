@@ -131,7 +131,7 @@ Event schema (`type` + payload; `t` = ms since session start, `seq` monotonic):
 | `op` | `{cmd, phases, dispatchMs, hr}` | `HandleAppBarCommand` + `Gantt_GetLastOpPhasesForTest` phases |
 | `paint` | `{surface, count, tMs}` | `RenderOverlay` post-ULW (5521) — reuse the paint-ts ring, always-on while recording |
 | `snapshot` | full chrome-state JSON **+ entity dump (R1a)** | shared serializers; on every ownSel/nativeSel/gesture transition + 1 Hz idle; entity dump deduped by scene signature |
-| `frame` | `{file, surface: composited, trigger, screenRect}` | Post-paint screen-composited chart + PowerGantt chrome capture; on transitions + pre/post commits, throttled ≤2/s |
+| `frame` | `{file, surface: composited, trigger, screenRect}` | Post-paint screen-composited chart + PowerRoadmap chrome capture; on transitions + pre/post commits, throttled ≤2/s |
 | `doc` | `{taskCount, rowCount, docDatesSignature, ...}` | after mutations/reconcile |
 | `error` | `{where, hr, msg}` | **every swallowed catch emits one — no more silent failures** |
 | `note` | `{text}` | user marker (small "flag" press while recording, optional R1.1) |

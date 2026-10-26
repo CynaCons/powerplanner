@@ -8,7 +8,7 @@ interface Props {
  * The time axis is the chart's strongest graphic element, deliberately.
  *
  * Every Gantt tool renders its axis as grey 10px text, which makes the
- * calendar feel like a caption on the bars. PowerGantt's whole claim is that
+ * calendar feel like a caption on the bars. PowerRoadmap's whole claim is that
  * the chart is calendar-true, so the calendar is drawn as the structure the
  * bars hang from: the month is set in ink at reading size, it sits on a ruled
  * baseline that runs the full width, and the weeks drop from that rule as

@@ -1,4 +1,4 @@
-# PowerGantt — Improvements Backlog (handoff)
+# PowerRoadmap — Improvements Backlog (handoff)
 
 > **Phase 13 sync (2026-07-17):** Quality infrastructure is no longer “pick by
 > value” for NTS/CI/DOC items below — those are scheduled in `PLAN.md` Phase 13

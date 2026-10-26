@@ -27,7 +27,7 @@ native\build-appbar-shot.bat
 native\build-reflow.bat
 ```
 
-- `build.bat` — COM add-in DLL → `native/build/PowerGanttAddin.dll`
+- `build.bat` — COM add-in DLL → `native/build/PowerRoadmapAddin.dll`
 - `build-ops.bat` → `ppops.exe` (pure ops / model tests)
 - `build-conformance.bat` → `ppconf.exe` (layout fixtures vs `spec/fixtures/`)
 - `build-overlay.bat` → `ppoverlay.exe` (lifecycle / multi-stage overlay gate)
@@ -53,7 +53,7 @@ native\start.bat
 - Registration is **per-user** (no admin). Close PowerPoint before rebuilding so
   the new DLL can load.
 - `start.bat` always rebuilds the DLL, registers, then launches PowerPoint. Look for the
-  **PowerGantt** ribbon tab → Insert Gantt.
+  **PowerRoadmap** ribbon tab → Insert Gantt.
 
 ### Harness driver (primary agent entry)
 

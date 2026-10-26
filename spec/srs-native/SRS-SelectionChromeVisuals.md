@@ -14,7 +14,7 @@ Traces up to: `../srs/SRS-chart-elements.md`, `../srs/SRS-layout.md`,
 `spec/srs-native/SRS-RowAndTaskSelection.md`, and
 `native/tools/harness_driver.py`.
 
-Reference impl: `native/PowerGanttAddin/` (Overlay.cpp, GanttScene*,
+Reference impl: `native/PowerRoadmapAddin/` (Overlay.cpp, GanttScene*,
 GanttBuilder.cpp, GanttTheme.h, GanttAppBar.h, GanttHitTest.*).
 
 ## Overall Chart Chrome
@@ -22,7 +22,7 @@ GanttBuilder.cpp, GanttTheme.h, GanttAppBar.h, GanttHitTest.*).
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
 | SR-CHR-01 | When CHART_ROOT is natively selected, the overlay shall draw at most a low-emphasis one-physical-pixel hairline frame without a badge or any filled/saturated rectangle. | PowerPoint's native grips are the platform selection chrome for the whole component; additional saturated chrome is visually noisy. | Overall-selected screenshot matrix; pixel invariant rejects large saturated accent regions outside bar rects. | Legacy SR-CHR-01; Overlay overall chrome paint |
-| SR-CHR-02 | The `PowerGantt` chip shall appear only as a small token-styled hover affordance when the pointer is within the chart top-edge grip zone and nothing is selected. | The chip is an affordance, not persistent selection state. | Chart-hover and overall-selected screenshots; lifecycle traces verify the chip never appears outside valid host visibility. | Legacy SR-CHR-02; SRS-OverlayLifecycle SR-LIFE-01..06 |
+| SR-CHR-02 | The `PowerRoadmap` chip shall appear only as a small token-styled hover affordance when the pointer is within the chart top-edge grip zone and nothing is selected. | The chip is an affordance, not persistent selection state. | Chart-hover and overall-selected screenshots; lifecycle traces verify the chip never appears outside valid host visibility. | Legacy SR-CHR-02; SRS-OverlayLifecycle SR-LIFE-01..06 |
 | SR-CHR-03 | When nothing is selected and the pointer is outside the chart, the overlay shall draw no chart-level chrome. | Idle charts should look like clean PowerPoint content. | Idle-no-hover screenshot matrix; paint dump shows no chart-level rectangles. | Legacy SR-CHR-03; idle chrome state |
 
 ## Row And Item Chrome

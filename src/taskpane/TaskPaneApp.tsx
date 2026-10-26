@@ -25,7 +25,7 @@ interface TaskPaneAppProps {
 /**
  * Office task pane shell.
  *
- * Wraps the existing PowerGantt editor and adds two extra controls at the
+ * Wraps the existing PowerRoadmap editor and adds two extra controls at the
  * top: "Insert into slide" emits the current chart as native PowerPoint
  * shapes, and "Pull from slide" reads back a previously inserted chart.
  */
@@ -67,7 +67,7 @@ export function TaskPaneApp({ hostHint }: TaskPaneAppProps) {
     try {
       const next = await readGanttFromSlide();
       if (!next) {
-        setStatus('No PowerGantt chart found on the active slide.');
+        setStatus('No PowerRoadmap chart found on the active slide.');
       } else {
         setDocument(next);
         setStatus(`Loaded "${next.title}" from slide.`);

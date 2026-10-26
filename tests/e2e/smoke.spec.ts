@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('PowerGantt smoke', () => {
+test.describe('PowerRoadmap smoke', () => {
   test('loads and shows sample chart', async ({ page }) => {
     await page.goto('/');
     // Header brand
-    await expect(page.locator('.app-header').getByText('PowerGantt')).toBeVisible();
+    await expect(page.locator('.app-header').getByText('PowerRoadmap')).toBeVisible();
     // The inspector column is gone; editing lives in the command bar (C3).
     await expect(page.locator('.inspector')).toHaveCount(0);
     // Chart SVG renders (first svg = main chart, second = minimap)

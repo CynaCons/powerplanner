@@ -1,11 +1,11 @@
-<title>PowerGantt — command bar dock study</title>
+<title>PowerRoadmap — command bar dock study</title>
 
 <style>
   /* ------------------------------------------------------------------
      Two surfaces, deliberately different.
 
      The RIG (dark, indigo-biased) is the prototype's own chrome.
-     The STAGE (PowerGantt's real tokens) is the specimen.
+     The STAGE (PowerRoadmap's real tokens) is the specimen.
      Keeping them visually separate stops the switcher being mistaken
      for product UI — the whole study is invalid if you can't tell
      which pixels are the proposal.
@@ -20,7 +20,7 @@
     --rig-dim: #9a9ab0;
     --rig-accent: #8b8cf0;
 
-    /* Specimen — PowerGantt light tokens, verbatim from global.css */
+    /* Specimen — PowerRoadmap light tokens, verbatim from global.css */
     --color-bg: #fafbfc;
     --color-bg-elev: #ffffff;
     --color-bg-panel: #ffffff;
@@ -48,7 +48,7 @@
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
-  /* The specimen keeps PowerGantt's own dark palette when the viewer
+  /* The specimen keeps PowerRoadmap's own dark palette when the viewer
      is in dark mode — same as the product does. */
   @media (prefers-color-scheme: dark) {
     :root {
@@ -335,7 +335,7 @@
     <p>
       Three decisions for <code>v2.13.1</code>, shown rather than described. Switch the dock and the
       selection to see how the bar behaves, and press the <strong>⚙</strong> inside the bar for the
-      document context. Everything below the striped border is drawn with PowerGantt's own tokens;
+      document context. Everything below the striped border is drawn with PowerRoadmap's own tokens;
       the dark chrome is the rig.
     </p>
   </div>
@@ -372,7 +372,7 @@
       <div class="app__header">
         <div class="brand">
           <span class="brand__mark" aria-hidden="true"></span>
-          PowerGantt
+          PowerRoadmap
           <span class="brand__title">· CAN Interface roadmap</span>
         </div>
         <div class="header__right">

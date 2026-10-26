@@ -5,7 +5,7 @@
  * rectangles for tasks, diamonds for milestones, elbow connectors for
  * dependencies. All shapes are tagged so we can read them back later.
  *
- * Pull: enumerates shapes on the active slide, finds the PowerGantt
+ * Pull: enumerates shapes on the active slide, finds the PowerRoadmap
  * root group, and parses the embedded JSON document tag.
  *
  * PowerPoint slide coordinates are POINTS (1pt = 1/72"), not EMU. The

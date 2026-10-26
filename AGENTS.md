@@ -1,6 +1,6 @@
 # Agent Instructions
 
-PowerGantt is run the **PowerFlow** way. PowerFlow is the method — one
+PowerRoadmap is run the **PowerFlow** way. PowerFlow is the method — one
 method, ten rules, two tools — and it lives in the `powerflow` skill, not in
 this file. Read it there and follow it. This file holds only what is specific
 to *this* project: the focus, the commands, the gates, and the rules PowerFlow
@@ -13,7 +13,7 @@ this file directly.
 
 **The web app is the product** (user directive 2026-10-23). It ships as a
 single-file HTML application in the same format as PowerScroll: a GitHub
-release carrying `PowerGantt.html`, and a GitHub Pages site hosting a live
+release carrying `PowerRoadmap.html`, and a GitHub Pages site hosting a live
 demo.
 
 The native PowerPoint add-in under `native/` is **parked** — the owner's company
@@ -31,7 +31,7 @@ Command reference if it is ever unparked:
 - Zustand stores in `src/stores/`; layout math in `src/layout/`; SVG rendering
   in `src/renderer/`; app chrome in `src/app/`.
 - The portable single-file build comes from `vite.export.config.ts` and writes
-  `dist-template/PowerGantt.html`.
+  `dist-template/PowerRoadmap.html`.
 - `src/version.ts` is the **single version source**; `package.json` mirrors it.
 - The Office.js task pane (`taskpane.html`, `src/taskpane/`) is parked with the
   native add-in.
@@ -41,7 +41,7 @@ Command reference if it is ever unparked:
 ```bash
 npm run dev            # port 5180 - main app, Playwright, daily work
 npm run build          # tsc -b && vite build
-npm run build:template # single-file dist-template/PowerGantt.html
+npm run build:template # single-file dist-template/PowerRoadmap.html
 npm run lint
 npm test               # vitest unit
 npm run test:e2e       # Playwright

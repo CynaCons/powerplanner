@@ -1,5 +1,5 @@
 /**
- * Public embed API for PowerGantt.
+ * Public embed API for PowerRoadmap.
  *
  * Consumers (PowerNote, custom dashboards, docs) import from this barrel
  * only. Anything not re-exported here is considered internal.

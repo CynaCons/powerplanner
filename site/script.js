@@ -1,4 +1,4 @@
-/* PowerGantt landing — interactivity */
+/* PowerRoadmap landing — interactivity */
 
 (() => {
   // ----- Theme toggle (persisted) -----
