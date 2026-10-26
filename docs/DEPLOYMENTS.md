@@ -11,16 +11,32 @@ Repository: `CynaCons/powerplanner`
 
 | Surface | State | Observed |
 |---|---|---|
-| GitHub release (latest) | `v2.17.0`, non-draft, published 2026-10-26 | `gh release view v2.17.0` |
-| Release assets | `PowerRoadmap.html` — 363,694 bytes on v2.17.0, 355,051 on v2.16.0 | `gh release view --json assets` |
+| GitHub release (latest) | `v2.19.0`, non-draft, published 2026-10-26 | `gh release view v2.19.0` |
+| Release assets | `PowerRoadmap.html`, `PowerGantt.html`, `PowerPlanner.html` — byte-identical, 367,548 bytes each | `gh release view --json assets` |
 | GitHub Pages | `status: built`, from `main` `/`, HTTPS enforced | `gh api repos/CynaCons/powerplanner/pages` |
 | Pages URL | https://cynacons.github.io/powerplanner/ | same |
 | Pages content | landing site from `site/`; no live app demo | `deploy-site.yml` |
-| `src/version.ts` | `2.17.0` | repo |
-| `package.json` | `2.17.0` — matches | repo |
+| `src/version.ts` | `2.19.0` | repo |
+| `package.json` | `2.19.0` — matches | repo |
 | `dist-template/index.html` | tracked, rebuilt at the tag, 355,051 bytes | repo |
 | npm | not a surface — nothing published | DECISIONS.md D5 |
 | MCP Registry | not a surface — nothing published | DECISIONS.md D5 |
+
+## Asset names, and why all three ship
+
+The app has been renamed twice in a day. The updater lives inside each saved
+file and only knows the asset name that existed when it shipped, so every
+release carries a byte-identical copy under all three names. Dropping one
+strands every build still using it, and those builds cannot be repaired
+remotely.
+
+| A build on | looks for | v2.19.0 ships it |
+|---|---|---|
+| 2.17.x | `PowerPlanner.html` | yes |
+| 2.18.x | `PowerGantt.html` | yes |
+| 2.19.0+ | `PowerRoadmap.html` | yes |
+
+Verified against the live API on 2026-10-26, not inferred.
 
 ## Which releases can update themselves
 

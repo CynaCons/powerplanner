@@ -892,6 +892,14 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Register that no drag gesture works on touch [agent: claude]
 - [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
 
+### v2.19.0 — PowerRoadmap
+**Goal:** The app is PowerRoadmap, and no build released under an older name is stranded.
+- [x] Rebrand every display name to PowerRoadmap [agent: claude]
+- [x] Ship an asset alias for every name the app has had [agent: claude]
+- [x] Fix the lint error that turned the CI red [agent: claude]
+- [x] Keep the build aliases out of the repository [agent: claude]
+- [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
