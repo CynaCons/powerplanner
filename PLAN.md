@@ -852,7 +852,7 @@ Web only. The release half shipped as v2.16.0 on 2026-10-26 — the first PowerP
 
 The whole mechanism rests on one fact, learned the hard way in PowerScroll and recorded as DECISIONS.md D9: GitHub sends no CORS header on release-asset downloads, so the only route a page can fetch a new build from is the committed `dist-template/index.html` on raw.githubusercontent.com, pinned to the release tag.
 
-### v2.17.0 — In-app update, ported from PowerScroll (current) (ACTIVE)
+### v2.17.0 — In-app update, ported from PowerScroll (COMPLETE 2026-10-26) (COMPLETE)
 **Goal:** A plan can update itself in place to the newest release, the way a PowerScroll notebook does.
 - [x] Make the document injector take any template, not just the live page [agent: claude]
 - [x] Check GitHub for a newer release, cached against the rate limit [agent: claude]
@@ -862,7 +862,14 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Add a settings popup with an About and updates section [agent: claude]
 - [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
 - [x] Stop the download revoking its own object URL before the browser reads it [agent: claude]
-- [ ] USER GATE: run a real update from an older build to a newer one
+
+### v2.17.1 — Prove the update path on real releases (current) (ACTIVE)
+> The gate belongs here rather than in v2.17.0, because it can only be run against a *published* artifact — the iteration that builds a release cannot also verify the release it has not cut yet.
+
+**v2.16.0 cannot be the starting point.** It was tagged at `b900c6f`; the updater landed in `842ee92`, after. The published v2.16.0 build contains no update code at all, which is the trap PowerScroll recorded: the updater ships *inside* each saved file, so a build released without a working one cannot repair itself. Testing therefore needs v2.17.0 as the installed build and a later release to move to.
+**Goal:** An installed build updates itself to a newer release, observed rather than argued.
+- [ ] Confirm the published build carries the updater, not just the repo
+- [ ] USER GATE: update an installed build to a newer release and keep the plan
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition

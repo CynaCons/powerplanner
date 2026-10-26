@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { compareVersions, performUpdate } from '../../src/utils/updateChecker';
+import type { FileSystemFileHandleLike } from '../../src/persistence/fileIo';
 import { sampleDocument } from '../../src/utils/sample';
 
 const doc = sampleDocument();
@@ -20,16 +21,16 @@ describe('compareVersions', () => {
 
 describe('performUpdate', () => {
   const base = () => ({
-    fetchTemplate: vi.fn(async () => TEMPLATE),
-    writeHandle: vi.fn(async () => true),
-    verifyWrite: vi.fn(async () => true),
+    fetchTemplate: vi.fn(async (_url?: string, _tag?: string) => TEMPLATE as string | null),
+    writeHandle: vi.fn(async (_h: FileSystemFileHandleLike, _html: string) => true),
+    verifyWrite: vi.fn(async (_h: FileSystemFileHandleLike) => true),
     reload: vi.fn(),
-    download: vi.fn(),
+    download: vi.fn((_name: string, _content: string, _mime?: string) => {}),
     buildBackupHtml: () => '<html>backup</html>',
   });
 
   it('rewrites the open file and reloads when a writable handle exists', async () => {
-    const deps = { ...base(), getHandle: () => ({}) as never };
+    const deps = { ...base(), getHandle: () => ({}) as unknown as FileSystemFileHandleLike };
     const result = await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, deps);
 
     expect(result).toEqual({ ok: true, mode: 'live-swap' });
@@ -44,16 +45,16 @@ describe('performUpdate', () => {
     const order: string[] = [];
     const deps = {
       ...base(),
-      getHandle: () => ({}) as never,
-      verifyWrite: vi.fn(async () => { order.push('verify'); return true; }),
-      fetchTemplate: vi.fn(async () => { order.push('fetch'); return TEMPLATE; }),
+      getHandle: () => ({}) as unknown as FileSystemFileHandleLike,
+      verifyWrite: vi.fn(async (_h: FileSystemFileHandleLike) => { order.push('verify'); return true; }),
+      fetchTemplate: vi.fn(async (_url?: string, _tag?: string) => { order.push('fetch'); return TEMPLATE as string | null; }),
     };
     await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, deps);
     expect(order).toEqual(['verify', 'fetch']);
   });
 
   it('backs the file up before overwriting it', async () => {
-    const deps = { ...base(), getHandle: () => ({}) as never };
+    const deps = { ...base(), getHandle: () => ({}) as unknown as FileSystemFileHandleLike };
     await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, deps);
     expect(deps.download).toHaveBeenCalledOnce();
     expect(deps.download.mock.calls[0][0]).toContain('backup');
@@ -72,7 +73,7 @@ describe('performUpdate', () => {
   });
 
   it('downloads when the handle is there but permission is refused', async () => {
-    const deps = { ...base(), getHandle: () => ({}) as never, verifyWrite: vi.fn(async () => false) };
+    const deps = { ...base(), getHandle: () => ({}) as unknown as FileSystemFileHandleLike, verifyWrite: vi.fn(async (_h: FileSystemFileHandleLike) => false) };
     const result = await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, deps);
     expect(result).toEqual({ ok: true, mode: 'download' });
     expect(deps.writeHandle).not.toHaveBeenCalled();
@@ -81,8 +82,8 @@ describe('performUpdate', () => {
   it('falls back to downloading when the in-place write fails', async () => {
     const deps = {
       ...base(),
-      getHandle: () => ({}) as never,
-      writeHandle: vi.fn(async () => false),
+      getHandle: () => ({}) as unknown as FileSystemFileHandleLike,
+      writeHandle: vi.fn(async (_h: FileSystemFileHandleLike, _html: string) => false),
     };
     const result = await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, deps);
     expect(result).toEqual({ ok: true, mode: 'download' });
@@ -90,7 +91,7 @@ describe('performUpdate', () => {
   });
 
   it('reports failure, and writes nothing, when the build cannot be fetched', async () => {
-    const deps = { ...base(), getHandle: () => ({}) as never, fetchTemplate: vi.fn(async () => null) };
+    const deps = { ...base(), getHandle: () => ({}) as unknown as FileSystemFileHandleLike, fetchTemplate: vi.fn(async (_url?: string, _tag?: string) => null as string | null) };
     const result = await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, deps);
     expect(result).toEqual({ ok: false });
     expect(deps.writeHandle).not.toHaveBeenCalled();
