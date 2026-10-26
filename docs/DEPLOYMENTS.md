@@ -11,16 +11,32 @@ Repository: `CynaCons/powerplanner`
 
 | Surface | State | Observed |
 |---|---|---|
-| GitHub release (latest) | `v2.16.0`, non-draft, published 2026-10-26 | `gh release view v2.16.0` |
-| Release assets | `PowerPlanner.html`, 355,051 bytes | `gh release view v2.16.0 --json assets` |
+| GitHub release (latest) | `v2.17.0`, non-draft, published 2026-10-26 | `gh release view v2.17.0` |
+| Release assets | `PowerPlanner.html` — 363,694 bytes on v2.17.0, 355,051 on v2.16.0 | `gh release view --json assets` |
 | GitHub Pages | `status: built`, from `main` `/`, HTTPS enforced | `gh api repos/CynaCons/powerplanner/pages` |
 | Pages URL | https://cynacons.github.io/powerplanner/ | same |
 | Pages content | landing site from `site/`; no live app demo | `deploy-site.yml` |
-| `src/version.ts` | `2.16.0` | repo |
-| `package.json` | `2.16.0` — matches | repo |
+| `src/version.ts` | `2.17.0` | repo |
+| `package.json` | `2.17.0` — matches | repo |
 | `dist-template/index.html` | tracked, rebuilt at the tag, 355,051 bytes | repo |
 | npm | not a surface — nothing published | DECISIONS.md D5 |
 | MCP Registry | not a surface — nothing published | DECISIONS.md D5 |
+
+## Which releases can update themselves
+
+| Release | Carries the updater | Note |
+|---|---|---|
+| v2.17.0 | **yes** | first build that can update itself |
+| v2.16.0 | no | tagged at `b900c6f`, before the updater landed in `842ee92` |
+| v2.11.0 and earlier | no | no assets at all |
+
+Verified against the published build, not the repo: fetching
+`v2.17.0/dist-template/index.html` returns 363,694 bytes containing
+`Check for updates`, `raw.githubusercontent` and `powerplanner-update-check`;
+the same fetch at `v2.16.0` contains none of them.
+
+A build without an updater has to be replaced by hand — the updater ships
+inside each saved file, so it cannot be delivered retroactively.
 
 ## Update route — the one the in-app updater uses
 

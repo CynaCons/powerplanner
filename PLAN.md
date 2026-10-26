@@ -868,7 +868,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 
 **v2.16.0 cannot be the starting point.** It was tagged at `b900c6f`; the updater landed in `842ee92`, after. The published v2.16.0 build contains no update code at all, which is the trap PowerScroll recorded: the updater ships *inside* each saved file, so a build released without a working one cannot repair itself. Testing therefore needs v2.17.0 as the installed build and a later release to move to.
 **Goal:** An installed build updates itself to a newer release, observed rather than argued.
-- [ ] Confirm the published build carries the updater, not just the repo
+- [x] Confirm the published build carries the updater, not just the repo [agent: claude]
 - [ ] USER GATE: update an installed build to a newer release and keep the plan
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
