@@ -5,7 +5,7 @@ PowerPoint COM add-in, or `src/taskpane/`. The native on-slide editor gets its
 agent surface from the harness driver and session recorder; this is the
 independent web-side equivalent.
 
-**Goal:** an agent, from its own console, drives the live PowerPlanner web app
+**Goal:** an agent, from its own console, drives the live PowerGantt web app
 and builds a Gantt chart in front of the user — bars appearing as the agent
 works, with the user able to watch, interrupt, and undo.
 
@@ -209,7 +209,7 @@ otherwise would be security theatre.
 **T3 — shipping the bridge.** The bridge must not exist in the portable build.
 Gated behind `import.meta.env.DEV` **and** an explicit opt-in, so Vite's
 dead-code elimination strips it from `vite.export.config.ts` output. Gate:
-**a test greps the built `dist-template/PowerPlanner.html` and fails if any
+**a test greps the built `dist-template/PowerGantt.html` and fails if any
 bridge symbol appears.** Offline-first portable HTML behaviour is unchanged.
 
 **T4 — the user losing control.** The user's own edits always win a conflict

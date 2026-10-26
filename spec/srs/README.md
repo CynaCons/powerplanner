@@ -1,7 +1,7 @@
 # Software Requirements Specification (SRS)
 
 The requirements foundation, ASPICE-style. Each `SRS-<feature>.md` states what
-PowerPlanner **shall** do for one feature, as a table of uniquely-identified,
+PowerGantt **shall** do for one feature, as a table of uniquely-identified,
 verifiable, traceable requirements. Both implementations (web `src/`, native
 `native/`) must satisfy these and trace back to them.
 

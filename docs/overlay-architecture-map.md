@@ -1,18 +1,18 @@
 # Overlay Architecture Map (audit 2026-07-11)
 
-Reference for agents working on `native/PowerPlannerAddin/Overlay.cpp` and the
+Reference for agents working on `native/PowerGanttAddin/Overlay.cpp` and the
 v2.5.x iterations. Line numbers = working tree on 2026-07-11 (drift expected;
 re-verify anchors before editing).
 
 ## Windows (all created lazily, destroyed in OverlayStop)
 | Window | Class | Ex-styles | Show / Hide |
 |---|---|---|---|
-| Chart overlay `g_hwnd` | `PowerPlannerOverlay` | LAYERED+TOOLWINDOW+TOPMOST+NOACTIVATE | `ShowOverlayForChartRect` (~3690, SetWindowPos EVERY tick) / `HideOverlay` (~3641) |
-| App bar `g_appBarHwnd` | `PowerPlannerAppBar` | same | `ShowAppBar` (~4250, change-gated) / `HideAppBar` |
-| Inline editor `g_editorHwnd` | `PowerPlannerInlineEditor` | TOOLWINDOW+TOPMOST | open/hide on demand |
-| Card editor `g_cardHwnd` | `PowerPlannerCardEditor` | TOOLWINDOW+TOPMOST | open/close; hidden on host-inactive |
+| Chart overlay `g_hwnd` | `PowerGanttOverlay` | LAYERED+TOOLWINDOW+TOPMOST+NOACTIVATE | `ShowOverlayForChartRect` (~3690, SetWindowPos EVERY tick) / `HideOverlay` (~3641) |
+| App bar `g_appBarHwnd` | `PowerGanttAppBar` | same | `ShowAppBar` (~4250, change-gated) / `HideAppBar` |
+| Inline editor `g_editorHwnd` | `PowerGanttInlineEditor` | TOOLWINDOW+TOPMOST | open/hide on demand |
+| Card editor `g_cardHwnd` | `PowerGanttCardEditor` | TOOLWINDOW+TOPMOST | open/close; hidden on host-inactive |
 
-Blue frame, 8 handles, "PowerPlanner" chip, ghosts, hover wash, link pill are
+Blue frame, 8 handles, "PowerGantt" chip, ghosts, hover wash, link pill are
 ALL painted inside the chart overlay window by `PaintOverlay` (~3150-3539).
 Chip (~3483-3502) shows only when `g_hasSelectionChrome && g_ownSelKind.empty()`
 = native CHART_ROOT selection branch in Tick (~5505-5522).

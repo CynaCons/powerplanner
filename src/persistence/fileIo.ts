@@ -4,7 +4,7 @@ import { toYaml, fromYaml } from './yaml';
 import { buildEmbeddedHtml } from './embedded';
 
 const FILE_PICKER_TYPES = [
-  { description: 'PowerPlanner', accept: { 'text/html': ['.html'] as string[] } },
+  { description: 'PowerGantt', accept: { 'text/html': ['.html'] as string[] } },
 ];
 
 interface FilePickerOptions {
@@ -131,7 +131,7 @@ export async function writeHtmlToHandle(
     await writable.close();
     return true;
   } catch (e) {
-    console.warn('[PowerPlanner Update] Write to handle failed', e);
+    console.warn('[PowerGantt Update] Write to handle failed', e);
     return false;
   }
 }
@@ -141,7 +141,7 @@ export async function openFile(): Promise<GanttDocument | null> {
     try {
       const [handle] = await window.showOpenFilePicker({
         types: [
-          { description: 'PowerPlanner', accept: { 'text/html': ['.html'], 'application/json': ['.json'], 'text/yaml': ['.yaml', '.yml'] } as Record<string, string[]> },
+          { description: 'PowerGantt', accept: { 'text/html': ['.html'], 'application/json': ['.json'], 'text/yaml': ['.yaml', '.yml'] } as Record<string, string[]> },
         ],
       });
       const file = await handle.getFile();
@@ -173,7 +173,7 @@ export async function openFile(): Promise<GanttDocument | null> {
 export function parseFileContents(name: string, text: string): GanttDocument {
   if (/\.html?$/i.test(name)) {
     const match = text.match(/<script[^>]*id=["']powerplanner-data["'][^>]*>([\s\S]*?)<\/script>/i);
-    if (!match) throw new Error('No embedded PowerPlanner data found in this HTML file.');
+    if (!match) throw new Error('No embedded PowerGantt data found in this HTML file.');
     return validateDocument(JSON.parse(match[1]));
   }
   if (/\.json$/i.test(name)) {

@@ -1,4 +1,4 @@
-# PowerPlanner Specification Structure
+# PowerGantt Specification Structure
 
 This document defines the canonical layout of the specification and requirements tree. It is the "redrawn" architecture after the 2026-07-11 feedback round.
 
@@ -51,7 +51,7 @@ This document defines the canonical layout of the specification and requirements
 5. **Web Implementation** — `src/`
    - Consumes foundation + shared SRS + `spec/srs-web/`.
 
-6. **Native Implementation** — `native/PowerPlannerAddin/`
+6. **Native Implementation** — `native/PowerGanttAddin/`
    - C++ COM, Gantt* + Overlay.cpp
    - Consumes foundation + shared SRS + `spec/srs-native/`
 

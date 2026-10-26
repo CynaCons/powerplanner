@@ -23,6 +23,9 @@ import { useToolStore, cursorForTool } from '../stores/toolStore';
 const AXIS_TOTAL_H = 56;
 const ROW_GUTTER_W_BASE = 200;
 const ROW_GUTTER_W_MIN = 120;
+const ROW_GUTTER_W_MAX = 520;
+/** The row list is draggable-wide; a long package name needs more than 200px. */
+const GUTTER_KEY = 'powerplanner:gutter-width:v1';
 
 export function ChartArea() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -46,7 +49,40 @@ export function ChartArea() {
     return () => ro.disconnect();
   }, []);
 
-  const ROW_GUTTER_W = size.width < 600 ? ROW_GUTTER_W_MIN : ROW_GUTTER_W_BASE;
+  const [gutterW, setGutterW] = useState<number>(() => {
+    try {
+      const stored = Number(localStorage.getItem(GUTTER_KEY));
+      if (Number.isFinite(stored) && stored >= ROW_GUTTER_W_MIN) {
+        return Math.min(ROW_GUTTER_W_MAX, stored);
+      }
+    } catch { /* a blocked localStorage costs the preference, not the app */ }
+    return ROW_GUTTER_W_BASE;
+  });
+  const [draggingGutter, setDraggingGutter] = useState(false);
+
+  // A narrow window gets the minimum regardless of preference: the chart has
+  // to keep enough room to be a chart.
+  const ROW_GUTTER_W = size.width < 600 ? ROW_GUTTER_W_MIN : Math.min(gutterW, Math.max(ROW_GUTTER_W_MIN, size.width - 320));
+
+  useEffect(() => {
+    if (!draggingGutter) return;
+    const move = (e: globalThis.MouseEvent) => {
+      const el = containerRef.current;
+      if (!el) return;
+      const next = e.clientX - el.getBoundingClientRect().left;
+      setGutterW(Math.max(ROW_GUTTER_W_MIN, Math.min(ROW_GUTTER_W_MAX, next)));
+    };
+    const up = () => {
+      setDraggingGutter(false);
+      try { localStorage.setItem(GUTTER_KEY, String(gutterW)); } catch { /* non-fatal */ }
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+  }, [draggingGutter, gutterW]);
   const chartWidth = Math.max(100, size.width - ROW_GUTTER_W);
 
   // Auto-fit on first load if document has tasks
@@ -74,6 +110,12 @@ export function ChartArea() {
   /** Where the chart sheet ends: after the last row, or at the viewport edge
    *  when the plan is taller than the window. */
   const sheetBottom = Math.min(size.height, AXIS_TOTAL_H + layout.chartHeight);
+
+  // The wheel scrolls the body. A plan that already fits has nothing to
+  // scroll, so maxScroll is 0 and the view stays put.
+  const bodyHeight = Math.max(0, size.height - AXIS_TOTAL_H);
+  const maxScroll = Math.max(0, layout.chartHeight - bodyHeight);
+  const scrollY = useViewportStore((s) => s.scrollY);
 
   const axis = useMemo(
     () => buildAxis(viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.fiscalYearStart),
@@ -104,6 +146,7 @@ export function ChartArea() {
     chartWidth,
     rowGutterWidth: ROW_GUTTER_W,
     axisHeight: AXIS_TOTAL_H,
+    maxScroll,
     layout,
   });
   const activeTool = useToolStore((s) => s.activeTool);
@@ -142,7 +185,14 @@ export function ChartArea() {
           below the last row is plainly outside the sheet.
         */}
         <rect x={0} y={0} width={ROW_GUTTER_W} height={sheetBottom} fill="var(--color-bg-panel)" />
-        <line x1={ROW_GUTTER_W} y1={0} x2={ROW_GUTTER_W} y2={sheetBottom} stroke="var(--color-border-soft)" />
+        <line
+          x1={ROW_GUTTER_W}
+          y1={0}
+          x2={ROW_GUTTER_W}
+          y2={sheetBottom}
+          stroke={draggingGutter ? 'var(--color-accent)' : 'var(--color-border-soft)'}
+          strokeWidth={draggingGutter ? 2 : 1}
+        />
         <line
           x1={0}
           y1={sheetBottom}
@@ -152,14 +202,14 @@ export function ChartArea() {
         />
 
         {/* Weekend stripes (in chart area) */}
-        <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H})`}>
+        <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`}>
           {weekendStripes.map((s, i) => (
             <rect key={i} x={s.x} y={0} width={s.w} height={layout.chartHeight} fill="var(--color-weekend)" opacity={0.4} />
           ))}
         </g>
 
         {/* Row separators */}
-        <g transform={`translate(0 ${AXIS_TOTAL_H})`}>
+        <g transform={`translate(0 ${AXIS_TOTAL_H - scrollY})`}>
           <Rows
             rows={layout.visibleRows}
             rowHeights={layout.rowHeights}
@@ -169,7 +219,7 @@ export function ChartArea() {
         </g>
 
         {/* Row gutter labels */}
-        <g transform={`translate(0 ${AXIS_TOTAL_H})`}>
+        <g transform={`translate(0 ${AXIS_TOTAL_H - scrollY})`}>
           <RowGutter rows={layout.visibleRows} rowHeights={layout.rowHeights} rowOffsets={layout.rowOffsets} width={ROW_GUTTER_W} />
         </g>
 
@@ -185,7 +235,7 @@ export function ChartArea() {
           </clipPath>
         </defs>
 
-        <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H})`} clipPath="url(#chart-clip)">
+        <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`} clipPath="url(#chart-clip)">
           {/* Today line + pill label */}
           {showToday && (
             <g pointerEvents="none">
@@ -238,6 +288,17 @@ export function ChartArea() {
 
         {/* Bottom border between axis and chart */}
         <line x1={ROW_GUTTER_W} y1={AXIS_TOTAL_H} x2={size.width} y2={AXIS_TOTAL_H} stroke="var(--color-border-soft)" />
+      {/* Resize grip for the row list, drawn last so nothing paints over it.
+          Wider than the rule it sits on, because a 1px target is not a target. */}
+      <rect
+          x={ROW_GUTTER_W - 4}
+          y={0}
+          width={8}
+          height={size.height}
+          fill="transparent"
+          style={{ cursor: 'col-resize' }}
+          onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); setDraggingGutter(true); }}
+        />
       </svg>
       <Minimap chartWidth={chartWidth} rowGutterWidth={ROW_GUTTER_W} />
     </div>

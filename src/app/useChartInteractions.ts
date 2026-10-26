@@ -15,6 +15,8 @@ import type { LayoutResult } from '../layout/engine';
 interface InteractionOptions {
   svgRef: RefObject<SVGSVGElement | null>;
   chartWidth: number;
+  /** How far the chart body can scroll: content height minus what is visible. */
+  maxScroll: number;
   rowGutterWidth: number;
   axisHeight: number;
   layout: LayoutResult;
@@ -40,6 +42,7 @@ export type DragKind =
   | 'bracket-resize-end'
   | 'dep-create'
   | 'label-move'
+  | 'axis-zoom'
   | 'lasso';
 
 export interface DragState {
@@ -68,6 +71,9 @@ export interface DragState {
   labelStartDy?: number;
   labelDx?: number;
   labelDy?: number;
+  /** axis-zoom: the span being swept across the time axis, in chart px. */
+  axisFromX?: number;
+  axisToX?: number;
 }
 
 export interface DragPreviewMap {
@@ -78,7 +84,7 @@ export interface DragPreviewMap {
   labels: Map<string, { dx: number; dy: number }>;
 }
 
-export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layout }: InteractionOptions) {
+export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisHeight, layout, maxScroll }: InteractionOptions) {
   const dragRef = useRef<DragState | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
   const [, forceRender] = useState(0);
@@ -96,26 +102,52 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
 
   const handleWheel = useCallback(
     (e: ReactWheelEvent<SVGSVGElement>) => {
-      // Default: wheel = zoom anchored at cursor (Figma/Linear convention)
-      // Shift+wheel = horizontal pan
-      // Ctrl/Meta still zooms (browser default would zoom anyway)
-      if (e.shiftKey) {
-        e.preventDefault();
-        useViewportStore.getState().pan(-e.deltaY);
-      } else {
+      // The wheel scrolls, as it does everywhere else. Zooming is Ctrl/Cmd +
+      // wheel, anchored exactly at the pointer; Shift + wheel pans in time.
+      // (Owner directive 2026-10-26.)
+      if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const { x } = getSvgPoint(e.clientX, e.clientY);
         const anchorX = Math.max(0, x - rowGutterWidth);
         const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
         useViewportStore.getState().zoom(factor, anchorX);
+        return;
       }
+      if (e.shiftKey) {
+        e.preventDefault();
+        useViewportStore.getState().pan(-e.deltaY);
+        return;
+      }
+      // Vertical scroll. `maxScroll` is 0 when everything already fits, and
+      // the store clamps, so a short plan simply does not move.
+      e.preventDefault();
+      useViewportStore.getState().scrollBy(e.deltaY, maxScroll);
     },
-    [getSvgPoint, rowGutterWidth],
+    [getSvgPoint, rowGutterWidth, maxScroll],
   );
 
   const handleSvgMouseDown = useCallback(
     (e: ReactMouseEvent<SVGSVGElement>) => {
       if (e.button !== 0) return;
+
+      // Sweeping the time axis picks the window to zoom to: press where the
+      // range starts, drag across it, release. (Owner directive 2026-10-26.)
+      {
+        const pt = getSvgPoint(e.clientX, e.clientY);
+        if (pt.y < axisHeight && pt.x > rowGutterWidth) {
+          const fromX = pt.x - rowGutterWidth;
+          dragRef.current = {
+            kind: 'axis-zoom',
+            startClientX: e.clientX,
+            startClientY: e.clientY,
+            axisFromX: fromX,
+            axisToX: fromX,
+            deltaDays: 0,
+          };
+          attachWindowListeners(handleWindowMove, handleWindowUp);
+          return;
+        }
+      }
       const target = e.target as Element;
       const datasetEl = target.closest('[data-pp-kind]') as HTMLElement | null;
       const view = useViewportStore.getState();
@@ -240,9 +272,31 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
       // Selection on click
       const selStore = useSelectionStore.getState();
       const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+
+      // A row in the gutter selects the row and everything laid on it, so the
+      // left column and the canvas are two views of one selection (owner
+      // directive 2026-10-26).
+      if (kind === 'row') {
+        const docNow = useDocumentStore.getState().doc;
+        const onRow: Array<{ kind: 'task' | 'milestone'; id: string }> = [
+          ...docNow.tasks.filter((t) => t.rowId === id).map((t) => ({ kind: 'task' as const, id: t.id })),
+          ...docNow.milestones.filter((m) => m.rowId === id).map((m) => ({ kind: 'milestone' as const, id: m.id })),
+        ];
+        selStore.setSelection([{ kind: 'row', id }, ...onRow]);
+        return;
+      }
       if (kind === 'task' || kind === 'milestone' || kind === 'bracket' || kind === 'dependency' || kind === 'marker') {
         if (!additive) {
-          selStore.setSelection([{ kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id }]);
+          // Selecting a bar also selects the row it sits on, so the gutter
+          // highlights with it — one selection, two views of it.
+          const owner =
+            kind === 'task' ? doc.tasks.find((t) => t.id === id)?.rowId
+            : kind === 'milestone' ? doc.milestones.find((m) => m.id === id)?.rowId
+            : undefined;
+          selStore.setSelection([
+            { kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id },
+            ...(owner ? [{ kind: 'row' as const, id: owner }] : []),
+          ]);
         } else if (!selStore.isSelected(id)) {
           selStore.add({ kind: kind as 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker', id });
         }
@@ -350,6 +404,15 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
       return;
     }
 
+    if (state.kind === 'axis-zoom') {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      state.axisToX = e.clientX - rect.left - rowGutterWidth;
+      triggerRender();
+      return;
+    }
+
     if (state.kind === 'label-move') {
       state.labelDx = (state.labelStartDx ?? 0) + dx;
       state.labelDy = (state.labelStartDy ?? 0) + (e.clientY - state.startClientY);
@@ -414,6 +477,21 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
       return;
     }
     const docStore = useDocumentStore.getState();
+
+    if (state.kind === 'axis-zoom') {
+      const a = Math.min(state.axisFromX ?? 0, state.axisToX ?? 0);
+      const b = Math.max(state.axisFromX ?? 0, state.axisToX ?? 0);
+      const view = useViewportStore.getState();
+      // A click without a drag is not a range; leave the view alone rather
+      // than zooming to a single day by accident.
+      if (b - a > 8) {
+        const from = addDays(view.startDate, Math.round(a / view.pxPerDay));
+        const to = addDays(view.startDate, Math.round(b / view.pxPerDay));
+        view.fit(from, to, Math.max(100, chartWidth));
+      }
+      setDragPreview(null);
+      return;
+    }
 
     if (state.kind === 'label-move') {
       const offset = { dx: Math.round(state.labelDx ?? 0), dy: Math.round(state.labelDy ?? 0) };
@@ -502,7 +580,10 @@ export function useChartInteractions({ svgRef, rowGutterWidth, axisHeight, layou
       docStore.updateBracket(state.targetId, { end: addDays(state.originalEnd, snappedDelta) });
     }
     setDragPreview(null);
-  }, [handleWindowMove]);
+    // chartWidth matters: the axis sweep fits a range into it. Without it in
+    // the deps this callback kept the value from the first render, when the
+    // chart had no width yet, and sweeping zoomed OUT instead of in.
+  }, [handleWindowMove, chartWidth]);
 
   const depDrag = dragRef.current?.kind === 'dep-create' ? dragRef.current : null;
   const lassoDrag = dragRef.current?.kind === 'lasso' ? dragRef.current : null;

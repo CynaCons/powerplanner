@@ -10,7 +10,7 @@ place; a reversal is a new entry that supersedes the old one.
 
 **Date:** 2026-10-23 · **Owner directive**
 
-**Context.** PowerPlanner was built as two implementations of one spec: a React
+**Context.** PowerGantt was built as two implementations of one spec: a React
 web app and a think-cell-style on-slide C++ COM add-in for PowerPoint. Roughly
 two thirds of the plan's history is native work. The owner's company does not
 use PowerPoint, so the owner no longer uses it either: *"the PowerPoint version
@@ -106,17 +106,17 @@ basically, same release and so on"*)
 **Context.** PowerScroll publishes a single-file HTML app as a GitHub release
 asset, serves a live demo from GitHub Pages, keeps one version source in
 `src/version.ts`, and carries a runbook (`docs/RELEASING.md`) plus an
-observed-state ledger (`docs/DEPLOYMENTS.md`). PowerPlanner had
-`dist-template/PowerPlanner.html` and a Pages site but no version source, no
+observed-state ledger (`docs/DEPLOYMENTS.md`). PowerGantt had
+`dist-template/PowerGantt.html` and a Pages site but no version source, no
 release workflow, no runbook and no ledger — so the v2.12 and v2.13 web work sat
 unreleased behind tag v2.11.0 with a stale template.
 
 **Decision.** Adopt the format: `src/version.ts` as the single version source
 with `package.json` mirroring it; `.github/workflows/release.yml` building and
-attaching `PowerPlanner.html` on a tag; `docs/RELEASING.md` as the runbook;
+attaching `PowerGantt.html` on a tag; `docs/RELEASING.md` as the runbook;
 `docs/DEPLOYMENTS.md` as the ledger, updated from observed production state
 rather than inferred. Not adopted: the npm and MCP Registry surfaces, which
-PowerScroll needs for `powerscroll-mcp` and PowerPlanner does not yet have an
+PowerScroll needs for `powerscroll-mcp` and PowerGantt does not yet have an
 equivalent of.
 
 **What would reopen it.** Shipping the agent bridge as an installable package,
@@ -205,7 +205,7 @@ what is left may be better merged into the bar.
 
 **Date:** 2026-10-26 · **Owner directive** (*"exactly like PowerScroll"*)
 
-**Context.** PowerPlanner ignored `dist-template/` entirely. PowerScroll
+**Context.** PowerGantt ignored `dist-template/` entirely. PowerScroll
 commits it, with a one-line comment in its `.gitignore` explaining why, and
 that comment turns out to be load-bearing.
 
@@ -218,7 +218,7 @@ send it. So the only route an in-app updater can actually use is the built
 file committed in the repository, fetched at the release tag.
 
 **Decision.** `dist-template/index.html` is tracked and rebuilt at every
-release tag. `PowerPlanner.html` stays ignored: it is a byte-identical copy the
+release tag. `PowerGantt.html` stays ignored: it is a byte-identical copy the
 release workflow makes from `index.html`, and committing both would double the
 weight for nothing.
 

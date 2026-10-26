@@ -12,11 +12,18 @@ test.describe('selection editing in the command bar', () => {
     await page.locator('[data-pp-kind="task"]').first().click();
   });
 
-  test('the label is editable in the bar', async ({ page }) => {
-    const input = page.locator('.cmdbar').getByLabel('Label');
-    await expect(input).toBeVisible();
-    await input.fill('Renamed from the bar');
-    await expect(page.locator('.chart-area')).toContainText('Renamed from the bar');
+  test('the bar names the selection but does not rename it', async ({ page }) => {
+    // Renaming belongs on the name, in the row list — the bar is for quick
+    // actions (owner directive 2026-10-26).
+    await expect(page.locator('.cmdbar .cmdbar__selname')).toBeVisible();
+    await expect(page.locator('.cmdbar').getByLabel('Label')).toHaveCount(0);
+  });
+
+  test('a row is renamed by double-clicking its name in the row list', async ({ page }) => {
+    const name = page.locator('text=MCAL integration').first();
+    await name.dblclick();
+    const editor = page.locator('.chart-area input, .chart-area textarea').first();
+    await expect(editor).toBeVisible();
   });
 
   test('dates and percent have precise nudges', async ({ page }) => {

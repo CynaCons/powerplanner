@@ -5,6 +5,10 @@ import { addDays } from '../utils/dates';
 interface ViewportState {
   startDate: ISODate;
   pxPerDay: number;
+  /** Vertical scroll of the chart body, in px from the top. Never negative. */
+  scrollY: number;
+  /** Scroll by `dy`, clamped to the content. `max` is contentH - viewportH. */
+  scrollBy: (dy: number, max: number) => void;
   setStart: (iso: ISODate) => void;
   setPxPerDay: (px: number) => void;
   pan: (dx: number) => void;
@@ -15,6 +19,11 @@ interface ViewportState {
 export const useViewportStore = create<ViewportState>((set, get) => ({
   startDate: '2026-05-25',
   pxPerDay: 8,
+  scrollY: 0,
+  // Clamped at both ends: with nothing to scroll, max is 0 and the view does
+  // not move at all, rather than drifting into blank space.
+  scrollBy: (dy, max) =>
+    set((s) => ({ scrollY: Math.max(0, Math.min(Math.max(0, max), s.scrollY + dy)) })),
   setStart: (iso) => set({ startDate: iso }),
   setPxPerDay: (px) => set({ pxPerDay: Math.max(0.05, Math.min(120, px)) }),
   pan: (dx) => {

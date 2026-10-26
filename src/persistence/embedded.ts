@@ -29,7 +29,7 @@ export function readEmbeddedDocument(): GanttDocument | null {
 }
 
 /**
- * Inject a document into ANY PowerPlanner HTML, not just the live page.
+ * Inject a document into ANY PowerGantt HTML, not just the live page.
  *
  * Pure, so the updater can hand it a template it has just downloaded, and so
  * the behaviour is testable without a DOM. `buildEmbeddedHtml` is the

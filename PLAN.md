@@ -1,10 +1,10 @@
-# PowerPlanner Implementation Plan
+# PowerGantt Implementation Plan
 
 ## Current Status
 
 The current iteration is the last heading below that is not marked COMPLETE.
 
-**Product focus (user directive 2026-10-23): the web app.** PowerPlanner ships as
+**Product focus (user directive 2026-10-23): the web app.** PowerGantt ships as
 a single-file HTML application in PowerScroll's release format. The native
 PowerPoint add-in under `native/` is **parked** — see [DECISIONS.md](DECISIONS.md) D1.
 
@@ -56,7 +56,7 @@ PowerPoint add-in under `native/` is **parked** — see [DECISIONS.md](DECISIONS
 **Goal:** Fix issues observed during live operations in PowerPoint (transient states, selection context, flashes, wrong chrome)
 
 - [x] Scope scale controls (bottom bar D/W/M/Q/Y) to appear only when the overall component is selected, never when a row is selected  (verified via trace: scale rule now passes)
-- [x] Resolve conflicting overall component highlight and outline ("PowerPlanner" style large fill/rect) that fights user selection visuals  (badge now only when ownSel empty)
+- [x] Resolve conflicting overall component highlight and outline ("PowerGantt" style large fill/rect) that fights user selection visuals  (badge now only when ownSel empty)
 - [x] Make row selection reliable (user can click to select a row as first-class object; hover/highlight already functional)  (added hover-based fallback in ApplyClickSelection)
 - [x] Eliminate content and text disappearance flash during rename and "New row below" (ops succeed but UI temporarily shows empty highlighted state)  -- mechanism + traces capture the transient states (pre/immed pngs + json) for diagnosis; sel stable in observed flows; full non-flashing requires builder changes outside this iteration scope
 - [x] Improve "New row below" experience after row selection (row adds correctly but visual transition is jarring)  -- observable + verified via trace (rowCount +1, sel stays ROW, scale not shown); jarring reduced by fixes above
@@ -94,7 +94,7 @@ PowerPoint add-in under `native/` is **parked** — see [DECISIONS.md](DECISIONS
 > until its acceptance criteria pass; only then does the next start.
 
 ### v2.5.0 - Iteration 1: Overlay Lifecycle Correctness & Render Stability (COMPLETE)
-**Goal:** No PowerPlanner pixels ever appear where they shouldn't (other monitors, slideshow, background windows); idle chrome is paint-free; edits stop flashing. SRS: spec/srs-native/SRS-OverlayLifecycle.md
+**Goal:** No PowerGantt pixels ever appear where they shouldn't (other monitors, slideshow, background windows); idle chrome is paint-free; edits stop flashing. SRS: spec/srs-native/SRS-OverlayLifecycle.md
 
 - [x] Entry gate: GATE-PURE green (fixed uncommitted SCALE contract break first); baseline commit 14f7d99
 - [x] Strict host gating: pid-match branch removed; tracked-window foreground or our windows/owned popups (SR-LIFE-02a) (9963486)
@@ -115,7 +115,7 @@ PowerPoint add-in under `native/` is **parked** — see [DECISIONS.md](DECISIONS
 **Goal:** One calm selection language; labels always readable; app bar never clips. SRS: spec/srs-native/SRS-SelectionChromeVisuals.md
 
 - [x] Overall chrome: hairline only on native CHART_ROOT selection; halo/handles/badge removed (SR-CHR-01) (4ea06a1)
-- [x] "PowerPlanner" chip → hover-only affordance; nothing drawn idle+unhovered (SR-CHR-02/03)
+- [x] "PowerGantt" chip → hover-only affordance; nothing drawn idle+unhovered (SR-CHR-02/03)
 - [x] Row selection: left accent + wash alpha 18/10; labels readable (SR-CHR-04)
 - [x] Item frames: 1px, no fill, no handles (SR-CHR-05)
 - [x] TASK_LABEL prim above progress + fit fallback inside→right (left fallback deferred → backlog NUI-08) (SR-VIZ-01)
@@ -298,7 +298,7 @@ PowerPoint add-in under `native/` is **parked** — see [DECISIONS.md](DECISIONS
 ### v2.6.8 - Iteration U8: Cohesion, Architecture & Spec Migration (absorbs v2.5.5 arch items + #5 remainder) — COMPLETE (harness)
 - [x] M2: dead ContextMenuShape ribbon-XML removed (overlay owns chart context menus); ribbon tab kept
 - [x] N3: 'Pull from slide' -> 'Import from slide', 'Reflow' -> 'Repair layout' + plain-language supertips, secondary placement
-- [x] N5: idle chip now reads 'PowerPlanner — click a bar to edit'; empty-cell cue teaches drag/double-click/Alt+double-click/right-click
+- [x] N5: idle chip now reads 'PowerGantt — click a bar to edit'; empty-cell cue teaches drag/double-click/Alt+double-click/right-click
 - [x] Spec migration core: legacy docs/SRS_* → srs-native tables (incl. ProgressEditing fold); InteractionSmoothness tables + hyphen names; pointers left in docs/
 - [x] Screenshot matrix (gallery_matrix, 10 contexts, PrintWindow strips) + README native-v5-* (capture DPI was 200%)
 - [x] Close program harness: 5 cold walkthroughs PASS; cohesion review + coordinator log updated
@@ -346,8 +346,8 @@ PowerPoint add-in under `native/` is **parked** — see [DECISIONS.md](DECISIONS
 - [ ] MILESTONE GATE: user visual/feel pass (also listed under Phase 13 user-gates)
 - Follow-ups registered (not in scope): W-FUP-1 axis pan, W-FUP-2 wheel zoom, W-FUP-3 auto scale-switch, W-FUP-4 web parity
 
-### Hotfix 2026-07-15 — PowerPlanner ribbon tab missing
-- [x] Root cause: ribbon customUI XML invalid — `chart\'s` in a single-quoted `supertip` became a bare apostrophe, so PowerPoint rejected the whole customUI (add-in still loaded: OnConnection + GetCustomUI logged, no tab). Fix: rephrase supertip without apostrophe in `Connect.cpp` kRibbonXml. Verify: well-formed XML + rebuild/register + fresh POWERPNT shows PowerPlanner tab.
+### Hotfix 2026-07-15 — PowerGantt ribbon tab missing
+- [x] Root cause: ribbon customUI XML invalid — `chart\'s` in a single-quoted `supertip` became a bare apostrophe, so PowerPoint rejected the whole customUI (add-in still loaded: OnConnection + GetCustomUI logged, no tab). Fix: rephrase supertip without apostrophe in `Connect.cpp` kRibbonXml. Verify: well-formed XML + rebuild/register + fresh POWERPNT shows PowerGantt tab.
 
 # Phase 13: Quality Infrastructure & Process Hardening (v2.8.x — registered 2026-07-17)
 
@@ -519,7 +519,7 @@ the existing Prim/PP_KIND model — NOT a renderer rewrite.
 - [x] R1a [worker: codex SOL]: EntityDump serializer in pure scene layer, cached per scene build; ALL prims covered; Overlay_DumpEntitiesForTest seam; ppops pure tests (round-trip, parent links, screen-rect projection) — `trace_entity_dump` 6/6 invariants PASS 2026-07-18
 - [ ] R1b [worker: codex SOL, after R1a]: Record toggle + session dir (events.jsonl+meta+frames); event taps: input (WndProcs, hit-annotated), nativeSel (w/ ChildShapeRange truth), ownSel, gesture, op, paint, snapshot (chrome+entity dump), frame (optional, throttled), doc, error (every swallowed catch)
 - [x] R1c: toggle UI polish (app bar Settings group + ribbon Record toggle + REC indicator); ribbon XML parsed and live PowerPoint logged `OnRibbonLoad` acceptance 2026-07-18
-- [x] 2026-07-18 user correction: expose a visible Record toggle in the PowerPlanner ribbon, wired to the same recorder state as the app bar, with pressed-state invalidation
+- [x] 2026-07-18 user correction: expose a visible Record toggle in the PowerGantt ribbon, wired to the same recorder state as the app bar, with pressed-state invalidation
 - [x] R1 audit: align live `input.msg` / `mods` schema with `session_report.py` and its fixture; prohibit vacuous PASS when an asserted interaction has no samples
 - [x] R1 audit: implement real `entity-dump` / `session-recorder` trace profiles and named invariants; scenario-requested rules missing from a trace must fail closed
 - [ ] R1 audit: entity dump carries real text/style/clipped/visible data and overlay chrome where applicable; dedupe signature changes on content/style/selection-visible scene changes, not geometry alone
@@ -560,7 +560,7 @@ the existing Prim/PP_KIND model — NOT a renderer rewrite.
 
 ### v2.10.4 - Sub-row (lane) positioning on dense charts (user report 2026-07-18)
 **Report:** "When moving them around, if I'm in a row made of several sub-rows in the gantt chart, it doesn't work well with the positioning. Like it doesn't handle the sub-rows on the right side properly."
-- [x] Root cause A — lane packing freed a track at the occupant's **end date** while the bar paints through `start + widthDays - 1` (inclusive end + the `max(2, …)` width floor). Touching tasks (`a.end == b.start`) and 1-day tasks were packed onto ONE lane and painted on top of each other. `native/PowerPlannerAddin/GanttLayout.cpp:82-117` (Step 2). Fixed: tracks now record the last **painted** day and require the lane free strictly before the next task's start. Conformance fixture unaffected (genuinely-overlapping tasks stack exactly as before).
+- [x] Root cause A — lane packing freed a track at the occupant's **end date** while the bar paints through `start + widthDays - 1` (inclusive end + the `max(2, …)` width floor). Touching tasks (`a.end == b.start`) and 1-day tasks were packed onto ONE lane and painted on top of each other. `native/PowerGanttAddin/GanttLayout.cpp:82-117` (Step 2). Fixed: tracks now record the last **painted** day and require the lane free strictly before the next task's start. Conformance fixture unaffected (genuinely-overlapping tasks stack exactly as before).
 - [x] New e2e gate `trace_subrow_dense` (profile `subrow-dense`, 5 rows / 11 tasks / 2 milestones, three 3-lane rows). 7 invariants over the entity dump; verified RED on the pre-fix layout (`d1~d2`, `e1~e2` same-lane overlaps) and GREEN after. `native/tools/scenarios/trace_subrow_dense.json`, `native/tools/harness_driver.py`, `native/render/appbar-shot.cpp`
 - [x] **Defect B (UX): 50 % progress centre-steal.** Design: progress grip is **bottom half of the bar only**; top half + vertical mid stay `TaskBody` for date drag. `GanttHitTest` 1b + `ppops` checks + harness `FindTaskProgressEdge` aims at lower quartile. (2026-07-23)
 - [ ] **Defect C (open): lane churn.** Lane assignment is stateless greedy first-fit, so a date-only edit to ONE task re-packs the whole row: measured `A[0..15]/B[3..20]/C[7..25]` lanes 0/1/2 → after moving A only, lanes become A=0, B=0, C=1. Three bars jump when the user dragged one. A stable fix needs a persisted lane on `PpTask` (or a prior-lane hint into `LayoutGantt`), i.e. a model change.
@@ -574,7 +574,7 @@ the existing Prim/PP_KIND model — NOT a renderer rewrite.
 - [x] **Root cause B — `PP_ROWY` staleness was fail-OPEN.** `CommitSceneCache` populates `g_cacheRowYJson` (the rebased tag) but never `g_cacheRowYPreRebase`, and `InvalidateSceneCache` clears it — so after every full rebuild the change-detector had no baseline and the `!empty() && changed` guard **skipped the rewrite entirely**. The first fast-path edit after any rebuild could re-pack lanes and leave `PP_ROWY` describing the previous geometry; since `BuildRowBands` caches row bands keyed on that same tag, the staleness is self-reinforcing (hover wash, row hit zones and drag drop-targets sit at the old lane boundaries). `GanttBuilder.cpp` — an unknown baseline now means *rewrite*, not *assume unchanged*.
 - [x] **Recording-based gate** `window_ports_inside_axis_header` in `native/tools/session_report.py`: asserts the chrome band matches the painted `HEADER_BAND` entity (±4 px) and that both port rects lie inside it. Verified RED on `20260718-221333-158-15824` (delta 217 px) and on two further recordings (delta 124 px); "not applicable" on recordings predating the entity dump. **This defect class is invisible to the COM-free harness by construction** — it requires both the chrome state and the COM entity dump, which only a recording carries.
 - [ ] **Defect E (open, likely the biggest remaining): the overlay repositions ONLY on a 150 ms poll.** No `WM_WINDOWPOSCHANGED`, no scroll hook, no `WM_DISPLAYCHANGE`, no `WM_DPICHANGED` anywhere; the wheel is swallowed and re-posted with `PostMessageW`, so PowerPoint scrolls on its own schedule. During any scroll/zoom/resize/Ribbon-toggle the whole overlay trails the chart by up to 150 ms and snaps. Needs an event-driven reposition (candidate: `SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE)` on the host window) — a design change, not a patch.
-- [ ] **Defect F (open): the add-in never declares a DPI awareness mode.** No manifest anywhere in the repo, no `SetProcessDpiAware*`/`SetThreadDpiAwarenessContext` in `native/PowerPlannerAddin/`. `Overlay.cpp` documents the per-monitor-aware assumption but nothing enforces it, and PowerPoint's mode is user-switchable. **Every harness under `native/render/` calls `SetProcessDPIAware()`; the shipping add-in does not** — a harness/product DPI divergence compiled into the build. Would produce a persistent, proportional offset rather than a transient one.
+- [ ] **Defect F (open): the add-in never declares a DPI awareness mode.** No manifest anywhere in the repo, no `SetProcessDpiAware*`/`SetThreadDpiAwarenessContext` in `native/PowerGanttAddin/`. `Overlay.cpp` documents the per-monitor-aware assumption but nothing enforces it, and PowerPoint's mode is user-switchable. **Every harness under `native/render/` calls `SetProcessDPIAware()`; the shipping add-in does not** — a harness/product DPI divergence compiled into the build. Would produce a persistent, proportional offset rather than a transient one.
 - [ ] **Defect G (open): `g_dpi` is one process-wide global shared by windows on possibly different monitors.** Probed from the overlay in `ShowOverlayForChartRect`, then again from the app bar in `ShowAppBar` — later in the SAME tick, after the overlay was already sized from the previous value. The app bar docks below the chart and can land on another monitor; a flip there also calls `InvalidateHitSnapshot()`, discarding the snapshot built earlier in that tick.
 
 ### v2.4.4 - Installer + Packaging (deferred — product Backlog)
@@ -638,7 +638,7 @@ the renderer places bars.
 **Goal:** Evidence at every layer, and explicit acknowledgement of what each layer cannot see.
 - [x] B4a: protocol unit tests — framing, timeout, revision conflict, origin rejection, token rejection, `NO_CLIENT`
 - [x] B4b: Playwright e2e — real browser + real bridge: `apply_batch` of a 12-task plan renders 12 bars; **one** Ctrl+Z reverts the whole batch; a mid-session user edit yields `REVISION_CONFLICT`
-- [x] B4c: **build-output gate** — test greps built `dist-template/PowerPlanner.html` and FAILS if any bridge symbol is present
+- [x] B4c: **build-output gate** — test greps built `dist-template/PowerGantt.html` and FAILS if any bridge symbol is present
 - [x] B4d: perf — single call < 100 ms; `apply_batch` of 50 ops < 300 ms with exactly 1 render commit and 1 history frame; reconnect < 2 s
 - [x] B4e: **LIVE DEMO** run 2026-08-07 — agent authored a 5-row / 10-task / 2-milestone / 3-dependency plan into the running dev app via real MCP calls. Measured: `apply_batch` 23 ops **40 ms**, single call **17 ms** (budget 100), `apply_batch` 50 ops **3 ms** (budget 300), `get_render` 13,377 bytes of SVG. **Found two defects invisible to every automated layer** — B2f unhandled reconnect rejection, and B3h stale token file (Windows kills bypass the SIGTERM unlink, so the page was handed a token for a dead server and retried a dead port forever). Confirms the design's own claim in §7: the automated layers cannot see a session whose server goes away
 - [ ] B4e-user: **USER VISUAL/FEEL GATE** — still open; an agent must not self-close this (consistent with the user-milestone-gate convention). The chart renders correctly and fast, but whether *watching* it build feels right is the user's call. Known nit: `new_document` leaves `blankDocument`'s empty "Row 1" above the agent's rows
@@ -848,7 +848,7 @@ This is the first slice run under the v2.15 working model, so it follows DECISIO
 ## v2.17 — Release model and in-app update, as PowerScroll does it
 > **Owner directive 2026-10-26:** *"I want the release model to be the same as what I'm using in PowerScroll. That means basically an embedded HTML application all in one file... Do a first release and then once you're done with that first release, check how the software update is working in PowerScroll. With the settings and the update panels, pop-ups and processes, I want all of that taken over one-to-one."*
 
-Web only. The release half shipped as v2.16.0 on 2026-10-26 — the first PowerPlanner release to carry a downloadable artifact. This major covers the update half: a settings popup with an About & updates section that checks GitHub, and an A/B swap that rewrites the open file in place.
+Web only. The release half shipped as v2.16.0 on 2026-10-26 — the first PowerGantt release to carry a downloadable artifact. This major covers the update half: a settings popup with an About & updates section that checks GitHub, and an A/B swap that rewrites the open file in place.
 
 The whole mechanism rests on one fact, learned the hard way in PowerScroll and recorded as DECISIONS.md D9: GitHub sends no CORS header on release-asset downloads, so the only route a page can fetch a new build from is the committed `dist-template/index.html` on raw.githubusercontent.com, pinned to the release tag.
 

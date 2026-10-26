@@ -2,9 +2,9 @@
 
 Native-specific requirements for the PowerPoint COM add-in on-slide Gantt editor implementing a think-cell-style interaction model. Feature tag: IXC (interaction conventions).
 
-Traces up to: `AGENTS.md` (UX walkthrough gate + interaction conventions checklist), `PLAN.md` (Phase 11 slices v2.6.0–v2.6.7, B1/B2, UF-10/UF-11/UF-12, M1/M6, N4/N5), `../srs/SRS-editing.md`, `../interaction.md`, `docs/onslide-ux-inventory.md`, `native/PowerPlannerAddin/Overlay.cpp`, `GanttHitTest.*`, app bar and editor state machines.
+Traces up to: `AGENTS.md` (UX walkthrough gate + interaction conventions checklist), `PLAN.md` (Phase 11 slices v2.6.0–v2.6.7, B1/B2, UF-10/UF-11/UF-12, M1/M6, N4/N5), `../srs/SRS-editing.md`, `../interaction.md`, `docs/onslide-ux-inventory.md`, `native/PowerGanttAddin/Overlay.cpp`, `GanttHitTest.*`, app bar and editor state machines.
 
-Reference impl: `native/PowerPlannerAddin/` (drag gesture handling in Overlay, live preview paint, commit paths for inline/card/drag, affordance hit zones, keyboard routing, custom cursor/appbar updates).
+Reference impl: `native/PowerGanttAddin/` (drag gesture handling in Overlay, live preview paint, commit paths for inline/card/drag, affordance hit zones, keyboard routing, custom cursor/appbar updates).
 
 ## Direct Manipulation First
 

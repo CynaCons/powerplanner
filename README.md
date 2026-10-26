@@ -1,8 +1,8 @@
-# PowerPlanner
+# PowerGantt
 
 **Calendar-true Gantt charts you can actually present.**
 
-PowerPlanner is a presentation-grade Gantt chart authoring tool — task bars, milestones, brackets, dependency arrows, critical path highlighting, baseline drift tracking, today line, percent-complete fills — with every element directly editable by dragging, typing, or via a Linear-style Cmd+K command palette.
+PowerGantt is a presentation-grade Gantt chart authoring tool — task bars, milestones, brackets, dependency arrows, critical path highlighting, baseline drift tracking, today line, percent-complete fills — with every element directly editable by dragging, typing, or via a Linear-style Cmd+K command palette.
 
 It ships as a **single-file portable HTML app** — no install, no account, no server. Open the file in any modern browser and start planning. Press <kbd>Ctrl+S</kbd> to save; your chart is embedded back into the same HTML file.
 
@@ -10,7 +10,7 @@ It ships as a **single-file portable HTML app** — no install, no account, no s
 
 ### Web app
 
-![PowerPlanner web app](docs/media/web-app.png)
+![PowerGantt web app](docs/media/web-app.png)
 
 *The single-file web app — switch time scales (week → month → quarter → year → fit), edit dates by dragging, and export.*
 
@@ -77,7 +77,7 @@ Every gesture and command is one undo entry, every command also lives in the rig
 
 ## Get started
 
-1. Download **`PowerPlanner.html`** from the [latest release](https://github.com/CynaCons/powerplanner/releases/latest).
+1. Download **`PowerGantt.html`** from the [latest release](https://github.com/CynaCons/powerplanner/releases/latest).
 2. Open it in any browser (Chrome / Edge / Safari / Firefox).
 3. Start editing.
 4. Press <kbd>Ctrl+S</kbd> to save back to the HTML file.
@@ -144,11 +144,11 @@ Light by default, with Dark and Print (high-contrast for paper-quality output) a
 
 ## How it works
 
-Each PowerPlanner file is a standalone HTML application. When you save, the chart is serialized to JSON and embedded inside a `<script type="application/json" id="powerplanner-data">` tag in the same HTML file. Reopen the file to continue editing. The renderer is pure SVG, so PNG/SVG/PDF exports are crisp at any resolution.
+Each PowerGantt file is a standalone HTML application. When you save, the chart is serialized to JSON and embedded inside a `<script type="application/json" id="powerplanner-data">` tag in the same HTML file. Reopen the file to continue editing. The renderer is pure SVG, so PNG/SVG/PDF exports are crisp at any resolution.
 
 ## Roadmap
 
-PowerPlanner is built so the same engine powers multiple surfaces:
+PowerGantt is built so the same engine powers multiple surfaces:
 
 - ✅ **Portable HTML** — this release
 - 🟡 **Web app** — hosted edition with accounts and sharing
@@ -164,7 +164,7 @@ npm install
 npm run addin:certs      # Trust the localhost dev certificate (run once per machine)
 npm run dev              # Dev server at http://localhost:5180
 npm run dev:addin        # HTTPS dev server for PowerPoint sideload (port 5180)
-npm run build:template   # Build standalone PowerPlanner.html → dist-template/
+npm run build:template   # Build standalone PowerGantt.html → dist-template/
 npm test                 # Unit tests (vitest)
 npm run test:e2e         # Playwright E2E tests
 ```

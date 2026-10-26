@@ -12,14 +12,14 @@ Reference impl: `native/` (`docs/native-addin.md`).
 
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
-| SRS-PPT-001 | The add-in shall load into PowerPoint desktop at startup and present a "PowerPlanner" ribbon tab. | The user needs a discoverable entry point. | Demo (verified, N1) | `native/PowerPlannerAddin/Connect.cpp`; docs/native-addin.md |
-| SRS-PPT-002 | The add-in shall register per-user without administrator rights. | Lower install friction; matches think-cell-style deployment. | Demo (HKCU registry, verified N1) | `native/PowerPlannerAddin/dllmain.cpp` (`AtlSetPerUserRegistration`); `Connect.rgs` |
+| SRS-PPT-001 | The add-in shall load into PowerPoint desktop at startup and present a "PowerGantt" ribbon tab. | The user needs a discoverable entry point. | Demo (verified, N1) | `native/PowerGanttAddin/Connect.cpp`; docs/native-addin.md |
+| SRS-PPT-002 | The add-in shall register per-user without administrator rights. | Lower install friction; matches think-cell-style deployment. | Demo (HKCU registry, verified N1) | `native/PowerGanttAddin/dllmain.cpp` (`AtlSetPerUserRegistration`); `Connect.rgs` |
 
 ## Native emission
 
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
-| SRS-PPT-010 | "Insert Gantt" shall emit the chart as **native, editable** PowerPoint shapes (rectangles, diamonds, elbow connectors, text boxes) — no images or embedded SVG. | Native shapes remain editable after the add-in is uninstalled; that is the core value. | Demo | `native/PowerPlannerAddin/GanttBuilder.cpp`; visual-vocabulary mapping |
+| SRS-PPT-010 | "Insert Gantt" shall emit the chart as **native, editable** PowerPoint shapes (rectangles, diamonds, elbow connectors, text boxes) — no images or embedded SVG. | Native shapes remain editable after the add-in is uninstalled; that is the core value. | Demo | `native/PowerGanttAddin/GanttBuilder.cpp`; visual-vocabulary mapping |
 | SRS-PPT-011 | Shape positions shall be computed by a C++ layout that conforms to `../layout.md`, mapping abstract days/row-slots to slide points (`ptPerDay`). | The PowerPoint chart must match the web chart's geometry. | Test: native conformance over `spec/fixtures/*` at ptPerDay=1 (N2) | layout; SRS-LAY-001 |
 | SRS-PPT-012 | Every emitted shape shall be tagged (`PP_KIND`, `PP_ID`) and grouped under a single chart root. | Enables hit-testing, identity, and round-trip. | Demo | interaction §identity |
 | SRS-PPT-013 | Colour shall be converted from the document `#RRGGBB` to PowerPoint BGR by the add-in. | PowerPoint stores colour as BGR; conversion is the surface's job. | Test (hex→bgr unit) | visual-vocabulary |

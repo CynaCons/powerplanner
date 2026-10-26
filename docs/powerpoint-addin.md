@@ -1,13 +1,13 @@
 # PowerPoint add-in (v2.3.0 alpha)
 
-PowerPlanner ships as an Office.js task-pane add-in for PowerPoint. The
+PowerGantt ships as an Office.js task-pane add-in for PowerPoint. The
 add-in hosts the full editor inside a PowerPoint task pane and emits
 **native, vector-editable shapes** into the active slide — not a
 screenshot, not an embedded SVG.
 
 ## What works in this alpha
 
-- Task pane mounts the full PowerPlanner editor inside PowerPoint
+- Task pane mounts the full PowerGantt editor inside PowerPoint
 - "Insert into slide" emits per-task rectangles, per-milestone diamonds,
   dependency arrows (elbow connectors), and row-label text boxes
 - All shapes are tagged (`PP_KIND`, `PP_ID`) for round-trip
@@ -58,7 +58,7 @@ from `office-addin-dev-certs`.
 1. Open PowerPoint Online → **Home → Add-ins → More add-ins → Upload My
    Add-in**.
 2. Pick `manifest.xml` from the repo root.
-3. The PowerPlanner button appears on the Home ribbon.
+3. The PowerGantt button appears on the Home ribbon.
 
 ## Production deployment
 
@@ -80,7 +80,7 @@ src/taskpane/TaskPaneApp.tsx    Wraps <App/> + insert/pull controls
 src/taskpane/officeBridge.ts    Native shape emission + round-trip read
 ```
 
-The bridge reuses PowerPlanner's `layoutDocument()` function unchanged,
+The bridge reuses PowerGantt's `layoutDocument()` function unchanged,
 just with `pxPerDay` interpreted as points-per-day. Slide coordinates are
 in **points** (1pt = 1/72"), not EMU; a 16:9 slide is 960 × 540 pt.
 

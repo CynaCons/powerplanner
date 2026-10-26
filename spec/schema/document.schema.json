@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://powerplanner.dev/spec/document.schema.json",
-  "title": "PowerPlanner GanttDocument",
-  "description": "Canonical PowerPlanner document. Mirrors src/types/document.ts and src/persistence/schema.ts. Both the web and PowerPoint implementations validate against this contract.",
+  "title": "PowerGantt GanttDocument",
+  "description": "Canonical PowerGantt document. Mirrors src/types/document.ts and src/persistence/schema.ts. Both the web and PowerPoint implementations validate against this contract.",
   "type": "object",
   "required": ["schemaVersion", "title", "calendar", "rows", "tasks", "milestones", "brackets", "dependencies", "markers", "style"],
   "additionalProperties": true,

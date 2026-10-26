@@ -1,6 +1,6 @@
-# Releasing PowerPlanner
+# Releasing PowerGantt
 
-The canonical runbook for the PowerPlanner web application and its GitHub Pages
+The canonical runbook for the PowerGantt web application and its GitHub Pages
 site. Read it before changing a version, creating a tag, or diagnosing a
 deployment. After a deployment, update [`DEPLOYMENTS.md`](DEPLOYMENTS.md) from
 **observed** production state, never from what you expect to be true.
@@ -22,7 +22,7 @@ The format mirrors PowerScroll's, by owner directive — see
 Do not release merely because a version-looking file changed. First work out
 which deployed surface consumes it.
 
-**Not surfaces yet.** PowerPlanner publishes nothing to npm and nothing to the
+**Not surfaces yet.** PowerGantt publishes nothing to npm and nothing to the
 MCP Registry. The `powerplanner-web` agent bridge is dev-only by construction
 and is stripped from production and portable builds. If the bridge ever ships as
 an installable package, this runbook gains those two surfaces and their
@@ -79,7 +79,7 @@ ordering rules — see PowerScroll's runbook for the shape.
    ```
 
 4. Smoke-test **both** the dev app and the built template: the chart renders and
-   the browser console is clean. Open `dist-template/PowerPlanner.html` directly
+   the browser console is clean. Open `dist-template/PowerGantt.html` directly
    from the filesystem — the portable build has to work with no server, and that
    is a different code path from `npm run dev`.
 5. Verify a round-trip on the built template: save a chart, reopen the saved
@@ -89,9 +89,9 @@ ordering rules — see PowerScroll's runbook for the shape.
    metadata, `PLAN.md` closures, SRS updates and this ledger. Push only when
    the owner asks.
 7. Create and push the annotated tag only when the owner asks.
-   `.github/workflows/release.yml` builds and attaches `PowerPlanner.html`.
+   `.github/workflows/release.yml` builds and attaches `PowerGantt.html`.
 8. Verify rather than trusting the workflow's exit text: the release is
-   non-draft, `PowerPlanner.html` is attached with a digest, the asset opens in
+   non-draft, `PowerGantt.html` is attached with a digest, the asset opens in
    a browser, and Pages completed from the expected commit.
 9. Update [`DEPLOYMENTS.md`](DEPLOYMENTS.md) from what you observed.
 

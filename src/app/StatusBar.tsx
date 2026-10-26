@@ -12,6 +12,12 @@ export function StatusBar() {
   const pxPerDay = useViewportStore((s) => s.pxPerDay);
   const startDate = useViewportStore((s) => s.startDate);
   const selection = useSelectionStore((s) => s.items);
+  // Selecting a bar also selects the row it sits on, so the gutter highlights
+  // with it. That companion row is not a second thing the user picked, so it
+  // is not counted here.
+  const selectedCount = selection.some((i) => i.kind !== 'row')
+    ? selection.filter((i) => i.kind !== 'row').length
+    : selection.length;
 
   // Absorbed from the inspector's Statistics section (PLAN.md v2.13.0 / C0a) —
   // read-only telemetry belongs in the status bar, not in a 320px column.
@@ -35,7 +41,7 @@ export function StatusBar() {
           </span>
         )}
         <span>
-          scale: {scale} · {pxPerDay.toFixed(2)} px/day · {selection.length} selected
+          scale: {scale} · {pxPerDay.toFixed(2)} px/day · {selectedCount} selected
         </span>
         {/* A released single-file HTML must say which build it is. */}
         <span className="app-status-version">v{APP_VERSION}</span>

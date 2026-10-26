@@ -35,18 +35,24 @@ jobs:
       - run: npm test
 
       - name: Copy release artifact
-        run: cp dist-template/index.html PowerPlanner.html
+        run: |
+          cp dist-template/index.html PowerGantt.html
+          # Byte-identical compatibility alias. Builds released before the
+          # rename look for an asset called PowerPlanner.html, and the updater
+          # inside them cannot be changed retroactively.
+          cp dist-template/index.html PowerPlanner.html
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            PowerGantt.html
             PowerPlanner.html
           generate_release_notes: true
           body: |
-            ## PowerPlanner ${{ github.ref_name }}
+            ## PowerGantt ${{ github.ref_name }}
 
-            **Download `PowerPlanner.html`** below — open it in a browser and start planning.
+            **Download `PowerGantt.html`** below — open it in a browser and start planning.
 
             Calendar-true Gantt charts you can actually present. No install, no account,
             no server: one file that holds the app and your chart together.

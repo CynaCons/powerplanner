@@ -1,7 +1,7 @@
 # SRS - Native Overlay Lifecycle, Visibility & Rendering Stability
 
 Native-specific requirements for the PowerPoint COM add-in overlay windows:
-`PowerPlannerOverlay`, `PowerPlannerAppBar`, editors, menus, and future
+`PowerGanttOverlay`, `PowerGanttAppBar`, editors, menus, and future
 floating windows. These windows are top-level desktop windows, so visibility,
 positioning, teardown, and repaint behavior must make them behave like part of
 the active PowerPoint slide rather than independent desktop chrome.
@@ -13,7 +13,7 @@ Traces up to: `../srs/SRS-powerpoint.md`, `../interaction.md`,
 `spec/srs-native/SRS-SelectionChromeVisuals.md`, and
 `native/tools/harness_driver.py`.
 
-Reference impl: `native/PowerPlannerAddin/` (Overlay.cpp, GanttHitTest.*,
+Reference impl: `native/PowerGanttAddin/` (Overlay.cpp, GanttHitTest.*,
 GanttAppBar.h, app-bar/editor window classes, harness seams).
 
 ## Visibility Gating
@@ -22,7 +22,7 @@ GanttAppBar.h, app-bar/editor window classes, harness seams).
 |----|-------------|-----------|--------------|-------|
 | SR-LIFE-01 | The overlay runtime shall evaluate exactly one visibility decision function per tick as the single authority for the shown/hidden state of all overlay windows; no code path may show a window outside that decision. | A single authority prevents stale top-level windows from appearing over other applications or monitors. | Review Overlay show paths; harness state dumps assert all overlay/editor/appbar windows share the same gate result. | Legacy SR-LIFE-01; Overlay Tick; IsHostActiveForOverlayChrome |
 | SR-LIFE-02 | The visibility decision shall require all host-state criteria: the tracked document root HWND is foreground or owns the foreground overlay/editor/popup, the presentation window is visible and not minimized, the tracked chart is present on the currently displayed slide, and normal edit view is active rather than slideshow, print preview, or protected/read-only view. | PID-only focus checks are too broad and caused chrome to paint outside the intended editing surface. | Harness scenarios `overlay-deactivate`, `overlay-minimize`, `overlay-monitor-move`, and slideshow/view guards; assert false gate hides every window. | Legacy SR-LIFE-02; host-active audit; Overlay foreground/window checks |
-| SR-LIFE-03 | When the visibility decision turns false, all overlay windows shall be hidden within one tick (<=200 ms), including editors and menus owned by the overlay. | Switching apps, slides, monitors, or modes must remove all PowerPlanner pixels quickly. | Trace pre/immed/+1 captures for deactivate/minimize/slide-change; DumpWindowStateForTest visible=false for every PowerPlanner window. | Legacy SR-LIFE-03; overlay lifecycle scenarios |
+| SR-LIFE-03 | When the visibility decision turns false, all overlay windows shall be hidden within one tick (<=200 ms), including editors and menus owned by the overlay. | Switching apps, slides, monitors, or modes must remove all PowerGantt pixels quickly. | Trace pre/immed/+1 captures for deactivate/minimize/slide-change; DumpWindowStateForTest visible=false for every PowerGantt window. | Legacy SR-LIFE-03; overlay lifecycle scenarios |
 | SR-LIFE-04 | Test overrides such as `Overlay_SetHostActiveOverrideForTest` shall be compiled or hard-gated so they cannot activate in a normal add-in session unless the harness arms test mode through a dedicated in-process entry point. | Test seams must not leak into user sessions and force chrome visible on live desktops. | Code review of override guards; harness-only activation test; normal add-in smoke test shows overrides inert. | Legacy SR-LIFE-04; test-mode seam |
 
 ## Positioning And Multi-Monitor
@@ -38,8 +38,8 @@ GanttAppBar.h, app-bar/editor window classes, harness seams).
 
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
-| SR-LIFE-09 | `OverlayStop`, add-in disconnection, document close, and PowerPoint exit shall destroy all overlay windows so zero `PowerPlanner*` top-level windows remain on the desktop. | Hidden but leaked windows can reappear, retain z-order, or pollute later harness runs. | Desktop sweep enumerates top-level windows after stop/close/exit; fails on any `PowerPlanner*` survivor. | Legacy SR-LIFE-09; OverlayStop; harness cleanup |
-| SR-LIFE-10 | Harness executions such as ppoverlay, traces, and appbar-shot shall clean up all overlay windows even when a stage fails or PowerPoint is taskkilled, with teardown verifying no `PowerPlanner*` windows remain. | Failed automation must not leave chrome on a user's live desktop. | Harness teardown sweep; failure-path tests; optional guard that refuses to attach to a live user PowerPoint where applicable. | Legacy SR-LIFE-10; harness_driver teardown |
+| SR-LIFE-09 | `OverlayStop`, add-in disconnection, document close, and PowerPoint exit shall destroy all overlay windows so zero `PowerGantt*` top-level windows remain on the desktop. | Hidden but leaked windows can reappear, retain z-order, or pollute later harness runs. | Desktop sweep enumerates top-level windows after stop/close/exit; fails on any `PowerGantt*` survivor. | Legacy SR-LIFE-09; OverlayStop; harness cleanup |
+| SR-LIFE-10 | Harness executions such as ppoverlay, traces, and appbar-shot shall clean up all overlay windows even when a stage fails or PowerPoint is taskkilled, with teardown verifying no `PowerGantt*` windows remain. | Failed automation must not leave chrome on a user's live desktop. | Harness teardown sweep; failure-path tests; optional guard that refuses to attach to a live user PowerPoint where applicable. | Legacy SR-LIFE-10; harness_driver teardown |
 
 ## Rendering Stability
 

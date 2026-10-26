@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type SelectableKind = 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker';
+export type SelectableKind = 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker' | 'row';
 
 export interface Selectable {
   kind: SelectableKind;

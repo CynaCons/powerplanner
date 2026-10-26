@@ -2,9 +2,9 @@
 
 Native-specific requirements for the PowerPoint COM add-in on-slide experience. Feature tags: SHP (shape/component), DOCK (appbar positioning), BAR (contextual app bar), THEME (coherence), SEL (selection model).
 
-Traces up to: `../srs/SRS-powerpoint.md`, `../interaction.md`, `docs/onslide-experience-spec.md`, `docs/design-tokens.md`, `native/PowerPlannerAddin/GanttTheme.h`.
+Traces up to: `../srs/SRS-powerpoint.md`, `../interaction.md`, `docs/onslide-experience-spec.md`, `docs/design-tokens.md`, `native/PowerGanttAddin/GanttTheme.h`.
 
-Reference impl: `native/PowerPlannerAddin/` (Overlay.cpp, GanttBuilder.cpp, GanttHitTest.*, GanttAppBar.h, GanttCommandRegistry.h).
+Reference impl: `native/PowerGanttAddin/` (Overlay.cpp, GanttBuilder.cpp, GanttHitTest.*, GanttAppBar.h, GanttCommandRegistry.h).
 
 ## Component as Selectable Shape (PP semantics) — SHP
 

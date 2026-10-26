@@ -1,9 +1,9 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Trash2, SlidersHorizontal, Brackets as BracketIcon } from 'lucide-react';
+import { Trash2, SlidersHorizontal, Brackets as BracketIcon, Plus, Rows3 } from 'lucide-react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
-import { addDays } from '../utils/dates';
+import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 import { ColorPalette } from './ColorPalette';
 import { LabelPositionPicker } from './LabelPositionPicker';
@@ -25,11 +25,18 @@ export function SelectionGroup() {
 
   if (items.length === 0) return null;
 
-  if (items.length > 1) {
+  // The thing you clicked owns the bar; the row it sits on is selected too,
+  // but only so the gutter highlights with it. Keying off the whole selection
+  // instead would mean clicking a bar showed the ROW's actions, and colour,
+  // dates, percent and notes would have no home at all.
+  const sel = items[0];
+  if (sel.kind === 'row') return <RowFields rowId={sel.id} />;
+
+  // A bar plus its row is two items by design, so it is not a multi-select.
+  const isBarWithItsRow = items.length === 2 && items[1]?.kind === 'row';
+  if (items.length > 1 && !isBarWithItsRow) {
     return <MultiFields count={items.length} />;
   }
-
-  const sel = items[0];
   if (sel.kind === 'task') {
     const task = doc.tasks.find((t) => t.id === sel.id);
     return task ? <TaskFields task={task} /> : null;
@@ -54,15 +61,15 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function LabelInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <input
-      className="cmdbar__input"
-      aria-label="Label"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
+/**
+ * What is selected, named but not editable here.
+ *
+ * The bar is for quick, context-dependent actions; renaming belongs on the
+ * name itself, in the row gutter (owner directive 2026-10-26). Everything
+ * else lives on the right-click menu.
+ */
+function SelectionName({ value }: { value: string }) {
+  return <span className="cmdbar__selname" title={`${value} — rename it in the row list`}>{value}</span>;
 }
 
 function Nudge({ label, title, onClick }: { label: string; title: string; onClick: () => void }) {
@@ -188,7 +195,7 @@ function TaskFields({ task }: { task: Task }) {
 
   return (
     <Group label="Task">
-      <LabelInput value={task.label} onChange={(label) => updateTask(task.id, { label })} />
+      <SelectionName value={task.label} />
       <ColorPalette value={task.color ?? '#1F4E79'} onChange={(color) => updateTask(task.id, { color })} />
       <Nudge label="−1d" title="Move a day earlier" onClick={() => shift(-1)} />
       <Nudge label="+1d" title="Move a day later" onClick={() => shift(1)} />
@@ -238,7 +245,7 @@ function MilestoneFields({ milestone }: { milestone: Milestone }) {
 
   return (
     <Group label="Milestone">
-      <LabelInput value={milestone.label} onChange={(label) => update(milestone.id, { label })} />
+      <SelectionName value={milestone.label} />
       <Nudge label="−1d" title="Move a day earlier" onClick={() => update(milestone.id, { date: addDays(milestone.date, -1) })} />
       <Nudge label="+1d" title="Move a day later" onClick={() => update(milestone.id, { date: addDays(milestone.date, 1) })} />
       <EditPopover title="Edit milestone">
@@ -264,7 +271,7 @@ function BracketFields({ bracket }: { bracket: Bracket }) {
 
   return (
     <Group label="Bracket">
-      <LabelInput value={bracket.label} onChange={(label) => update(bracket.id, { label })} />
+      <SelectionName value={bracket.label} />
       <EditPopover title="Edit bracket">
         <Field label="Start">
           <input type="date" className="cmdbar__select" value={bracket.start} onChange={(e) => update(bracket.id, { start: e.target.value })} />
@@ -274,6 +281,51 @@ function BracketFields({ bracket }: { bracket: Bracket }) {
         </Field>
       </EditPopover>
       <DeleteButton what="bracket" onClick={() => { remove(bracket.id); clear(); }} />
+    </Group>
+  );
+}
+
+function RowFields({ rowId }: { rowId: string }) {
+  const doc = useDocumentStore((s) => s.doc);
+  const addTask = useDocumentStore((s) => s.addTask);
+  const addRow = useDocumentStore((s) => s.addRow);
+  const moveRow = useDocumentStore((s) => s.moveRow);
+  const deleteRow = useDocumentStore((s) => s.deleteRow);
+  const setSelection = useSelectionStore((s) => s.setSelection);
+  const clear = useSelectionStore((s) => s.clear);
+
+  const row = doc.rows.find((r) => r.id === rowId);
+  if (!row) return null;
+  const index = doc.rows.findIndex((r) => r.id === rowId);
+  const onRow = doc.tasks.filter((t) => t.rowId === rowId);
+
+  const addTaskHere = () => {
+    const start = onRow.length
+      ? onRow.reduce((a, t) => (t.end > a ? t.end : a), onRow[0].end)
+      : todayISO();
+    const id = newId('task');
+    addTask({ id, rowId, label: 'New task', start, end: addDays(start, 7), percentComplete: 0 });
+    setSelection([{ kind: 'task', id }, { kind: 'row', id: rowId }]);
+  };
+
+  const addRowBelow = () => {
+    const id = newId('row');
+    addRow({ id, label: 'New row', groupId: row.groupId ?? null });
+    moveRow(id, index + 1);
+    setSelection([{ kind: 'row', id }]);
+  };
+
+  return (
+    <Group label="Row">
+      <SelectionName value={row.label} />
+      <button className="cmdbar__btn" title="Add a task on this row" aria-label="Add task here" onClick={addTaskHere}>
+        <Plus size={14} strokeWidth={1.75} /><span>Task</span>
+      </button>
+      <button className="cmdbar__btn" title="Add a row below this one" aria-label="Add row below" onClick={addRowBelow}>
+        <Rows3 size={14} strokeWidth={1.75} /><span>Row below</span>
+      </button>
+      <WrapInBracket taskIds={onRow.map((t) => t.id)} />
+      <DeleteButton what="row" onClick={() => { deleteRow(rowId); clear(); }} />
     </Group>
   );
 }

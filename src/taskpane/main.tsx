@@ -20,7 +20,7 @@ function mountTaskPane(hostHint?: string) {
 }
 
 /**
- * PowerPlanner task pane entry point.
+ * PowerGantt task pane entry point.
  *
  * Office.js MUST load + signal ready before bridge calls work inside PowerPoint.
  * When opened in a normal browser (or Office is slow), fall back after a short

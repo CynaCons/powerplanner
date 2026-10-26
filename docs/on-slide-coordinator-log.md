@@ -107,7 +107,7 @@ Delivered on-slide UX (native C++ COM, no task pane): right-click editing menu
 insert, double-click inline title/row-label editing, Material chart-wide overlay, pure
 document-ops engine with a headless test seam, auto-reflow on drag.
 
-NOTE for the user: the rebuilt DLL is registered at native/build/PowerPlannerAddin.dll;
+NOTE for the user: the rebuilt DLL is registered at native/build/PowerGanttAddin.dll;
 RESTART PowerPoint to load the latest build. Remaining future work (not blocking): true
 per-pixel-alpha translucent hover band (current is opaque-thin due to color-key), editable
 task-bar labels, dark-mode theme, MSI/WiX installer (N6).

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 /**
- * `index.html`, not `PowerPlanner.html`: the former is committed (the in-app
+ * `index.html`, not `PowerGantt.html`: the former is committed (the in-app
  * updater fetches it from raw.githubusercontent.com at the release tag,
  * DECISIONS.md D9) while the latter is an untracked copy the release workflow
  * makes. Pointing at the tracked file means this gate is never skipped for

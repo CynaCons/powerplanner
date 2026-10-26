@@ -5,7 +5,7 @@ interface BrandLogoProps {
 }
 
 /**
- * PowerPlanner brand mark.
+ * PowerGantt brand mark.
  * Symbol: three offset Gantt bars on a stepped baseline, in a confident
  * indigo → violet → coral gradient. Wordmark uses the host typography
  * via `currentColor` so it adapts to dark / light / print themes.
@@ -17,7 +17,7 @@ export function BrandLogo({ variant = 'full', size = 22 }: BrandLogoProps) {
         width={size}
         height={size}
         viewBox="0 0 24 24"
-        aria-label="PowerPlanner"
+        aria-label="PowerGantt"
         role="img"
         style={{ display: 'block', flexShrink: 0 }}
       >
@@ -35,7 +35,7 @@ export function BrandLogo({ variant = 'full', size = 22 }: BrandLogoProps) {
       width={w}
       height={size}
       viewBox="0 0 140 22"
-      aria-label="PowerPlanner"
+      aria-label="PowerGantt"
       role="img"
       style={{ display: 'block', flexShrink: 0 }}
     >
@@ -54,7 +54,7 @@ export function BrandLogo({ variant = 'full', size = 22 }: BrandLogoProps) {
       >
         <tspan>Power</tspan>
         <tspan fontWeight={500} fillOpacity={0.78}>
-          Planner
+          Gantt
         </tspan>
       </text>
     </svg>

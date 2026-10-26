@@ -67,7 +67,7 @@ session recorder and is out of scope here.
 
 | ID | Requirement | Rationale | Verification | Trace |
 |----|-------------|-----------|--------------|-------|
-| SRS-ABR-050 | No bridge code shall be present in the portable single-file HTML build output. | The portable build is distributed to third parties; a remote-control channel must not travel with it. | Test (greps built `dist-template/PowerPlanner.html`) | design §6/T3; B4c |
+| SRS-ABR-050 | No bridge code shall be present in the portable single-file HTML build output. | The portable build is distributed to third parties; a remote-control channel must not travel with it. | Test (greps built `dist-template/PowerGantt.html`) | design §6/T3; B4c |
 | SRS-ABR-051 | Introducing the bridge shall not change portable HTML, JSON, or YAML round-trip behaviour. | Persistence is the product's core promise and is not in this feature's scope. | Test | `../srs/SRS-persistence.md` SRS-PERS-013; B4f |
 
 ## Visibility & user control

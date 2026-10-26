@@ -5,14 +5,14 @@ Written to be picked up cold; assumes no context.
 
 ## 1. Why there is an overlay at all
 
-PowerPlanner's deliverable is a **PowerPoint deck**, not an app window. The Gantt
+PowerGantt's deliverable is a **PowerPoint deck**, not an app window. The Gantt
 chart is authored as real native PowerPoint shapes (`CHART_ROOT`, a group of
 tagged children — see `GanttScene.h`). That is a hard requirement, not an
 implementation choice:
 
 - the deck must open and print correctly on a machine with no add-in installed
 - it must export to PDF/PNG, animate, and survive Save/Reopen round-trips
-- a colleague without PowerPlanner must be able to nudge a bar with the mouse
+- a colleague without PowerGantt must be able to nudge a bar with the mouse
 
 So the chart **must** be shapes.
 
@@ -154,7 +154,7 @@ chart and can legitimately land on a different monitor.
 
 **d. The add-in never declares a DPI awareness mode.** There is no manifest
 anywhere in the repo and no `SetProcessDpiAware*` / `SetThreadDpiAwarenessContext`
-call in `native/PowerPlannerAddin/`. The code documents the assumption —
+call in `native/PowerGanttAddin/`. The code documents the assumption —
 
 > "The overlay runs IN-PROCESS in POWERPNT.EXE, a per-monitor-DPI-aware process,
 > so COM coordinates … already come back in PowerPoint's DPI context"

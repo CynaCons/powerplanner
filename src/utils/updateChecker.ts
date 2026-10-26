@@ -15,8 +15,20 @@ import {
  * arbitrary and are not — each is a scar. See DECISIONS.md D9.
  */
 
+/**
+ * The REPOSITORY name, which did not change with the product name. Renaming it
+ * would break the update route for every build already in the wild, since the
+ * updater fetches raw.githubusercontent.com/<repo>/<tag>/... and ships inside
+ * each saved file. Change this only after the repository itself is renamed and
+ * GitHub's redirect is confirmed to serve raw content.
+ */
 export const GITHUB_REPO = 'CynaCons/powerplanner';
-export const RELEASE_ASSET_NAME = 'PowerPlanner.html';
+/**
+ * Both names, newest first. The app was PowerPlanner until 2026-10-26 and the
+ * release still ships a byte-identical alias under the old name, because the
+ * updater lives inside each saved file and older builds look for that one.
+ */
+export const RELEASE_ASSET_NAMES = ['PowerGantt.html', 'PowerPlanner.html'] as const;
 
 /**
  * How long a check is trusted before asking GitHub again.
@@ -149,7 +161,9 @@ export async function checkForUpdate(
       return upToDate;
     }
 
-    const asset = data.assets?.find((a: { name?: string }) => a.name === RELEASE_ASSET_NAME);
+    const asset = RELEASE_ASSET_NAMES
+      .map((name) => data.assets?.find((a: { name?: string }) => a.name === name))
+      .find(Boolean);
     const info: UpdateInfo = {
       available: true,
       latestVersion: latest,

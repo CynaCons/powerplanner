@@ -22,7 +22,7 @@ function inlineFavicon(): Plugin {
   };
 }
 
-// Rename the output to PowerPlanner.html and remove favicon asset (now inlined)
+// Rename the output to PowerGantt.html and remove favicon asset (now inlined)
 function renameOutput(): Plugin {
   return {
     name: 'powerplanner-rename-output',
@@ -30,7 +30,7 @@ function renameOutput(): Plugin {
     closeBundle() {
       const dir = 'dist-template';
       const indexPath = resolve(dir, 'index.html');
-      const namedPath = resolve(dir, 'PowerPlanner.html');
+      const namedPath = resolve(dir, 'PowerGantt.html');
       const faviconPath = resolve(dir, 'favicon.svg');
       if (existsSync(indexPath)) {
         renameSync(indexPath, namedPath);

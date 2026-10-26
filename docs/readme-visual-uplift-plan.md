@@ -1,6 +1,6 @@
 # README Visual Uplift — Plan (for grok build)
 
-**Goal:** Refresh the GitHub README so it showcases PowerPlanner's *latest and most
+**Goal:** Refresh the GitHub README so it showcases PowerGantt's *latest and most
 beautiful* visuals — the curated `gallery-*.png` cards rendered 2026-07-12 — instead
 of the older, smaller `native-v5-*` app-bar crops. This is a **docs-only** change:
 `README.md` + `docs/media/` assets. No source, spec, or native code changes. Do **not**

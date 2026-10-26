@@ -1,6 +1,6 @@
-# PowerPlanner Specification (the concept layer)
+# PowerGantt Specification (the concept layer)
 
-This directory is the **single source of truth** for what a PowerPlanner Gantt
+This directory is the **single source of truth** for what a PowerGantt Gantt
 chart *is* — independent of any rendering technology. It is the generic
 concept/design layer. Everything else is an *implementation* of this spec:
 

@@ -41,7 +41,7 @@ The native side already contains strong automation infrastructure that can serve
 - Harnesses under `native/render/`:
   - `overlay-test.cpp` — drives the full on-slide experience using posted `WM_MOUSE*` and `WM_HOTKEY` messages.
   - `reflow-test.cpp`, `render-harness.cpp`, `appbar-shot.cpp`, `showcase.cpp`, and supporting probes.
-- Input-neutral test seams in `native/PowerPlannerAddin/Overlay.h`:
+- Input-neutral test seams in `native/PowerGanttAddin/Overlay.h`:
   - `Overlay_SetCursorPosOverrideForTest`
   - `Overlay_SetHostActiveOverrideForTest`
   - `Overlay_GetSelectedIdForTest` / `Overlay_GetSelectedKindForTest`
@@ -268,7 +268,7 @@ i4b-latency-traces (v2.5.3, SR-SMO-02) — measured latency budgets, 2026-07-11:
 
 ## Files and Touch Points (updated for full completion)
 
-- `native/PowerPlannerAddin/Overlay.h` and `Overlay.cpp` (added Overlay_DumpChromeStateForTest for rich row bands, selection, drag, appbar state)
+- `native/PowerGanttAddin/Overlay.h` and `Overlay.cpp` (added Overlay_DumpChromeStateForTest for rich row bands, selection, drag, appbar state)
 - `native/render/appbar-shot.cpp` (added --report mode emitting REPORT: {json} + png)
 - New: `native/tools/harness_driver.py` (full reports, goldens, high-level, --report parsing, retries)
 - New: `native/tools/coordinator_bridge.py` (run_feedback_for_unit)

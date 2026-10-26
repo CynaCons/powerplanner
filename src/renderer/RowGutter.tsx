@@ -1,6 +1,8 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { Row } from '../types/document';
 import { useDocumentStore } from '../stores/documentStore';
+import { useSelectionStore } from '../stores/selectionStore';
+import { InlineLabel } from '../app/InlineLabel';
 
 interface Props {
   rows: Row[];
@@ -23,6 +25,10 @@ interface Props {
  */
 export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
   const updateRow = useDocumentStore((s) => s.updateRow);
+  const isSelected = useSelectionStore((s) => s.isSelected);
+  // Renaming belongs here, on the name itself, not in the bottom bar — the bar
+  // is for quick actions (owner directive 2026-10-26).
+  const [editing, setEditing] = useState<string | null>(null);
   const allRows = useDocumentStore((s) => s.doc.rows);
   const tasks = useDocumentStore((s) => s.doc.tasks);
 
@@ -61,7 +67,13 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
             data-pp-id={row.id}
             transform={`translate(0 ${rowOffsets[i]})`}
           >
-            <rect x={0} y={0} width={width} height={h} fill="transparent" />
+            <rect
+              x={0}
+              y={0}
+              width={width}
+              height={h}
+              fill={isSelected(row.id) ? 'var(--color-accent-soft)' : 'transparent'}
+            />
 
             {isGroup ? (
               <>
@@ -80,7 +92,15 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
                     fill="var(--color-text-dim)"
                   />
                 </g>
-                <text x={38} y={h / 2 + 4} fill="var(--color-text)" fontSize={12} fontWeight={600}>
+                <text
+                  x={38}
+                  y={h / 2 + 4}
+                  fill="var(--color-text)"
+                  fontSize={12}
+                  fontWeight={600}
+                  onDoubleClick={() => setEditing(row.id)}
+                  style={{ cursor: 'text' }}
+                >
                   {row.label}
                 </text>
               </>
@@ -90,9 +110,25 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
                 y={h / 2 + 4}
                 fill="var(--color-text-soft)"
                 fontSize={11}
+                onDoubleClick={() => setEditing(row.id)}
+                style={{ cursor: 'text' }}
               >
                 {row.label}
               </text>
+            )}
+            {editing === row.id && (
+              <InlineLabel
+                text={row.label}
+                x={8}
+                y={4}
+                width={width - 16}
+                height={h - 8}
+                onCommit={(text) => {
+                  if (text.trim()) updateRow(row.id, { label: text.trim() });
+                  setEditing(null);
+                }}
+                onCancel={() => setEditing(null)}
+              />
             )}
           </g>
         );

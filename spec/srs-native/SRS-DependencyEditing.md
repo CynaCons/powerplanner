@@ -16,7 +16,7 @@ Traces up to: `../srs/SRS-editing.md`, `../interaction.md`,
 `spec/srs-native/SRS-InteractionConventions.md`, and
 `native/tools/harness_driver.py`.
 
-Reference impl: `native/PowerPlannerAddin/` (Overlay.cpp, GanttHitTest.*,
+Reference impl: `native/PowerGanttAddin/` (Overlay.cpp, GanttHitTest.*,
 GanttAppBar.h, GanttBuilder.cpp, GanttScene dependency routing, PP_DOC
 dependency model).
 

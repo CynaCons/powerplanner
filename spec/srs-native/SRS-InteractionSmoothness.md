@@ -16,7 +16,7 @@ Traces up to: `../srs/SRS-editing.md`, `../interaction.md`,
 `spec/srs-native/SRS-InteractionConventions.md` (live preview SR-IXC-03..06),
 and `native/tools/harness_driver.py`.
 
-Reference impl: `native/PowerPlannerAddin/` (Overlay.cpp, GanttBuilder.cpp,
+Reference impl: `native/PowerGanttAddin/` (Overlay.cpp, GanttBuilder.cpp,
 GanttScene*, reconcile/update paths, event sink, inline/card editors, drag
 commit paint, render counters / paint timestamp instrumentation).
 
