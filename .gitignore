@@ -5,6 +5,7 @@ dist
 # only route GitHub serves with CORS headers. Ignoring it breaks updating for
 # every build that ships (DECISIONS.md D9). PowerPlanner.html is a byte-identical
 # copy the release workflow makes from it, so only one of the two is tracked.
+dist-template/PowerRoadmap.html
 dist-template/PowerGantt.html
 dist-template/PowerPlanner.html
 .vite
