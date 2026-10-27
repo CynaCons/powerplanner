@@ -191,7 +191,9 @@ export function CommandBar() {
         </BarButton>
       </div>
 
-      {idle && <span className="cmdbar__hint">Select an item to edit it</span>}
+      {idle && (
+        <span className="cmdbar__hint">Select for quick actions · right-click for the rest</span>
+      )}
     </div>
   );
 }

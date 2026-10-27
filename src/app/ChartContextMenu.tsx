@@ -2,9 +2,10 @@ import { useContextMenuStore } from '../stores/contextMenuStore';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useEditStore } from '../stores/editStore';
+import { useViewStore } from '../stores/viewStore';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { LabelPositionPicker } from './LabelPositionPicker';
-import { Pencil, Copy, Trash2, Plus, Diamond, Brackets as BracketIcon, Flag, GitBranch, Palette, ArrowUp, ArrowDown, FolderPlus, FolderInput } from 'lucide-react';
+import { Pencil, Copy, Trash2, Plus, Diamond, Brackets as BracketIcon, Flag, GitBranch, SlidersHorizontal, ArrowUp, ArrowDown, FolderPlus, FolderInput } from 'lucide-react';
 import { newId } from '../utils/ids';
 import { addDays, todayISO } from '../utils/dates';
 import type { DependencyType, LabelPlacement } from '../types/document';
@@ -50,6 +51,17 @@ export function ChartContextMenu() {
   const doc = useDocumentStore((s) => s.doc);
   const docActions = useDocumentStore();
   const setSelection = useSelectionStore((s) => s.setSelection);
+  const setDetailsOpen = useViewStore((s) => s.setDetailsOpen);
+
+  /**
+   * Select the thing, then open its details. Selecting first is what makes the
+   * dialog know what it is editing, and it leaves the quick actions in the bar
+   * pointing at the same element the user just right-clicked.
+   */
+  const openDetails = (id: string, kind: 'task' | 'milestone' | 'bracket' | 'row') => {
+    setSelection([{ kind, id }]);
+    setDetailsOpen(true);
+  };
   const beginEdit = useEditStore((s) => s.beginEdit);
 
   if (!open || !target) return null;
@@ -110,11 +122,10 @@ export function ChartContextMenu() {
 
     items.push({
       id: 'rename-row',
-      label: 'Rename row',
+      label: 'Rename row…',
       icon: Pencil,
       onClick: () => {
-        const next = window.prompt('Row name', row.label);
-        if (next !== null && next.trim()) docActions.updateRow(rowId, { label: next.trim() });
+        openDetails(rowId, 'row');
       },
     });
     items.push({ id: 'rs1', separator: true });
@@ -177,7 +188,13 @@ export function ChartContextMenu() {
     const task = doc.tasks.find((t) => t.id === target.id);
     if (!task) { close(); return null; }
     items.push({ id: 'edit', label: 'Edit label', icon: Pencil, shortcut: 'F2', onClick: () => beginEdit(task.id) });
-    items.push({ id: 'color', label: 'Select, to edit in the bar', icon: Palette, onClick: () => setSelection([{ kind: 'task', id: task.id }]) });
+    items.push({
+      id: 'details',
+      label: 'Details…',
+      icon: SlidersHorizontal,
+      shortcut: 'Enter',
+      onClick: () => openDetails(task.id, 'task'),
+    });
     items.push({
       id: 'dup',
       label: 'Duplicate',
@@ -211,7 +228,13 @@ export function ChartContextMenu() {
   if (target.kind === 'milestone' && target.id) {
     const m = doc.milestones.find((x) => x.id === target.id);
     if (!m) { close(); return null; }
-    items.push({ id: 'edit', label: 'Edit label', icon: Pencil, onClick: () => setSelection([{ kind: 'milestone', id: m.id }]) });
+    items.push({
+      id: 'details',
+      label: 'Details…',
+      icon: SlidersHorizontal,
+      shortcut: 'Enter',
+      onClick: () => openDetails(m.id, 'milestone'),
+    });
     items.push({
       id: 'dup',
       label: 'Duplicate',
@@ -234,7 +257,13 @@ export function ChartContextMenu() {
   }
 
   if (target.kind === 'bracket' && target.id) {
-    items.push({ id: 'edit', label: 'Select, to edit in the bar', icon: Pencil, onClick: () => setSelection([{ kind: 'bracket', id: target.id! }]) });
+    items.push({
+      id: 'details',
+      label: 'Details…',
+      icon: SlidersHorizontal,
+      shortcut: 'Enter',
+      onClick: () => openDetails(target.id!, 'bracket'),
+    });
     items.push({ id: 's1', separator: true });
     items.push({ id: 'del', label: 'Delete bracket', icon: Trash2, danger: true, onClick: () => docActions.deleteBracket(target.id!) });
   }

@@ -231,3 +231,37 @@ must fetch the new build by hand once. That is why this route is settled before
 the first release rather than after.
 
 **What would reopen it.** GitHub serving CORS headers on release assets.
+
+## D10 — The bottom toolbar is not an editing surface
+
+**Date:** 2026-10-27 · **Owner directive**, stated three times
+(*"the bottom toolbar is not made for editing tasks"*, *"as I said before…"*)
+
+**Context.** C2 (v2.13.2) moved everything the inspector column could edit into
+the command bar so C3 could delete the column without losing a capability. It
+worked as a capability move and failed as a design: a 40px strip of quick
+actions ended up owning dates, percent, notes, the row a task belongs to and
+its label position, behind a popover. Removing the rename field after the first
+complaint did not address it, because the popover was still there.
+
+**Decision.** The split is by *shape of control*, not by importance:
+
+| Surface | Holds |
+|---|---|
+| Command bar | What reduces to one press and changes one thing — a colour, a day, ten percent, wrap, delete — plus one door to the dialog |
+| Details dialog | Anything with a text field, a date picker, a dropdown, a slider or a picker in it |
+| Right-click | Everything structural — insert, duplicate, order, sections, label position, delete — and the same door |
+| Row gutter | Double-click a row to rename it in place |
+| Chart | Drag: dates, duration, progress, label position |
+
+Nothing may be reachable from none of them; `tests/e2e/selection-bar.spec.ts`
+is the gate.
+
+**Why a dialog and not a side panel.** A panel takes width from the chart
+permanently, which is the mistake C3 had just undone. The dialog is modal,
+costs nothing when closed, and the quick actions stay live underneath for the
+things a planner actually repeats.
+
+**What would reopen it.** A left panel that lists tasks rather than rows. That
+changes what the gutter is, and is a design question of its own rather than a
+place to quietly put the fields back.

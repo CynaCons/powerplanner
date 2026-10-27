@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
+import { useViewStore } from '../stores/viewStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
 import { useToolStore } from '../stores/toolStore';
@@ -156,6 +157,13 @@ export function useKeyboardShortcuts() {
         const chartArea = document.querySelector('.chart-area');
         const width = (chartArea?.clientWidth ?? 800) - 200;
         view.fit(min, max, Math.max(200, width));
+        return;
+      }
+      // Enter opens the details editor for whatever is selected. It is the
+      // keyboard path to everything that left the command bar in v2.20.0.
+      if (e.key === 'Enter' && sel.items.length > 0) {
+        e.preventDefault();
+        useViewStore.getState().setDetailsOpen(true);
         return;
       }
       if (e.key === 'F2' && sel.items.length === 1 && sel.items[0].kind === 'task') {
