@@ -1,4 +1,5 @@
 import type { GanttDocument } from '../types/document';
+import { sampleDocument } from './sample';
 
 export interface Template {
   id: string;
@@ -211,4 +212,43 @@ export const TEMPLATES: Template[] = [
       style: { theme: 'light', preset: 'default' },
     },
   },
+];
+
+/**
+ * What "New roadmap" offers (SRS-EDIT-017).
+ *
+ * `build` rather than a document, because the sample is anchored to today —
+ * baked at module load it would drift out of view in a long-running session,
+ * and in a saved HTML file it would be anchored to the day the build was made.
+ *
+ * The worked example is listed first alongside blank, deliberately: it is what
+ * the app opens on, and until this chooser existed, dismantling it was the one
+ * irreversible act in the product.
+ */
+export interface NewRoadmapChoice {
+  id: string;
+  name: string;
+  description: string;
+  build: () => GanttDocument;
+}
+
+export const NEW_ROADMAP_CHOICES: NewRoadmapChoice[] = [
+  {
+    id: 'blank',
+    name: 'Blank',
+    description: 'One empty row. Name it and start.',
+    build: () => TEMPLATES.find((t) => t.id === 'blank')!.doc,
+  },
+  {
+    id: 'sample',
+    name: 'Worked example',
+    description: 'The AUTOSAR ECU programme the app opens on — 7 streams, 33 packages, 7 milestones.',
+    build: sampleDocument,
+  },
+  ...TEMPLATES.filter((t) => t.id !== 'blank').map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    build: () => t.doc,
+  })),
 ];

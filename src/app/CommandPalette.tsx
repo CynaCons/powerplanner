@@ -37,7 +37,7 @@ import {
   Trash2,
   Zap,
   GitCompare,
-  Map as MapIcon,
+  Map as MapIcon, FilePlus2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -85,6 +85,12 @@ export function CommandPalette({ open, onClose }: Props) {
     setSelectedIndex(0);
   }, [query]);
 
+  /** One command per opening. Re-armed when the palette opens again. */
+  const ranRef = useRef(false);
+  useEffect(() => {
+    if (open) ranRef.current = false;
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -99,8 +105,17 @@ export function CommandPalette({ open, onClose }: Props) {
         setSelectedIndex((i) => Math.max(0, i - 1));
       } else if (e.key === 'Enter') {
         e.preventDefault();
+        // The palette is a capture-phase listener on window, so the same
+        // Enter would carry on to every other keydown handler in the app once
+        // the palette has closed itself. Stopping it here means a command runs
+        // exactly once, whatever else happens to be listening.
+        e.stopPropagation();
+        if (ranRef.current) return;
         const cmd = filtered[selectedIndex];
-        if (cmd) cmd.run();
+        if (cmd) {
+          ranRef.current = true;
+          cmd.run();
+        }
       }
     };
     window.addEventListener('keydown', onKey, true);
@@ -395,6 +410,7 @@ function useCommands(close: () => void): Command[] {
 
   // FILE
   cmds.push({ id: 'file-save', label: 'Save', group: 'File', icon: Save, shortcut: '⌘S', keywords: 'embed html', run: run(() => { const d = useDocumentStore.getState().doc; void saveToFile(d, withSuggested(d.title)); }) });
+  cmds.push({ id: 'file-new', label: 'New roadmap…', group: 'File', icon: FilePlus2, keywords: 'blank start over empty template', run: run(() => useViewStore.getState().setNewRoadmapOpen(true)) });
   cmds.push({ id: 'file-open', label: 'Open file…', group: 'File', icon: FolderOpen, keywords: 'load', run: run(() => { void openFile().then((d) => { if (d) useDocumentStore.getState().setDocument(d); }); }) });
   cmds.push({ id: 'file-export-json', label: 'Export as JSON', group: 'File', icon: Download, run: run(() => exportJson(useDocumentStore.getState().doc)) });
   cmds.push({ id: 'file-export-yaml', label: 'Export as YAML', group: 'File', icon: Download, run: run(() => exportYaml(useDocumentStore.getState().doc)) });

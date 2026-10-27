@@ -7,6 +7,8 @@ import { CommandBar } from './CommandBar';
 import { ChartContextMenu } from './ChartContextMenu';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { CommandPalette } from './CommandPalette';
+import { NewRoadmapDialog } from './NewRoadmapDialog';
+import { DetailsDialog } from './DetailsDialog';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
@@ -60,8 +62,8 @@ export function App({ compact = false }: AppProps) {
       const isEditable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        const current = useDocumentStore.getState().doc;
-        void saveToFile(current, suggestedName(current.title));
+        const store = useDocumentStore.getState();
+        void saveToFile(store.doc, suggestedName(store.doc.title)).then(() => store.markSaved());
         return;
       }
       if (!isEditable && (e.key === '?' || (e.shiftKey && e.key === '/'))) {
@@ -101,6 +103,8 @@ export function App({ compact = false }: AppProps) {
       <ChartContextMenu />
       <ShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <NewRoadmapDialog />
+      <DetailsDialog />
     </div>
   );
 }

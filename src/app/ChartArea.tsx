@@ -141,7 +141,7 @@ export function ChartArea() {
     return stripes;
   }, [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.workingDays]);
 
-  const { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, depDrag, lassoDrag } = useChartInteractions({
+  const { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, dragCursor, depDrag, lassoDrag } = useChartInteractions({
     svgRef,
     chartWidth,
     rowGutterWidth: ROW_GUTTER_W,
@@ -159,8 +159,9 @@ export function ChartArea() {
         <div className="empty-state">
           <div className="empty-title">Your chart is empty</div>
           <div className="empty-hint">
-            Press <kbd>⌘</kbd><kbd>K</kbd> for the command palette &mdash; or pick the <kbd>T</kbd> task tool
-            and click anywhere on the canvas. Templates: <kbd>⌘</kbd><kbd>K</kbd> → "template".
+            Right-click the canvas to add a task where you click, or press <kbd>⌘</kbd><kbd>K</kbd> for
+            the command palette. To start from a worked example instead, use <strong>File → New
+            roadmap</strong>.
           </div>
         </div>
       )}
@@ -171,7 +172,7 @@ export function ChartArea() {
         onMouseDown={handleSvgMouseDown}
         onContextMenu={handleContextMenu}
         onWheel={handleWheel}
-        style={{ display: 'block', cursor: dragPreview ? 'grabbing' : cursorForTool(activeTool), userSelect: 'none' }}
+        style={{ display: 'block', cursor: dragCursor ?? cursorForTool(activeTool), userSelect: 'none' }}
       >
         {/* Background */}
         <rect x={0} y={0} width={size.width} height={size.height} fill="var(--color-bg)" />

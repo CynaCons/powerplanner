@@ -309,6 +309,11 @@ kbd {
   align-items: center;
   gap: 10px;
   color: var(--color-text);
+  /* Shrinkable, and allowed to go below its content width. Without both, the
+     title held the header at 516px inside a 375px phone, the toolbar wrapped
+     onto a second line and File landed on top of the chart — unreachable. */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .app-header .brand__sep {
   width: 1px;
@@ -318,8 +323,14 @@ kbd {
 }
 .title-chip {
   /* The header gave up its insert cluster (DECISIONS.md D7), so the document
-     title can stop truncating at 240px and take the room that freed up. */
-  width: clamp(240px, 32vw, 560px);
+     title can stop truncating at 240px and take the room that freed up — but
+     as a PREFERENCE, not a floor. A 240px minimum is wider than the room a
+     phone has to give. */
+  flex: 1 1 clamp(120px, 32vw, 560px);
+  width: auto;
+  min-width: 0;
+  max-width: 560px;
+  text-overflow: ellipsis;
   font-size: 12.5px;
   font-weight: 500;
   letter-spacing: -0.1px;
@@ -346,7 +357,11 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  /* Never wraps: a second row of header has nowhere to go but over the chart,
+     and the controls it pushes there cannot be clicked. The title gives up
+     width instead. */
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 .app-header__cluster {
@@ -826,3 +841,133 @@ kbd {
   line-height: 1.5;
   color: var(--color-text-soft);
 }
+
+/* New-roadmap chooser (PLAN.md v2.20.0 / SRS-EDIT-017). Shares the settings
+   dialog's surface language; the choices are cards because the decision is
+   "which roadmap", not "yes or no". */
+.dialog-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+.dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 18px;
+  background: var(--color-bg-elev);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+.dialog--wide { width: min(640px, calc(100vw - 32px)); }
+.dialog__title {
+  margin: 0 0 12px;
+  font-size: var(--text-row);
+  font-weight: 600;
+  color: var(--color-text);
+}
+.dialog__warn {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--color-bg-subtle);
+  border-left: 3px solid var(--stream-6);
+  font-size: var(--text-micro);
+  line-height: 1.45;
+  color: var(--color-text-soft);
+}
+.dialog__warn svg { flex: none; margin-top: 1px; color: var(--stream-6); }
+.dialog__choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+  gap: 8px;
+}
+.dialog__choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 11px 13px;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.dialog__choice:hover {
+  border-color: var(--color-accent);
+  background: var(--color-bg-subtle);
+}
+.dialog__choice:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.dialog__choice-name { font-size: var(--text-micro); font-weight: 600; color: var(--color-text); }
+.dialog__choice-desc { font-size: var(--text-micro); color: var(--color-text-dim); line-height: 1.4; }
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.dialog__btn {
+  padding: 6px 14px;
+  font-size: var(--text-micro);
+  color: var(--color-text-soft);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.dialog__btn:hover { background: var(--color-bg-subtle); color: var(--color-text); }
+
+/* Details editor (PLAN.md v2.20.0). The typed half of editing, out of the
+   command bar and onto a surface with room for a label beside every field. */
+.dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.dialog__head .dialog__title { margin: 0; }
+.dialog__close {
+  display: inline-flex;
+  padding: 4px;
+  color: var(--color-text-dim);
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.dialog__close:hover { background: var(--color-bg-subtle); color: var(--color-text); }
+.dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 11px;
+  font-size: var(--text-micro);
+  color: var(--color-text-dim);
+}
+.dialog__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.dialog__input,
+.dialog__textarea {
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: var(--text-micro);
+  color: var(--color-text);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius);
+}
+.dialog__textarea { min-height: 68px; resize: vertical; }
+.dialog__input:focus,
+.dialog__textarea:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; }

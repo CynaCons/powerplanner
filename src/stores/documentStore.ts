@@ -21,12 +21,27 @@ interface DocumentState {
   revision: number;
   /** Bumped only by user-sourced mutations. */
   userRevision: number;
+  /**
+   * The `revision` the document was last written to disk at. Anything newer
+   * means there is work in the window that is not in a file, which is what the
+   * New and Open guards ask about (SRS-EDIT-018). It tracks `revision`, not
+   * `userRevision`, so a chart an agent built counts as work too.
+   */
+  savedRevision: number;
   /** True while an agent bridge session is attached (SRS-ABR-060). */
   agentActive: boolean;
   lastAgentEditAt: number | null;
 
   setDocument: (doc: GanttDocument) => void;
   replaceDocument: (doc: GanttDocument) => void;
+  /**
+   * Replace the document with a fresh one and treat it as clean: a roadmap the
+   * user just started has nothing in it worth warning them about losing
+   * (SRS-EDIT-017).
+   */
+  newDocument: (doc: GanttDocument) => void;
+  /** Record that the current state reached a file. */
+  markSaved: () => void;
 
   /**
    * Apply an ordered batch of operations as ONE undo frame and ONE store
@@ -111,11 +126,25 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   revision: 0,
   userRevision: 0,
+  savedRevision: 0,
   agentActive: false,
   lastAgentEditAt: null,
 
-  setDocument: (doc) => set((s) => ({ doc, past: [], future: [], revision: s.revision + 1, userRevision: s.userRevision + 1 })),
+  // A document that arrives whole — from a file, from the HTML it was embedded
+  // in, from a restored snapshot — IS the saved state, so it starts clean.
+  // Piecemeal edits go through `mutate`, which leaves `savedRevision` behind.
+  setDocument: (doc) =>
+    set((s) => ({
+      doc,
+      past: [],
+      future: [],
+      revision: s.revision + 1,
+      userRevision: s.userRevision + 1,
+      savedRevision: s.revision + 1,
+    })),
   replaceDocument: (doc) => mutate(set, () => doc),
+  newDocument: (doc) => get().setDocument(doc),
+  markSaved: () => set((s) => ({ savedRevision: s.revision })),
 
   applyBatch: (ops, source = 'agent') =>
     // applyOps reduces against a draft and throws before anything is committed,
@@ -222,3 +251,13 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   canUndo: () => get().past.length > 0,
   canRedo: () => get().future.length > 0,
 }));
+
+/**
+ * Whether there is work in the window that is not in a file (SRS-EDIT-018).
+ *
+ * Agent edits count: an agent that built a chart and a user who built one have
+ * both made something there is no copy of.
+ */
+export function useIsDirty(): boolean {
+  return useDocumentStore((s) => s.revision !== s.savedRevision);
+}

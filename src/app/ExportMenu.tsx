@@ -1,13 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
-import { useDocumentStore } from '../stores/documentStore';
+import { useDocumentStore, useIsDirty } from '../stores/documentStore';
 import { exportJson, exportYaml, exportSvg, exportPng, saveToFile, saveAs, openFile } from '../persistence/fileIo';
-import { ChevronDown, Download, Save, FolderOpen } from 'lucide-react';
+import { ChevronDown, Download, Save, FolderOpen, FilePlus2 } from 'lucide-react';
+import { useViewStore } from '../stores/viewStore';
 
 export function ExportMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const doc = useDocumentStore((s) => s.doc);
   const setDocument = useDocumentStore((s) => s.setDocument);
+  const markSaved = useDocumentStore((s) => s.markSaved);
+  const dirty = useIsDirty();
+  const openNewRoadmap = useViewStore((s) => s.setNewRoadmapOpen);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -18,19 +22,36 @@ export function ExportMenu() {
   }, [open]);
 
   const onSave = async () => {
-    await saveToFile(doc, suggestedName(doc.title));
     setOpen(false);
+    await saveToFile(doc, suggestedName(doc.title));
+    markSaved();
   };
 
   const onSaveAs = async () => {
-    await saveAs(doc, suggestedName(doc.title));
     setOpen(false);
+    await saveAs(doc, suggestedName(doc.title));
+    markSaved();
   };
 
   const onOpen = async () => {
     setOpen(false);
+    // Opening replaces what is on screen, and undo does not reach across it
+    // (SRS-EDIT-018). Only worth asking when there is something to lose.
+    if (
+      dirty &&
+      !window.confirm(
+        `“${doc.title}” has changes that are not in a file. Opening another roadmap replaces it. Continue?`,
+      )
+    ) {
+      return;
+    }
     const next = await openFile();
     if (next) setDocument(next);
+  };
+
+  const onNew = () => {
+    setOpen(false);
+    openNewRoadmap(true);
   };
 
   return (
@@ -54,6 +75,8 @@ export function ExportMenu() {
           }}
           role="menu"
         >
+          <MenuItem icon={<FilePlus2 size={14} />} label="New roadmap…" onClick={onNew} />
+          <Divider />
           <MenuItem icon={<Save size={14} />} label="Save (Ctrl+S)" onClick={onSave} />
           <MenuItem icon={<Save size={14} />} label="Save as…" onClick={onSaveAs} />
           <MenuItem icon={<FolderOpen size={14} />} label="Open file…" onClick={onOpen} />
