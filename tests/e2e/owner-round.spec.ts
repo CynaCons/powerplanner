@@ -106,3 +106,35 @@ test.describe('calendar weeks (SRS-TAX-023)', () => {
     expect(withYear.length).toBeGreaterThan(0);
   });
 });
+
+test.describe('dragging a bar (SRS-EDIT-002, SRS-EDIT-010)', () => {
+  test('a drag moves the task, and lands where the preview showed', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('.chart-area svg').first().waitFor({ state: 'visible' });
+
+    // The default document is at month scale with the magnet on — the exact
+    // combination under which every drag shorter than a fortnight used to
+    // commit nothing at all.
+    const bar = page.locator('.task-bar-body').first();
+    const box = (await bar.boundingBox())!;
+    const pxPerDay = Number(
+      (await page.locator('.app-status').innerText()).match(/([\d.]+) px\/day/)![1],
+    );
+    const dx = Math.round(14 * pxPerDay);
+
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2, { steps: 6 });
+
+    const previewX = (await bar.boundingBox())!.x;
+    expect(previewX - box.x).toBeGreaterThan(pxPerDay * 4);
+
+    await page.mouse.up();
+    const committedX = (await bar.boundingBox())!.x;
+
+    // What you let go of is what you get: no jump on release.
+    expect(Math.abs(committedX - previewX)).toBeLessThan(2);
+    // And the task actually moved.
+    expect(committedX - box.x).toBeGreaterThan(pxPerDay * 4);
+  });
+});

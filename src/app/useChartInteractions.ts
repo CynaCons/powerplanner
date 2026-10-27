@@ -55,6 +55,8 @@ export interface DragState {
   originalDate?: string;
   startViewDate?: string;
   deltaDays: number;
+  /** What the preview drew, and therefore what the release must commit. */
+  previewDelta?: number;
   depSourceTaskId?: string;
   depSourceEdge?: 'start' | 'end';
   depCurrentX?: number;
@@ -470,32 +472,40 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
     }
 
     state.deltaDays = dDays;
+    // Preview what will actually be committed, not the raw pointer delta. They
+    // used to disagree: the bar followed the cursor to the day and then jumped
+    // to the snapped date on release, so what you let go of was never what you
+    // got. One snapped value, used by both.
+    const snapped = useEditStore.getState().snapEnabled
+      ? snapDelta(dDays, useDocumentStore.getState().doc.calendar.scale)
+      : dDays;
+    state.previewDelta = snapped;
     const next: DragPreviewMap = { tasks: new Map(), milestones: new Map(), brackets: new Map(), labels: new Map() };
 
     if (state.kind === 'task-move' && state.originalStart && state.originalEnd && state.targetId) {
       next.tasks.set(state.targetId, {
-        start: addDays(state.originalStart, dDays),
-        end: addDays(state.originalEnd, dDays),
+        start: addDays(state.originalStart, snapped),
+        end: addDays(state.originalEnd, snapped),
       });
     } else if (state.kind === 'task-resize-start' && state.originalStart && state.originalEnd && state.targetId) {
-      const newStart = addDays(state.originalStart, dDays);
+      const newStart = addDays(state.originalStart, snapped);
       const limited = diffDays(newStart, state.originalEnd) >= 0 ? newStart : state.originalEnd;
       next.tasks.set(state.targetId, { start: limited, end: state.originalEnd });
     } else if (state.kind === 'task-resize-end' && state.originalStart && state.originalEnd && state.targetId) {
-      const newEnd = addDays(state.originalEnd, dDays);
+      const newEnd = addDays(state.originalEnd, snapped);
       const limited = diffDays(state.originalStart, newEnd) >= 0 ? newEnd : state.originalStart;
       next.tasks.set(state.targetId, { start: state.originalStart, end: limited });
     } else if (state.kind === 'milestone-move' && state.originalDate && state.targetId) {
-      next.milestones.set(state.targetId, addDays(state.originalDate, dDays));
+      next.milestones.set(state.targetId, addDays(state.originalDate, snapped));
     } else if (state.kind === 'bracket-move' && state.originalStart && state.originalEnd && state.targetId) {
       next.brackets.set(state.targetId, {
-        start: addDays(state.originalStart, dDays),
-        end: addDays(state.originalEnd, dDays),
+        start: addDays(state.originalStart, snapped),
+        end: addDays(state.originalEnd, snapped),
       });
     } else if (state.kind === 'bracket-resize-start' && state.originalStart && state.originalEnd && state.targetId) {
-      next.brackets.set(state.targetId, { start: addDays(state.originalStart, dDays), end: state.originalEnd });
+      next.brackets.set(state.targetId, { start: addDays(state.originalStart, snapped), end: state.originalEnd });
     } else if (state.kind === 'bracket-resize-end' && state.originalStart && state.originalEnd && state.targetId) {
-      next.brackets.set(state.targetId, { start: state.originalStart, end: addDays(state.originalEnd, dDays) });
+      next.brackets.set(state.targetId, { start: state.originalStart, end: addDays(state.originalEnd, snapped) });
     }
     setDragPreview(next);
   }, []);
@@ -539,9 +549,9 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       return;
     }
 
-    const edit = useEditStore.getState();
-    const scale = docStore.doc.calendar.scale;
-    const snappedDelta = edit.snapEnabled ? snapDelta(state.deltaDays, scale) : state.deltaDays;
+    // The same value the preview drew with. Recomputing it here is how the
+    // two drifted apart in the first place.
+    const snappedDelta = state.previewDelta ?? state.deltaDays;
 
     if (state.kind === 'lasso') {
       const x0 = Math.min(state.lassoStartX!, state.lassoCurrentX!);
@@ -591,7 +601,7 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
     // wrote the same dates back and left an undo step behind, so a user who
     // clicked four bars had to press Ctrl+Z four times to get back to the edit
     // they actually wanted to undo.
-    if (snappedDelta === 0 && state.deltaDays === 0) {
+    if (snappedDelta === 0) {
       setDragPreview(null);
       return;
     }

@@ -13,6 +13,8 @@ Traces up to: `../interaction.md`, `../data-model.md`.
 |----|-------------|-----------|--------------|-------|
 | SRS-EDIT-001 | All edits shall operate on the document and then re-run layout; no edit shall mutate device coordinates directly. | One source of truth; every surface stays consistent. | Review | interaction §core operations |
 | SRS-EDIT-002 | Date edits shall snap to whole days (the abstract x unit). | Schedules are day-granular; sub-day positions are meaningless. | Review | interaction; layout §coordinates |
+| SRS-EDIT-004 | The snap grid shall be one day on the day scale and one week on every coarser scale; it shall never be derived from the view scale. | How far a user is zoomed out is a property of the window, not of the calendar. Quantising to the view scale made a month view snap to 30 days, so on the shipped document every drag under a fortnight committed nothing and the bar sprang back. | Test (`snapDelta`) | utils/snap `snapDelta` |
+| SRS-EDIT-005 | A drag preview shall show the snapped result, and the release shall commit exactly what the preview showed. | A bar that follows the pointer to the day and then jumps to a different date on release means the user never let go of the thing they got. | Test (e2e: no jump on release) | useChartInteractions `previewDelta` |
 | SRS-EDIT-003 | Resize shall keep a task's `end` on or after its `start` (a resize cannot produce `end < start`). | Upholds the duration invariant during editing. | Demo (web resize) — promote to Test with an editing harness | data-model; SRS-ELEM-002 |
 
 ## Operations
