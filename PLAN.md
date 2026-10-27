@@ -863,7 +863,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
 - [x] Stop the download revoking its own object URL before the browser reads it [agent: claude]
 
-### v2.17.1 — Prove the update path on real releases (current) (ACTIVE)
+### v2.17.1 — Prove the update path on real releases
 > The gate belongs here rather than in v2.17.0, because it can only be run against a *published* artifact — the iteration that builds a release cannot also verify the release it has not cut yet.
 
 **v2.16.0 cannot be the starting point.** It was tagged at `b900c6f`; the updater landed in `842ee92`, after. The published v2.16.0 build contains no update code at all, which is the trap PowerScroll recorded: the updater ships *inside* each saved file, so a build released without a working one cannot repair itself. Testing therefore needs v2.17.0 as the installed build and a later release to move to.
@@ -900,6 +900,22 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Keep the build aliases out of the repository [agent: claude]
 - [x] Smoke test: npm run dev launches with zero console errors [agent: claude]
 
+## v2.20 — Owner round: the gaps a planner hits first
+
+### v2.20.0 — Starting a roadmap, and the pointer telling the truth (current) (ACTIVE)
+**Goal:** A planner can start their own roadmap, read calendar weeks, and see what each pointer will do.
+- [x] Write SRS rows for new document, week numbers and cursors [agent: claude]
+- [x] Add a New roadmap action with a blank or sample choice [agent: claude]
+- [x] Guard a new roadmap against discarding unsaved work [agent: claude]
+- [x] Replace the grab cursors with cursors that name the gesture [agent: claude]
+- [x] Label the week scale with ISO calendar week numbers [agent: claude]
+- [x] Show the year on the month band when it changes [agent: claude]
+- [x] Move task editing out of the bottom toolbar [agent: claude]
+- [ ] Run the UX audit and publish A/B drawings to the canvas
+- [ ] Close the loop: lint, unit, e2e, smoke and look at it
+- [ ] Commit, release and update the deployment ledger
+- [ ] USER GATE: approve renaming the GitHub repository to powerroadmap
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
@@ -916,3 +932,4 @@ See git for full historical web iterations (v0–v2).
 - Fix the MSVC setup step in native-pure CI when native is unparked
 - RED GATE: 3 of 51 e2e tests fail on the tablet and mobile projects — `text=Wireframes` resolves to a hidden SVG <title> on narrow WebKit viewports, and the header Add-task button is absent in the compact layout. Desktop is fully green. First full-suite run since the browsers were installed, 2026-10-23
 - TOUCH: no drag gesture works on a touch device. Every interaction is built on mousedown plus window mousemove/mouseup, so moving a bar, resizing one, drawing a dependency, sweeping the axis and dragging a label all produce zero movement on tablet and mobile. Measured 2026-10-26: a label drag moves 0px. The e2e drag tests are scoped to desktop until pointer events replace mouse events
+- Collapse the header into an overflow menu below 700px so File is tappable on a phone
