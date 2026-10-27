@@ -911,7 +911,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Label the week scale with ISO calendar week numbers [agent: claude]
 - [x] Show the year on the month band when it changes [agent: claude]
 - [x] Move task editing out of the bottom toolbar [agent: claude]
-- [ ] Run the UX audit and publish A/B drawings to the canvas
+- [x] Run the UX audit and publish A/B drawings to the canvas [agent: claude]
 - [ ] Close the loop: lint, unit, e2e, smoke and look at it
 - [ ] Commit, release and update the deployment ledger
 - [ ] USER GATE: approve renaming the GitHub repository to powerroadmap
@@ -933,3 +933,13 @@ See git for full historical web iterations (v0–v2).
 - RED GATE: 3 of 51 e2e tests fail on the tablet and mobile projects — `text=Wireframes` resolves to a hidden SVG <title> on narrow WebKit viewports, and the header Add-task button is absent in the compact layout. Desktop is fully green. First full-suite run since the browsers were installed, 2026-10-23
 - TOUCH: no drag gesture works on a touch device. Every interaction is built on mousedown plus window mousemove/mouseup, so moving a bar, resizing one, drawing a dependency, sweeping the axis and dragging a label all produce zero movement on tablet and mobile. Measured 2026-10-26: a label drag moves 0px. The e2e drag tests are scoped to desktop until pointer events replace mouse events
 - Collapse the header into an overflow menu below 700px so File is tappable on a phone
+- UX audit T1: one geometry ref, so drags land where the cursor is
+- UX audit T1: snap to dates that exist, with a guide and a date readout
+- UX audit T2: clip the scrolled body so rows stop painting over the axis
+- UX audit T2: render exports off-screen so a PNG holds the whole plan
+- UX audit T3: a left panel that lists tasks, not just rows
+- UX audit T4: buffer continuous inputs and batch the multi-item loops
+- UX audit T5: release the save target on New, and announce what happened
+- UX audit T6: step rows by whole blocks, and roll progress up to the group
+- UX audit T7: draw the axis as labelled cells instead of ticks
+- UX audit T8: declare every shortcut once, in one keymap table
