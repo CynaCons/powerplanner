@@ -38,6 +38,24 @@ remotely.
 
 Verified against the live API on 2026-10-26, not inferred.
 
+## Can the repository be renamed?
+
+Yes. It was held back because the updater ships inside every saved file and
+cannot be fixed retroactively, so a rename that broke either route would strand
+every build in the wild. Measured on 2026-10-27 against `facebook/jest`, a
+repository GitHub has actually renamed:
+
+| Route | On a renamed repository |
+|---|---|
+| `api.github.com/repos/<old>/releases/latest` | 301 to `/repositories/<id>/…`, and the 301 itself carries `access-control-allow-origin: *`, so a page fetch follows it |
+| `raw.githubusercontent.com/<old>/<tag>/<path>` | 200 directly — no redirect, CORS present |
+
+Both of the updater's routes survive a rename, so `CynaCons/powerplanner` may
+be renamed whenever the owner wants it. Builds already in the wild keep working
+through the old name.
+
+Not done yet: it changes a public URL, which is the owner's call.
+
 ## Which releases can update themselves
 
 | Release | Carries the updater | Note |

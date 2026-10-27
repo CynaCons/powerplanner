@@ -16,11 +16,21 @@ import {
  */
 
 /**
- * The REPOSITORY name, which did not change with the product name. Renaming it
- * would break the update route for every build already in the wild, since the
- * updater fetches raw.githubusercontent.com/<repo>/<tag>/... and ships inside
- * each saved file. Change this only after the repository itself is renamed and
- * GitHub's redirect is confirmed to serve raw content.
+ * The REPOSITORY name, which did not change with the product name.
+ *
+ * It was held back because the updater ships inside every saved file and
+ * cannot be corrected retroactively, so a rename that broke either route would
+ * strand every build in the wild. Measured against a repository GitHub has
+ * actually renamed (2026-10-27, docs/DEPLOYMENTS.md), both routes survive one:
+ *
+ *   api.github.com/repos/<old>/releases/latest
+ *     -> 301 to /repositories/<id>/..., with access-control-allow-origin: *
+ *        on the redirect, so a page fetch follows it
+ *   raw.githubusercontent.com/<old>/<tag>/<path>
+ *     -> 200 directly, no redirect needed, CORS present
+ *
+ * So this may be changed once the repository is renamed; the old name keeps
+ * working either way.
  */
 export const GITHUB_REPO = 'CynaCons/powerplanner';
 /**
