@@ -45,6 +45,40 @@ export function startOfWeek(iso: ISODate): ISODate {
   return addDays(iso, offset);
 }
 
+/**
+ * The ISO-8601 week number (SRS-TAX-023/-024).
+ *
+ * Weeks run Monday to Sunday — which `startOfWeek` already assumes — and a week
+ * belongs to the year that owns its **Thursday**. That rule is the whole reason
+ * this is not `floor(dayOfYear / 7)`: it is what makes 29 December 2025 week 1
+ * of 2026 and gives some years a week 53. A planner's calendar, their status
+ * report and this axis all have to agree on "W42", so the agreement has to be
+ * ISO's and not an easier one.
+ */
+export function isoWeekNumber(iso: ISODate): number {
+  const d = parseISO(iso);
+  // Step to this week's Thursday. Monday = 0, so +3 lands on Thursday.
+  const dow = (d.getUTCDay() + 6) % 7;
+  const thursday = new Date(d.getTime() + (3 - dow) * MS_PER_DAY);
+  // 4 January is in week 1 by definition, so its week's Thursday anchors the
+  // count for whichever year the first Thursday turned out to belong to.
+  const jan4 = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 4));
+  const jan4Dow = (jan4.getUTCDay() + 6) % 7;
+  const week1Thursday = new Date(jan4.getTime() + (3 - jan4Dow) * MS_PER_DAY);
+  return 1 + Math.round((thursday.getTime() - week1Thursday.getTime()) / (7 * MS_PER_DAY));
+}
+
+/**
+ * The year the ISO week belongs to, which is not always the year the date is
+ * in — 29 December 2025 is W01 of 2026. Only needed where a week number is
+ * shown next to a year.
+ */
+export function isoWeekYear(iso: ISODate): number {
+  const d = parseISO(iso);
+  const dow = (d.getUTCDay() + 6) % 7;
+  return new Date(d.getTime() + (3 - dow) * MS_PER_DAY).getUTCFullYear();
+}
+
 export function startOfMonth(iso: ISODate): ISODate {
   const d = parseISO(iso);
   return formatISO(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)));

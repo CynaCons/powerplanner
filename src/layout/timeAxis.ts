@@ -10,6 +10,7 @@ import {
   startOfYear,
   diffDays,
   fiscalQuarterOf,
+  isoWeekNumber,
 } from '../utils/dates';
 
 export interface AxisTick {
@@ -127,10 +128,9 @@ function weekTicks(start: ISODate, end: ISODate, pxPerDay: number): AxisLevel {
   const ticks: AxisTick[] = [];
   let cursor = startOfWeek(start);
   while (parseISO(cursor) <= parseISO(end)) {
-    const d = parseISO(cursor);
     ticks.push({
       iso: cursor,
-      label: `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCDate()}`,
+      label: `W${isoWeekNumber(cursor)}`,
       x: dateToX(cursor, start, pxPerDay),
     });
     cursor = addDays(cursor, 7);
@@ -143,9 +143,16 @@ function monthTicks(start: ISODate, end: ISODate, pxPerDay: number): AxisLevel {
   let cursor = startOfMonth(start);
   while (parseISO(cursor) <= parseISO(end)) {
     const d = parseISO(cursor);
+    // The year on every month read "Oct 2026  Nov 2026  Dec 2026" — the same
+    // four digits three times, competing with the month for the one strong
+    // band in the chart. It is carried on January, where the year turns, and
+    // on the leading tick, so the view is never ambiguous (SRS-TAX-025).
+    const showYear = d.getUTCMonth() === 0 || ticks.length === 0;
     ticks.push({
       iso: cursor,
-      label: `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCFullYear()}`,
+      label: showYear
+        ? `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+        : MONTH_NAMES[d.getUTCMonth()],
       x: dateToX(cursor, start, pxPerDay),
     });
     cursor = addMonths(cursor, 1);

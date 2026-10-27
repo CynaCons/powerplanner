@@ -29,6 +29,9 @@ Reference impl: `src/layout/timeAxis.ts`.
 | SRS-TAX-020 | Week ticks shall start on the week boundary (`startOfWeek`); month/quarter/year ticks shall start on their period boundary. | Subdivisions must begin on natural period starts, not the view edge. | Analysis | timeAxis `*Ticks` |
 | SRS-TAX-021 | The system shall thin each level after positioning, dropping any tick closer than the level's minimum spacing to the previously kept tick: major 60, minor 36, micro 16 device units. | Prevents overlapping, unreadable labels at any zoom. | Test (`thinTicks`) | layout §9; timeAxis `thinTicks` |
 | SRS-TAX-022 | Tick thinning shall be applied **after** device mapping (it depends on `pxPerDay`/`ptPerDay`), not in abstract units. | Overlap is a device-pixel concern, not an abstract one. | Analysis | layout §9 |
+| SRS-TAX-023 | On the week scale the minor level shall label each tick with its ISO-8601 week number as `W{n}`, not with a month-and-day pair. | Planners schedule, report and talk in week numbers ("W42"); a date restates the month band above it and cannot be matched to a calendar or a status report. | Test (`weekTicks` labels) | timeAxis `weekTicks`, `isoWeekNumber` |
+| SRS-TAX-024 | ISO week numbering shall place a week in the year that owns its Thursday, so the turn of the year yields W52, W53 or W01 as ISO-8601 requires rather than a 53rd week that does not exist. | A week-number axis that disagrees with the organisation's calendar at year end is worse than no week numbers. | Test (year-boundary cases) | utils/dates `isoWeekNumber` |
+| SRS-TAX-025 | The month band shall carry the year on the leading tick and on every January, as `Jan 2027`, and the month alone elsewhere. | The year on every month set the same four digits three times across a quarter, competing with the month name for the one strong band in the chart; January and the leading tick are the two places it actually resolves an ambiguity. | Test (`monthTicks` labels) | timeAxis `monthTicks` |
 
 ## Working & non-working days
 
@@ -43,6 +46,9 @@ Reference impl: `src/layout/timeAxis.ts`.
   and -021 cite them.
 - Fiscal-aligned **year** boundaries (not just labels) are a possible future
   enhancement; today year ticks are calendar-aligned (SRS-TAX-011).
+- Week numbering is ISO-8601 (Monday-start, Thursday rule). A `weekNumbering`
+  calendar setting for organisations on a US or fiscal week scheme is not
+  implemented; SRS-TAX-023/-024 describe ISO only.
 - Weekend shading (SRS-TAX-031) is implemented; distinct **holiday** shading is a
   separate future item — `holidays` are carried and validated (SRS-TAX-030) but
   not yet rendered distinctly from the weekend mask.
