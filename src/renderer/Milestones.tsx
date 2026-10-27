@@ -58,7 +58,7 @@ export function Milestones({ layout, dragPreview }: Props) {
               fill={color}
               stroke={selected ? 'var(--color-accent)' : 'rgba(0,0,0,0.3)'}
               strokeWidth={selected ? 2 : 1}
-              style={{ cursor: 'grab' }}
+              style={{ cursor: 'move' }}
             />
             <MilestoneLabel
               id={m.id}
@@ -146,7 +146,7 @@ function MilestoneLabel({ id, x, y, text, placement, offset }: MlProps) {
         textAnchor={anchorAttr}
         fontSize={11}
         fill="var(--color-text)"
-        style={{ cursor: 'grab' }}
+        style={{ cursor: 'move' }}
       >
         {text}
       </text>

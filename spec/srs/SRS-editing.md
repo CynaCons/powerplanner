@@ -26,6 +26,16 @@ Traces up to: `../interaction.md`, `../data-model.md`.
 | SRS-EDIT-014 | The system shall create a bracket spanning the selected rows and date range. | Annotate a phase across rows. | Demo | SRS-ELEM-030 |
 | SRS-EDIT-015 | The system shall edit element fields: label, color, percent complete, notes, dates. | Full control of element content. | Demo | data-model |
 | SRS-EDIT-016 | Delete shall remove the selected element(s) and any dependencies referencing a deleted task. | No dangling references after delete. | Test (delete task removes its deps) | data-model invariants |
+| SRS-EDIT-017 | The system shall start a new document, either empty or seeded with the sample programme, and the user shall choose which. | Without it the only way to a chart of one's own is to delete the demo content row by row, and a planner who wants to see a worked example cannot get it back. | Test (e2e) | documentStore `newDocument`; ExportMenu |
+| SRS-EDIT-018 | Starting a new document, or opening a file, shall require confirmation while the current document has unsaved changes, naming what would be lost. | Discarding a half-built roadmap to an unguarded menu click is unrecoverable; autosave restores the last session, not the document being replaced. | Test (e2e) | documentStore `isDirty`; ExportMenu |
+
+## Pointer affordance
+
+| ID | Requirement | Rationale | Verification | Trace |
+|----|-------------|-----------|--------------|-------|
+| SRS-EDIT-030 `[web]` | Each interactive region shall carry the cursor that names the gesture it performs: `move` on a draggable body, `ew-resize` on a date edge, `col-resize` on the panel divider, `text` on an editable name, `grab`/`grabbing` only where the surface itself is panned. | The cursor is the only thing that tells a user what a region will do before they commit to a drag; a hand on a bar that moves a date promises panning and delivers a schedule change. | Test (e2e asserts the computed cursor) | TaskBars, Milestones, ChartArea |
+| SRS-EDIT-031 `[web]` | A cursor shall change to its active form while the gesture is in progress, and return when it ends. | Without it there is no feedback that a drag was picked up, only that something moved. | Test (e2e) | useChartInteractions |
+| SRS-EDIT-032 `[web]` | No interactive region shall carry the default arrow cursor where a gesture exists, and no non-interactive region shall carry a gesture cursor. | A cursor that lies in either direction costs a user a wasted drag and the undo that follows. | Test (e2e sweeps the surface) | renderer/* |
 
 ## Selection & history
 

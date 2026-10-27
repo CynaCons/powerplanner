@@ -40,7 +40,7 @@ export function Brackets({ layout }: Props) {
               width={w}
               height={8}
               fill="transparent"
-              style={{ cursor: 'grab' }}
+              style={{ cursor: 'move' }}
             />
             <rect
               data-pp-kind="bracket"

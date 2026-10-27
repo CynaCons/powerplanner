@@ -67,7 +67,9 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
             data-pp-id={row.id}
             transform={`translate(0 ${rowOffsets[i]})`}
             onDoubleClick={() => setEditing(row.id)}
-            style={{ cursor: 'default' }}
+            // The row selects on a click and renames on a double-click, so the
+            // default arrow was telling the user there was nothing here.
+            style={{ cursor: 'pointer' }}
           >
             <rect
               x={0}

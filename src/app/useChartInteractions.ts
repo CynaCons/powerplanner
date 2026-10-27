@@ -76,6 +76,34 @@ export interface DragState {
   axisToX?: number;
 }
 
+/**
+ * The cursor while a drag is in flight (SRS-EDIT-031).
+ *
+ * It is applied to the whole surface, not the element: once a drag starts the
+ * pointer leaves the thing it picked up, and a cursor that reverted the moment
+ * it crossed the edge of a 11px bar read as the drag having been dropped.
+ */
+export function cursorForDrag(kind: DragKind | undefined): string {
+  switch (kind) {
+    case 'pan':
+      // The one place a hand belongs: the surface itself is being moved.
+      return 'grabbing';
+    case 'task-resize-start':
+    case 'task-resize-end':
+    case 'bracket-resize-start':
+    case 'bracket-resize-end':
+      return 'ew-resize';
+    case 'dep-create':
+    case 'lasso':
+    case 'axis-zoom':
+      return 'crosshair';
+    case undefined:
+      return 'default';
+    default:
+      return 'move';
+  }
+}
+
 export interface DragPreviewMap {
   tasks: Map<string, { start: string; end: string }>;
   milestones: Map<string, string>;
@@ -87,6 +115,7 @@ export interface DragPreviewMap {
 export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisHeight, layout, maxScroll }: InteractionOptions) {
   const dragRef = useRef<DragState | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
+  const [dragCursor, setDragCursor] = useState<string | null>(null);
   const [, forceRender] = useState(0);
   const triggerRender = useCallback(() => forceRender((n) => n + 1), []);
 
@@ -384,6 +413,9 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
   const handleWindowMove = useCallback((e: globalThis.MouseEvent) => {
     const state = dragRef.current;
     if (!state) return;
+    // On the first movement, not on mousedown: a press that never moves is a
+    // click, and flashing a drag cursor at it is a lie about what happened.
+    setDragCursor(cursorForDrag(state.kind));
     const view = useViewportStore.getState();
     const dx = e.clientX - state.startClientX;
     const dDays = Math.round(dx / view.pxPerDay);
@@ -472,6 +504,7 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
     const state = dragRef.current;
     detachWindowListeners(handleWindowMove, handleWindowUp);
     dragRef.current = null;
+    setDragCursor(null);
     if (!state) {
       setDragPreview(null);
       return;
@@ -554,6 +587,15 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       return;
     }
 
+    // A press that never moved is a click, not an edit. Committing it anyway
+    // wrote the same dates back and left an undo step behind, so a user who
+    // clicked four bars had to press Ctrl+Z four times to get back to the edit
+    // they actually wanted to undo.
+    if (snappedDelta === 0 && state.deltaDays === 0) {
+      setDragPreview(null);
+      return;
+    }
+
     if (state.kind === 'task-move' && state.targetId && state.originalStart && state.originalEnd) {
       docStore.updateTask(state.targetId, {
         start: addDays(state.originalStart, snappedDelta),
@@ -629,7 +671,7 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
     [getSvgPoint, rowGutterWidth, axisHeight, layout],
   );
 
-  return { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, xToDate, depDrag, lassoDrag };
+  return { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, dragCursor, xToDate, depDrag, lassoDrag };
 }
 
 let attached = false;

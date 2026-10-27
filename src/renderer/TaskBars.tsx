@@ -110,7 +110,9 @@ export function TaskBars({ layout, dragPreview }: Props) {
             )}
             {/* Hit target. Full row-band height so a bar stays easy to grab and
                 drag, even though the drawn bar below is deliberately thin —
-                visual weight and target size are different problems. */}
+                visual weight and target size are different problems.
+                `move`, not `grab`: a hand promises to pan the view, and this
+                drag changes the schedule (SRS-EDIT-030, owner 2026-10-27). */}
             <rect
               className="task-bar-body"
               data-pp-kind="task"
@@ -120,7 +122,8 @@ export function TaskBars({ layout, dragPreview }: Props) {
               width={width}
               height={h}
               fill="transparent"
-              style={{ cursor: 'grab' }}
+              style={{ cursor: 'move' }}
+              onDoubleClick={() => beginEdit(t.id)}
             />
             {/* The drawn bar (direction B, owner's choice 2026-10-23): a thin
                 solid span. Remaining work is the same hue held back, completed
@@ -228,17 +231,19 @@ export function TaskBars({ layout, dragPreview }: Props) {
                 onCancel={endEdit}
               />
             ) : (
-              <g onDoubleClick={() => beginEdit(t.id)} style={{ cursor: 'text' }}>
-                <LabelText
-                  text={t.label}
-                  x={x}
-                  y={y}
-                  barWidth={width}
-                  barHeight={h}
-                  placement={t.labelPlacement ?? 'auto-right'}
-                  spaceRight={spaceRight.get(t.id) ?? Infinity}
-                />
-              </g>
+              // The label is `pointerEvents: none`, so the double-click
+              // handler and the `text` cursor that used to sit on this wrapper
+              // could never fire — a <g> has no hit area of its own. Renaming
+              // is on the bar itself, on F2, and on the right-click menu.
+              <LabelText
+                text={t.label}
+                x={x}
+                y={y}
+                barWidth={width}
+                barHeight={h}
+                placement={t.labelPlacement ?? 'auto-right'}
+                spaceRight={spaceRight.get(t.id) ?? Infinity}
+              />
             )}
           </g>
         );

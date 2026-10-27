@@ -248,6 +248,29 @@ ship `+1`.
   the existing `powerspawn`, `powerplan`, recorder and `powerplanner-web`
   entries. Never replace the `mcpServers` object wholesale.
 
+### Where a control goes (DECISIONS.md D10)
+
+Decide by the shape of the control, not by how important it feels:
+
+- **One press, one thing changed** (a colour, a day, ten percent, delete) ->
+  the command bar.
+- **Has a text field, date picker, dropdown, slider or picker in it** -> the
+  details dialog. Never the command bar.
+- **Structural** (insert, duplicate, reorder, sections, label position) ->
+  right-click.
+- **A name** -> in place: double-click the row, F2 on a task, or the Name field
+  in the dialog.
+- **Continuous** (dates, duration, progress) -> drag it on the chart, with a
+  nudge in the bar as the precise path, never as the only path.
+
+### Cursors name the gesture (SRS-EDIT-030)
+
+`move` on a draggable body, `ew-resize` on a date edge, `col-resize` on a
+divider, `text` on an editable name, `pointer` on something that selects,
+`crosshair` on something you draw or sweep. `grab`/`grabbing` is reserved for
+panning the surface itself. A region that does something must never show the
+default arrow.
+
 ## Memories and decisions
 
 - [`docs/agents/memories/`](docs/agents/memories/) — one dated fact per heading,

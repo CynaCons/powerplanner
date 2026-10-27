@@ -20,6 +20,13 @@ export const useToolStore = create<ToolState>((set, get) => ({
   },
 }));
 
+/**
+ * The cursor for the empty surface under each tool (SRS-EDIT-030).
+ *
+ * Elements set their own, so this is only what the background says. Pan is the
+ * one tool that keeps a hand: it is the tool that moves the surface, which is
+ * the gesture the hand has always meant.
+ */
 export function cursorForTool(tool: Tool): string {
   switch (tool) {
     case 'select':
