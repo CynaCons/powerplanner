@@ -17,6 +17,7 @@ import { Dependencies } from '../renderer/Dependencies';
 import { Markers } from '../renderer/Markers';
 import { RowGutter } from '../renderer/RowGutter';
 import { useChartInteractions } from './useChartInteractions';
+import type { ChartGeometry } from '../layout/geometry';
 import { chordKeys } from './keymap';
 import { ConnectorOverlay } from './ConnectorOverlay';
 import { useToolStore, cursorForTool } from '../stores/toolStore';
@@ -151,13 +152,17 @@ export function ChartArea() {
     return stripes;
   }, [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.workingDays]);
 
+  /**
+   * The geometry every gesture inverts, assigned on every render so a window
+   * listener installed once still reads today's value (SRS-EDIT-033). Four
+   * copies of this used to be captured by closure, each stale in its own way.
+   */
+  const geomRef = useRef<ChartGeometry>({ gutter: ROW_GUTTER_W, axisH: AXIS_TOTAL_H, scrollY, chartWidth, maxScroll, layout });
+  geomRef.current = { gutter: ROW_GUTTER_W, axisH: AXIS_TOTAL_H, scrollY, chartWidth, maxScroll, layout };
+
   const { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, dragCursor, depDrag, lassoDrag } = useChartInteractions({
     svgRef,
-    chartWidth,
-    rowGutterWidth: ROW_GUTTER_W,
-    axisHeight: AXIS_TOTAL_H,
-    maxScroll,
-    layout,
+    geomRef,
   });
   const activeTool = useToolStore((s) => s.activeTool);
 

@@ -120,6 +120,10 @@ export function TaskBars({ layout, dragPreview }: Props) {
               className="task-bar-body"
               data-pp-kind="task"
               data-pp-id={t.id}
+              /* Selection, readable from the DOM. The outline that shows it is
+                 an anonymous sibling rect, so nothing could say WHICH bars a
+                 gesture took — only how many (SRS-EDIT-033). */
+              data-pp-selected={selected ? '1' : undefined}
               x={x}
               y={y}
               width={width}

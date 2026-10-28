@@ -10,25 +10,15 @@ import { xToDate } from '../layout/timeAxis';
 import { addDays, diffDays } from '../utils/dates';
 import { snapDelta } from '../utils/snap';
 import { newId } from '../utils/ids';
-import type { LayoutResult } from '../layout/engine';
+import { clientToChart, chartToClient, rowAtY, type ChartGeometry } from '../layout/geometry';
 
 interface InteractionOptions {
   svgRef: RefObject<SVGSVGElement | null>;
-  chartWidth: number;
-  /** How far the chart body can scroll: content height minus what is visible. */
-  maxScroll: number;
-  rowGutterWidth: number;
-  axisHeight: number;
-  layout: LayoutResult;
-}
-
-function rowAtY(yInChart: number, layout: LayoutResult): string | null {
-  for (let i = 0; i < layout.rowOffsets.length; i++) {
-    const top = layout.rowOffsets[i];
-    const bottom = top + layout.rowHeights[i];
-    if (yInChart >= top && yInChart < bottom) return layout.visibleRows[i].id;
-  }
-  return null;
+  /**
+   * The chart's geometry, read at event time rather than captured by closure.
+   * See `layout/geometry.ts` for why it is one ref and not four props.
+   */
+  geomRef: RefObject<ChartGeometry>;
 }
 
 export type DragKind =
@@ -114,7 +104,7 @@ export interface DragPreviewMap {
   labels: Map<string, { dx: number; dy: number }>;
 }
 
-export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisHeight, layout, maxScroll }: InteractionOptions) {
+export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
   const dragRef = useRef<DragState | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
   const [dragCursor, setDragCursor] = useState<string | null>(null);
@@ -139,7 +129,7 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const { x } = getSvgPoint(e.clientX, e.clientY);
-        const anchorX = Math.max(0, x - rowGutterWidth);
+        const anchorX = Math.max(0, x - geomRef.current.gutter);
         const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
         useViewportStore.getState().zoom(factor, anchorX);
         return;
@@ -152,9 +142,9 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       // Vertical scroll. `maxScroll` is 0 when everything already fits, and
       // the store clamps, so a short plan simply does not move.
       e.preventDefault();
-      useViewportStore.getState().scrollBy(e.deltaY, maxScroll);
+      useViewportStore.getState().scrollBy(e.deltaY, geomRef.current.maxScroll);
     },
-    [getSvgPoint, rowGutterWidth, maxScroll],
+    [getSvgPoint, geomRef],
   );
 
   const handleSvgMouseDown = useCallback(
@@ -165,8 +155,8 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       // range starts, drag across it, release. (Owner directive 2026-10-26.)
       {
         const pt = getSvgPoint(e.clientX, e.clientY);
-        if (pt.y < axisHeight && pt.x > rowGutterWidth) {
-          const fromX = pt.x - rowGutterWidth;
+        if (pt.y < geomRef.current.axisH && pt.x > geomRef.current.gutter) {
+          const fromX = pt.x - geomRef.current.gutter;
           dragRef.current = {
             kind: 'axis-zoom',
             startClientX: e.clientX,
@@ -186,18 +176,17 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
 
       const { x } = getSvgPoint(e.clientX, e.clientY);
       // If clicking outside chart area (in row gutter) — ignore
-      if (!datasetEl && x < rowGutterWidth) return;
+      if (!datasetEl && x < geomRef.current.gutter) return;
 
       if (!datasetEl) {
         const tool = useToolStore.getState();
-        const xInChart = x - rowGutterWidth;
-        const { y: yAbs } = getSvgPoint(e.clientX, e.clientY);
-        const yInChart = yAbs - axisHeight;
+        const rect = svgRef.current!.getBoundingClientRect();
+        const { x: xInChart, y: yInChart } = clientToChart(geomRef.current, rect, e.clientX, e.clientY);
 
         // Tool-aware background click
         if (tool.activeTool === 'add-task' || tool.activeTool === 'add-milestone') {
           const date = xToDate(xInChart, view.startDate, view.pxPerDay);
-          const rowId = rowAtY(yInChart, layout) ?? layout.visibleRows[0]?.id;
+          const rowId = rowAtY(yInChart, geomRef.current.layout) ?? geomRef.current.layout.visibleRows[0]?.id;
           if (rowId) {
             if (tool.activeTool === 'add-task') {
               const newTaskId = newId('task');
@@ -260,17 +249,18 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       if (kind === 'connector') {
         const task = doc.tasks.find((t) => t.id === id);
         if (!task) return;
-        const { x: cx, y: cy } = getSvgPoint(e.clientX, e.clientY);
+        const rect = svgRef.current!.getBoundingClientRect();
+        const { x: cx, y: cy } = clientToChart(geomRef.current, rect, e.clientX, e.clientY);
         dragRef.current = {
           kind: 'dep-create',
           startClientX: e.clientX,
           startClientY: e.clientY,
           depSourceTaskId: id,
           depSourceEdge: sub === 'start' ? 'start' : 'end',
-          depStartX: cx - rowGutterWidth,
-          depStartY: cy - axisHeight,
-          depCurrentX: cx - rowGutterWidth,
-          depCurrentY: cy - axisHeight,
+          depStartX: cx,
+          depStartY: cy,
+          depCurrentX: cx,
+          depCurrentY: cy,
           deltaDays: 0,
         };
         attachWindowListeners(handleWindowMove, handleWindowUp);
@@ -409,7 +399,9 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
         return;
       }
     },
-    [getSvgPoint, rowGutterWidth],
+    // handleWindowMove/Up are declared below and are stable for the life of
+    // the hook; naming them here would be a use-before-declaration.
+    [getSvgPoint, svgRef, geomRef],
   );
 
   const handleWindowMove = useCallback((e: globalThis.MouseEvent) => {
@@ -431,9 +423,9 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
     if (state.kind === 'dep-create') {
       const svg = svgRef.current;
       if (!svg) return;
-      const rect = svg.getBoundingClientRect();
-      state.depCurrentX = e.clientX - rect.left - rowGutterWidth;
-      state.depCurrentY = e.clientY - rect.top - axisHeight;
+      const p = clientToChart(geomRef.current, svg.getBoundingClientRect(), e.clientX, e.clientY);
+      state.depCurrentX = p.x;
+      state.depCurrentY = p.y;
       triggerRender();
       return;
     }
@@ -441,8 +433,7 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
     if (state.kind === 'axis-zoom') {
       const svg = svgRef.current;
       if (!svg) return;
-      const rect = svg.getBoundingClientRect();
-      state.axisToX = e.clientX - rect.left - rowGutterWidth;
+      state.axisToX = clientToChart(geomRef.current, svg.getBoundingClientRect(), e.clientX, e.clientY).x;
       triggerRender();
       return;
     }
@@ -464,9 +455,9 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
     if (state.kind === 'lasso') {
       const svg = svgRef.current;
       if (!svg) return;
-      const rect = svg.getBoundingClientRect();
-      state.lassoCurrentX = e.clientX - rect.left - rowGutterWidth;
-      state.lassoCurrentY = e.clientY - rect.top - axisHeight;
+      const p = clientToChart(geomRef.current, svg.getBoundingClientRect(), e.clientX, e.clientY);
+      state.lassoCurrentX = p.x;
+      state.lassoCurrentY = p.y;
       triggerRender();
       return;
     }
@@ -508,7 +499,7 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       next.brackets.set(state.targetId, { start: state.originalStart, end: addDays(state.originalEnd, snapped) });
     }
     setDragPreview(next);
-  }, []);
+  }, [svgRef, geomRef, triggerRender]);
 
   const handleWindowUp = useCallback(() => {
     const state = dragRef.current;
@@ -530,7 +521,7 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       if (b - a > 8) {
         const from = addDays(view.startDate, Math.round(a / view.pxPerDay));
         const to = addDays(view.startDate, Math.round(b / view.pxPerDay));
-        view.fit(from, to, Math.max(100, chartWidth));
+        view.fit(from, to, Math.max(100, geomRef.current.chartWidth));
       }
       setDragPreview(null);
       return;
@@ -560,6 +551,7 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       const y1 = Math.max(state.lassoStartY!, state.lassoCurrentY!);
       const sel = useSelectionStore.getState();
       sel.clear();
+      const { layout } = geomRef.current;
       for (const t of layout.tasks) {
         if (t.x + t.width >= x0 && t.x <= x1 && t.y + t.height >= y0 && t.y <= y1) {
           sel.add({ kind: 'task', id: t.task.id });
@@ -577,7 +569,9 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
 
     if (state.kind === 'dep-create' && state.depSourceTaskId) {
       // Check if drop target is a task
-      const dropEl = document.elementFromPoint(state.depCurrentX! + rowGutterWidth + (svgRef.current?.getBoundingClientRect().left ?? 0), state.depCurrentY! + axisHeight + (svgRef.current?.getBoundingClientRect().top ?? 0));
+      const rect = svgRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
+      const drop = chartToClient(geomRef.current, rect, state.depCurrentX!, state.depCurrentY!);
+      const dropEl = document.elementFromPoint(drop.x, drop.y);
       const targetEl = dropEl?.closest('[data-pp-kind="task"]') as HTMLElement | null;
       if (targetEl && targetEl.dataset.ppId && targetEl.dataset.ppId !== state.depSourceTaskId) {
         const fromId = state.depSourceTaskId;
@@ -632,10 +626,12 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       docStore.updateBracket(state.targetId, { end: addDays(state.originalEnd, snappedDelta) });
     }
     setDragPreview(null);
-    // chartWidth matters: the axis sweep fits a range into it. Without it in
-    // the deps this callback kept the value from the first render, when the
-    // chart had no width yet, and sweeping zoomed OUT instead of in.
-  }, [handleWindowMove, chartWidth]);
+    // Nothing positional in the deps, deliberately: it is all read from
+    // `geomRef` at event time, so this callback stays stable. It has to —
+    // `attachWindowListeners` guards on a module-level flag and detaches by
+    // function reference, so re-creating it mid-drag would leak the old
+    // listener and wedge every drag after it.
+  }, [handleWindowMove, svgRef, geomRef, triggerRender]);
 
   const depDrag = dragRef.current?.kind === 'dep-create' ? dragRef.current : null;
   const lassoDrag = dragRef.current?.kind === 'lasso' ? dragRef.current : null;
@@ -645,7 +641,6 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
       e.preventDefault();
       const target = e.target as Element;
       const datasetEl = target.closest('[data-pp-kind]') as HTMLElement | null;
-      const { x: svgX, y: svgY } = getSvgPoint(e.clientX, e.clientY);
       const ctx = useContextMenuStore.getState();
       const sel = useSelectionStore.getState();
 
@@ -671,14 +666,15 @@ export function useChartInteractions({ svgRef, chartWidth, rowGutterWidth, axisH
         }
       }
       // Background
-      const xInChart = svgX - rowGutterWidth;
-      const yInChart = svgY - axisHeight;
+      const rect = svgRef.current!.getBoundingClientRect();
+      const { x: xInChart, y: yInChart } = clientToChart(geomRef.current, rect, e.clientX, e.clientY);
       const view = useViewportStore.getState();
       const date = xToDate(xInChart, view.startDate, view.pxPerDay);
+      const { layout } = geomRef.current;
       const rowId = rowAtY(yInChart, layout) ?? layout.visibleRows[0]?.id;
       ctx.show(e.clientX, e.clientY, { kind: 'background', date, rowId });
     },
-    [getSvgPoint, rowGutterWidth, axisHeight, layout],
+    [svgRef, geomRef],
   );
 
   return { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, dragCursor, xToDate, depDrag, lassoDrag };

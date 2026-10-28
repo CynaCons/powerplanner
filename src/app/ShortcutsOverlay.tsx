@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { X } from 'lucide-react';
 import { KEYMAP, GESTURES, chordKeys, type BindingGroup } from './keymap';
 import { useViewStore } from '../stores/viewStore';
@@ -18,7 +18,7 @@ const ORDER: BindingGroup[] = ['Tools', 'Insert', 'Scale', 'Editing', 'Navigatio
 export function ShortcutsOverlay() {
   const open = useViewStore((v) => v.shortcutsOpen);
   const setOpen = useViewStore((v) => v.setShortcutsOpen);
-  const onClose = () => setOpen(false);
+  const onClose = useCallback(() => setOpen(false), [setOpen]);
 
   const groups = useMemo(() => {
     const byGroup = new Map<BindingGroup, { keys: string[]; label: string }[]>();
