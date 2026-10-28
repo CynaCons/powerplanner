@@ -912,9 +912,10 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Show the year on the month band when it changes [agent: claude]
 - [x] Move task editing out of the bottom toolbar [agent: claude]
 - [x] Run the UX audit and publish A/B drawings to the canvas [agent: claude]
-- [ ] Close the loop: lint, unit, e2e, smoke and look at it
+- [x] Close the loop: lint, unit, e2e, smoke and look at it [agent: claude]
 - [ ] Commit, release and update the deployment ledger
 - [ ] USER GATE: approve renaming the GitHub repository to powerroadmap
+- [x] Review the session's own changes and fix what it confirms [agent: claude]
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
