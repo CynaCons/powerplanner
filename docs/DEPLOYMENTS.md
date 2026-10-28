@@ -13,29 +13,50 @@ are left as they were observed; the old name still resolves.
 
 | Surface | State | Observed |
 |---|---|---|
-| GitHub release (latest) | `v2.20.0`, non-draft, not prerelease, published 2026-10-28T16:49:39Z from `main` | `gh release view v2.20.0 --json` |
-| Release assets | `PowerRoadmap.html`, `PowerGantt.html`, `PowerPlanner.html` — 377,854 bytes each, all `state=uploaded` | `gh release view --json assets` |
-| Asset integrity | all three downloaded and hashed: `eeb5c4c7f98a9b86fff683e9580459000409146ed7535475a64006cf95c519cb`, identical to the committed `dist-template/index.html` blob | `gh release download` + `sha256sum` |
-| Build & Release workflow | `completed/success` for tag `v2.20.0` | `gh run list` |
+| GitHub release (latest) | `v2.21.0`, non-draft, not prerelease, published 2026-10-28T22:24:54Z from `main` | `gh release view v2.21.0 --json` |
+| Release assets | `PowerRoadmap.html`, `PowerGantt.html`, `PowerPlanner.html` — 388,308 bytes each, all `state=uploaded` | `gh release view --json assets` |
+| Asset integrity | all three downloaded and hashed: `97631064778e6c27713cc94e9663b90216ee2897836ac032a94e624a709b567b`, identical to each other and to the committed `dist-template/index.html` blob | `gh release download` + `sha256sum` |
+| Build & Release workflow | `completed/success` for tag `v2.21.0` | `gh run list` |
 | Web CI | `completed/success` on `main` | same |
 | GitHub Pages | `status: built`, from `main` `/`, HTTPS enforced | `gh api repos/CynaCons/powerroadmap/pages` |
-| Pages URL | https://cynacons.github.io/powerroadmap/ — serves 12 new-name links, 0 old-name | `curl` |
+| Pages URL | https://cynacons.github.io/powerroadmap/ — HTTP 200 | `curl` |
 | Pages content | landing site from `site/`; no live app demo | `deploy-site.yml` |
-| `src/version.ts` | `2.20.0` | repo |
-| `package.json` | `2.20.0` — matches | repo |
-| `dist-template/index.html` | tracked, rebuilt at the tag; blob 377,854 bytes | repo |
+| `src/version.ts` | `2.21.0` | repo |
+| `package.json` | `2.21.0` — matches | repo |
+| `dist-template/index.html` | tracked; rebuilding at the tag reproduced the committed bytes exactly, so `git status` stayed clean; blob 388,308 bytes | repo |
 | npm | not a surface — nothing published | DECISIONS.md D5 |
 | MCP Registry | not a surface — nothing published | DECISIONS.md D5 |
+
+### The update routes, re-measured at v2.21.0
+
+All four fetched 2026-10-28 after the release, not inferred:
+
+| Route | Observed |
+|---|---|
+| `raw…/CynaCons/powerroadmap/main/package.json` | `2.21.0` |
+| `api.github.com/repos/CynaCons/powerroadmap/releases/latest` | `v2.21.0` |
+| `api.github.com/repos/CynaCons/powerplanner/releases/latest` — the **old** name, which every build before v2.20.0 asks for | `v2.21.0`, through the rename redirect |
+| `raw…/CynaCons/powerroadmap/v2.21.0/dist-template/index.html` | 388,308 bytes — the published asset's exact size |
+
+The third row is the one that matters: builds in the wild compiled the old
+repository name in and cannot be corrected remotely. They still find this
+release.
 
 ### A digest trap on Windows
 
 `core.autocrlf=true` and no `.gitattributes`, so `dist-template/index.html` is
-checked out with CRLF: 378,167 bytes on disk against a 377,854-byte blob. The
-blob is what the Linux runner checks out and publishes, and it hashes
-`eeb5c4c7…`, matching all three assets — but hashing the local working copy
-gives a different digest and looks like a failed release. Hash
-`git cat-file blob HEAD:dist-template/index.html`, not the file on disk. This
-is also why the file reappears as modified after every local build.
+*checked out* with CRLF: at v2.20.0, 378,167 bytes on disk against a
+377,854-byte blob. The blob is what the Linux runner checks out and publishes,
+so hashing the local working copy gives a different digest and looks like a
+failed release. Hash `git cat-file blob HEAD:dist-template/index.html`, not the
+file on disk.
+
+It depends on how the file got there, which is why it does not bite every time.
+A file written by `npm run build:template` is LF and matches the blob — at
+v2.21.0 both were 388,308 bytes and `git status` stayed clean after the rebuild.
+A file restored by `git checkout --` is CRLF and does not. So the trap springs
+after a checkout, not after a build. A `.gitattributes` pinning the template to
+LF would remove the distinction; it is in the backlog.
 
 ## Asset names, and why all three ship
 
@@ -45,13 +66,15 @@ release carries a byte-identical copy under all three names. Dropping one
 strands every build still using it, and those builds cannot be repaired
 remotely.
 
-| A build on | looks for | v2.19.0 ships it |
+| A build on | looks for | v2.21.0 ships it |
 |---|---|---|
 | 2.17.x | `PowerPlanner.html` | yes |
 | 2.18.x | `PowerGantt.html` | yes |
 | 2.19.0+ | `PowerRoadmap.html` | yes |
 
-Verified against the live API on 2026-10-26, not inferred.
+Verified against the live API on 2026-10-28, not inferred: all three assets of
+`v2.21.0` were downloaded and hashed, and all three are the same 388,308 bytes
+with the same digest.
 
 ## The rename — done 2026-10-28
 
