@@ -205,6 +205,8 @@ function DocumentGroup() {
   const setTheme = useDocumentStore((s) => s.setTheme);
   const fiscalYearStart = useDocumentStore((s) => s.doc.calendar.fiscalYearStart);
   const setFiscalYearStart = useDocumentStore((s) => s.setFiscalYearStart);
+  const allowOverlap = useDocumentStore((s) => s.doc.style.allowOverlap ?? false);
+  const setAllowOverlap = useDocumentStore((s) => s.setAllowOverlap);
 
   return (
     <Group label="Document">
@@ -233,10 +235,37 @@ function DocumentGroup() {
           <option key={label} value={i + 1}>{label}</option>
         ))}
       </select>
+      <span className="cmdbar__field-label">Bars</span>
+      <div className="cmdbar__scale" role="radiogroup" aria-label="Overlapping bars">
+        {OVERLAP.map((o) => (
+          <button
+            key={String(o.value)}
+            role="radio"
+            aria-checked={allowOverlap === o.value}
+            className={allowOverlap === o.value ? 'is-active' : ''}
+            title={o.title}
+            onClick={() => setAllowOverlap(o.value)}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
       <WorkingDays />
     </Group>
   );
 }
+
+/**
+ * Stacked or overlapping, the think-cell choice (SRS-LAY-024).
+ *
+ * The engine has packed bars into lanes since it was written and has taken an
+ * `allowOverlap` argument for just as long, which nothing ever passed. This
+ * is the control that reaches it.
+ */
+const OVERLAP = [
+  { value: false, label: 'Stack', title: 'Bars that cover the same dates take their own lane' },
+  { value: true, label: 'Overlap', title: 'Bars that cover the same dates share one band' },
+] as const;
 
 const DOW = [
   { day: 1, label: 'M' },

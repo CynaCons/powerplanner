@@ -84,6 +84,14 @@ export interface Marker {
 export interface StyleSettings {
   theme: ThemeName;
   preset: string;
+  /**
+   * Let bars that cover the same dates share one band instead of stacking
+   * into lanes — think-cell's overlap (SRS-LAY-024).
+   *
+   * Absent means off, which is what every document written before this
+   * setting existed implies, so the field is optional and old files load.
+   */
+  allowOverlap?: boolean;
 }
 
 export interface Viewport {

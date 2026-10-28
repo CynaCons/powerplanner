@@ -116,7 +116,11 @@
       "required": ["theme", "preset"],
       "properties": {
         "theme": { "$ref": "#/$defs/ThemeName" },
-        "preset": { "type": "string" }
+        "preset": { "type": "string" },
+        "allowOverlap": {
+          "type": "boolean",
+          "description": "Bars covering the same dates share one band instead of stacking into lanes. Absent means stacked, which is what every document written before this setting implies."
+        }
       }
     },
     "BaselineSnapshot": {

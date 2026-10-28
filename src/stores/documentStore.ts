@@ -61,6 +61,8 @@ interface DocumentState {
   setScale: (scale: TimeScale) => void;
   setFiscalYearStart: (month: number) => void;
   setTheme: (theme: GanttDocument['style']['theme']) => void;
+  /** Let bars on one row overlap instead of stacking (SRS-LAY-024). */
+  setAllowOverlap: (v: boolean) => void;
 
   addTask: (task: Task) => void;
   updateTask: (id: string, patch: Partial<Task>, key?: string) => void;
@@ -222,6 +224,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   setScale: (scale) => mutate(set, (d) => ({ ...d, calendar: { ...d.calendar, scale } })),
   setFiscalYearStart: (month) => mutate(set, (d) => ({ ...d, calendar: { ...d.calendar, fiscalYearStart: month } })),
   setTheme: (theme) => mutate(set, (d) => ({ ...d, style: { ...d.style, theme } })),
+  setAllowOverlap: (v) => mutate(set, (d) => ({ ...d, style: { ...d.style, allowOverlap: v } })),
 
   addTask: (task) => mutate(set, (d) => ({ ...d, tasks: [...d.tasks, task] })),
   updateTask: (id, patch, key) =>

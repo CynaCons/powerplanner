@@ -74,10 +74,17 @@ interface LayoutInput {
   doc: GanttDocument;
   viewStart: string;
   pxPerDay: number;
+  /**
+   * Override the document's own setting. Omitted — which is every caller in
+   * the app — the document decides (SRS-LAY-024). This parameter existed
+   * from the day the lane packer was written and no caller ever passed it, so
+   * overlap was reachable only from a test.
+   */
   allowOverlap?: boolean;
 }
 
-export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap = false }: LayoutInput): LayoutResult {
+export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap }: LayoutInput): LayoutResult {
+  const overlap = allowOverlap ?? doc.style.allowOverlap ?? false;
   // Determine which rows are visible (collapse children of collapsed groups)
   const collapsedGroups = new Set(doc.rows.filter((r) => r.collapsed).map((r) => r.id));
   const visibleRows = doc.rows.filter((r) => !r.groupId || !collapsedGroups.has(r.groupId));
@@ -91,7 +98,7 @@ export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap = false 
   // Milestone sub-rows (Defect D parity with native).
   const milestoneSubRow = new Map<string, number>();
 
-  if (!allowOverlap) {
+  if (!overlap) {
     for (const row of visibleRows) {
       const tasks = doc.tasks.filter((t) => t.rowId === row.id).sort((a, b) => a.start.localeCompare(b.start));
       // Each track holds the last painted ISO day (not raw end): inclusive-end

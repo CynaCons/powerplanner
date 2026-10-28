@@ -36,6 +36,15 @@ interface Pkg {
   start: number;
   end: number;
   percentComplete: number;
+  /**
+   * Share a row with the other packages that name it, instead of taking one
+   * of your own. The first package to name a row creates it.
+   *
+   * Several bars on one band is the shape a planner actually draws — and it
+   * is what the engine has always supported and the default document never
+   * showed, so the capability read as missing.
+   */
+  row?: { id: string; label: string };
 }
 
 interface Group {
@@ -124,8 +133,11 @@ const GROUPS: Group[] = [
     label: 'Release',
     color: STREAM.steel,
     packages: [
-      { id: 'bsample', label: 'B-sample build', start: 335, end: 390, percentComplete: 10 },
-      { id: 'csample', label: 'C-sample build', start: 415, end: 470, percentComplete: 0 },
+      // Two builds, one band: they are consecutive and they are the same
+      // piece of work seen twice, which is exactly when a row carries more
+      // than one bar.
+      { id: 'bsample', label: 'B-sample build', start: 335, end: 390, percentComplete: 10, row: { id: 'builds', label: 'Sample builds' } },
+      { id: 'csample', label: 'C-sample build', start: 415, end: 470, percentComplete: 0, row: { id: 'builds', label: 'Sample builds' } },
     ],
   },
 ];
@@ -142,10 +154,13 @@ export function sampleDocument(): GanttDocument {
   for (const g of GROUPS) {
     rows.push({ id: `row-${g.id}`, label: g.label, groupId: null });
     for (const p of g.packages) {
-      rows.push({ id: `row-${p.id}`, label: p.label, groupId: `row-${g.id}` });
+      const rowId = p.row ? `row-${p.row.id}` : `row-${p.id}`;
+      if (!rows.some((r) => r.id === rowId)) {
+        rows.push({ id: rowId, label: p.row ? p.row.label : p.label, groupId: `row-${g.id}` });
+      }
       tasks.push({
         id: `task-${p.id}`,
-        rowId: `row-${p.id}`,
+        rowId,
         label: p.label,
         start: d(p.start),
         end: d(p.end),
@@ -160,8 +175,8 @@ export function sampleDocument(): GanttDocument {
     { id: 'ms-bsw', rowId: 'row-rte', label: 'BSW integrated', date: d(390) },
     { id: 'ms-tara', rowId: 'row-tara', label: 'TARA approved', date: d(110) },
     { id: 'ms-safecase', rowId: 'row-safecase', label: 'Safety case released', date: d(500) },
-    { id: 'ms-bsample', rowId: 'row-bsample', label: 'B-sample', date: d(390) },
-    { id: 'ms-csample', rowId: 'row-csample', label: 'C-sample', date: d(470) },
+    { id: 'ms-bsample', rowId: 'row-builds', label: 'B-sample', date: d(390) },
+    { id: 'ms-csample', rowId: 'row-builds', label: 'C-sample', date: d(470) },
     { id: 'ms-sop', rowId: 'row-rel', label: 'Start of production', date: d(530) },
   ];
 

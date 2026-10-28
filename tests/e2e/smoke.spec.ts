@@ -56,7 +56,7 @@ test.describe('PowerRoadmap smoke', () => {
     await expect(page.locator('.app-status')).toContainText('1 selected');
     await page.locator('.cmdbar button[aria-label="Document settings"]').click();
     await expect(page.locator('.app-status')).toContainText('0 selected');
-    await expect(page.locator('.cmdbar [role="radiogroup"]')).toBeVisible();
+    await expect(page.locator('.cmdbar [role="radiogroup"][aria-label="Theme"]')).toBeVisible();
   });
 
   test('tools appear only when nothing is selected', async ({ page }) => {
@@ -111,5 +111,7 @@ test.describe('PowerRoadmap smoke', () => {
  */
 async function openDocumentSettings(page: import('@playwright/test').Page) {
   await page.locator('.cmdbar button[aria-label="Document settings"]').click();
-  await page.locator('.cmdbar [role="radiogroup"]').waitFor();
+  // Named: the document context now holds two radio groups, Theme and
+  // Overlapping bars (SRS-ELEM-050).
+  await page.locator('.cmdbar [role="radiogroup"][aria-label="Theme"]').waitFor();
 }

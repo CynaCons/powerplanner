@@ -114,6 +114,9 @@ export function validateDocument(input: unknown): GanttDocument {
   if (!isObject(style) || !isString(style.theme) || !isString(style.preset)) {
     throw new SchemaError('style invalid');
   }
+  if (style.allowOverlap !== undefined && typeof style.allowOverlap !== 'boolean') {
+    throw new SchemaError('style.allowOverlap must be a boolean');
+  }
 
   // Optional baseline
   const baseline = (input as { baseline?: unknown }).baseline;

@@ -919,7 +919,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 
 ### v2.21.0 — The seven open defects
 **Goal:** The chart clips, the keymap is declared once, and the app says what it did.
-- [ ] Write SRS rows for clipping, keymap, geometry, notices and undo [agent: claude]
+- [x] Write SRS rows for clipping, keymap, geometry, notices and undo [agent: claude]
 - [x] Clip the chart body to the plot area, not the scroll [agent: claude]
 - [x] Fix the embed renderer's inverted clip and regenerate the figures [agent: claude]
 - [x] Declare every keyboard binding once in a keymap table [agent: claude]
@@ -927,7 +927,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Give the chart one shared geometry source for pointer gestures [agent: claude]
 - [x] Tell the user the outcome of every file and delete action [agent: claude]
 - [x] Correct the update dialog when the in-place write fails [agent: claude]
-- [ ] Make one gesture cost one undo step [agent: claude]
+- [x] Make one gesture cost one undo step [agent: claude]
 - [ ] Let a row carry overlapping bars as a document setting [agent: claude]
 - [ ] Show several bars per row in the sample document [agent: claude]
 - [ ] Close the loop: lint, unit, e2e, smoke and look at it [agent: claude]
