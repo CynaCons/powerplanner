@@ -85,6 +85,9 @@ export function TaskBars({ layout, dragPreview }: Props) {
         const width = Math.max(2, endX - x + pxPerDay);
         const y = lt.y;
         const h = lt.height;
+        // Leave at least 8px of body between the grips, so the double-click
+        // that renames the task always has somewhere to land.
+        const handleW = Math.min(HANDLE_W, Math.floor((width - 8) / 2));
         const selected = isSelected(t.id);
         const critical = criticalIds.has(t.id);
         const color = t.color || 'var(--bar-default)';
@@ -148,31 +151,39 @@ export function TaskBars({ layout, dragPreview }: Props) {
                 pointerEvents="none"
               />
             )}
-            {/* Resize handles */}
-            <rect
-              data-pp-kind="task"
-              data-pp-id={t.id}
-              data-pp-sub="start"
-              x={x}
-              y={y}
-              width={HANDLE_W}
-              height={h}
-              fill="white"
-              opacity={selected ? 0.4 : 0.001}
-              style={{ cursor: 'ew-resize' }}
-            />
-            <rect
-              data-pp-kind="task"
-              data-pp-id={t.id}
-              data-pp-sub="end"
-              x={x + width - HANDLE_W}
-              y={y}
-              width={HANDLE_W}
-              height={h}
-              fill="white"
-              opacity={selected ? 0.4 : 0.001}
-              style={{ cursor: 'ew-resize' }}
-            />
+            {/* Resize handles, never wider than the bar can spare.
+                Two fixed 5px grips covered a 10px bar end to end, so the body
+                underneath — which carries the double-click that renames it —
+                could not be hit at all. A freshly inserted one-week task is
+                about 10px at the zoom the sample opens on. */}
+            {handleW > 0 && (
+              <>
+                <rect
+                  data-pp-kind="task"
+                  data-pp-id={t.id}
+                  data-pp-sub="start"
+                  x={x}
+                  y={y}
+                  width={handleW}
+                  height={h}
+                  fill="white"
+                  opacity={selected ? 0.4 : 0.001}
+                  style={{ cursor: 'ew-resize' }}
+                />
+                <rect
+                  data-pp-kind="task"
+                  data-pp-id={t.id}
+                  data-pp-sub="end"
+                  x={x + width - handleW}
+                  y={y}
+                  width={handleW}
+                  height={h}
+                  fill="white"
+                  opacity={selected ? 0.4 : 0.001}
+                  style={{ cursor: 'ew-resize' }}
+                />
+              </>
+            )}
             {/* Selection outline */}
             {selected && (
               <rect
