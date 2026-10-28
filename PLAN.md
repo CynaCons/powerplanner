@@ -917,7 +917,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] USER GATE: approve renaming the GitHub repository to powerroadmap [agent: owner]
 - [x] Review the session's own changes and fix what it confirms [agent: claude]
 
-### v2.21.0 — The seven open defects
+### v2.21.0 — The seven open defects (current) (ACTIVE)
 **Goal:** The chart clips, the keymap is declared once, and the app says what it did.
 - [x] Write SRS rows for clipping, keymap, geometry, notices and undo [agent: claude]
 - [x] Clip the chart body to the plot area, not the scroll [agent: claude]
