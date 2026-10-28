@@ -110,7 +110,51 @@ export function buildAxis(
   if (result.micro) {
     result.micro = thinTicks(result.micro, 16);
   }
+
+  // The year goes on last, once we know which month ticks actually survive
+  // and where they sit (SRS-TAX-025).
+  if (scale === 'day' || scale === 'week') {
+    result.major = withYears(result.major);
+  } else if (scale === 'month') {
+    result.minor = withYears(result.minor);
+  }
   return result;
+}
+
+/**
+ * Add the year to the month ticks that need it, and only those.
+ *
+ * Two rules, both about what a reader can actually see:
+ *  - the first tick whose LABEL lands on screen carries the year, so the view
+ *    always states which year it is. The leading tick is generated at the
+ *    start of its month, which is usually off the left edge, and its label
+ *    goes with it.
+ *  - any tick whose year differs from the previous surviving one carries it,
+ *    so the turn of the year is always marked even when thinning removed
+ *    January itself. A two-year view at week scale otherwise read
+ *    "Oct · Dec · Feb · Apr" with nothing to say which February.
+ */
+function withYears(level: AxisLevel): AxisLevel {
+  // TimeAxis draws a major label at x + 8; anything further left is cut off.
+  const LABEL_PAD = 8;
+  let previousYear: number | null = null;
+  let statedOnce = false;
+  const ticks = level.ticks.map((t) => {
+    const year = parseISO(t.iso).getUTCFullYear();
+    const readable = t.x + LABEL_PAD >= 0;
+    const turnsTheYear = previousYear !== null && year !== previousYear;
+    const show = turnsTheYear || (readable && !statedOnce);
+    previousYear = year;
+    if (show) statedOnce = true;
+    return show ? { ...t, label: `${t.label} ${year}` } : t;
+  });
+  // Every tick is off the left edge — a view narrower than one month. State it
+  // on the last one rather than nowhere.
+  if (!statedOnce && ticks.length > 0) {
+    const last = ticks[ticks.length - 1];
+    ticks[ticks.length - 1] = { ...last, label: `${last.label} ${parseISO(last.iso).getUTCFullYear()}` };
+  }
+  return { ticks, height: level.height };
 }
 
 function dayTicks(start: ISODate, end: ISODate, pxPerDay: number): AxisLevel {
@@ -143,16 +187,13 @@ function monthTicks(start: ISODate, end: ISODate, pxPerDay: number): AxisLevel {
   let cursor = startOfMonth(start);
   while (parseISO(cursor) <= parseISO(end)) {
     const d = parseISO(cursor);
-    // The year on every month read "Oct 2026  Nov 2026  Dec 2026" — the same
-    // four digits three times, competing with the month for the one strong
-    // band in the chart. It is carried on January, where the year turns, and
-    // on the leading tick, so the view is never ambiguous (SRS-TAX-025).
-    const showYear = d.getUTCMonth() === 0 || ticks.length === 0;
+    // Month name only. Which ticks carry a year is decided in `withYears`,
+    // AFTER thinning and with the real x positions — deciding it here chose
+    // ticks that were then thinned away or drawn off the left edge, and a
+    // week-scale chart could end up showing no year at all.
     ticks.push({
       iso: cursor,
-      label: showYear
-        ? `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCFullYear()}`
-        : MONTH_NAMES[d.getUTCMonth()],
+      label: MONTH_NAMES[d.getUTCMonth()],
       x: dateToX(cursor, start, pxPerDay),
     });
     cursor = addMonths(cursor, 1);
