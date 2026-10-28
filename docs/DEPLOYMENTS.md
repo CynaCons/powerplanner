@@ -9,20 +9,33 @@ Repository: `CynaCons/powerroadmap` — renamed from `CynaCons/powerplanner` on
 2026-10-28. Observations recorded before that date name the old repository and
 are left as they were observed; the old name still resolves.
 
-## Current state — observed 2026-10-26
+## Current state — observed 2026-10-28
 
 | Surface | State | Observed |
 |---|---|---|
-| GitHub release (latest) | `v2.19.0`, non-draft, published 2026-10-26 | `gh release view v2.19.0` |
-| Release assets | `PowerRoadmap.html`, `PowerGantt.html`, `PowerPlanner.html` — byte-identical, 367,548 bytes each | `gh release view --json assets` |
-| GitHub Pages | `status: built`, from `main` `/`, HTTPS enforced | `gh api repos/CynaCons/powerplanner/pages` |
-| Pages URL | https://cynacons.github.io/powerplanner/ | same |
+| GitHub release (latest) | `v2.20.0`, non-draft, not prerelease, published 2026-10-28T16:49:39Z from `main` | `gh release view v2.20.0 --json` |
+| Release assets | `PowerRoadmap.html`, `PowerGantt.html`, `PowerPlanner.html` — 377,854 bytes each, all `state=uploaded` | `gh release view --json assets` |
+| Asset integrity | all three downloaded and hashed: `eeb5c4c7f98a9b86fff683e9580459000409146ed7535475a64006cf95c519cb`, identical to the committed `dist-template/index.html` blob | `gh release download` + `sha256sum` |
+| Build & Release workflow | `completed/success` for tag `v2.20.0` | `gh run list` |
+| Web CI | `completed/success` on `main` | same |
+| GitHub Pages | `status: built`, from `main` `/`, HTTPS enforced | `gh api repos/CynaCons/powerroadmap/pages` |
+| Pages URL | https://cynacons.github.io/powerroadmap/ — serves 12 new-name links, 0 old-name | `curl` |
 | Pages content | landing site from `site/`; no live app demo | `deploy-site.yml` |
-| `src/version.ts` | `2.19.0` | repo |
-| `package.json` | `2.19.0` — matches | repo |
-| `dist-template/index.html` | tracked, rebuilt at the tag, 355,051 bytes | repo |
+| `src/version.ts` | `2.20.0` | repo |
+| `package.json` | `2.20.0` — matches | repo |
+| `dist-template/index.html` | tracked, rebuilt at the tag; blob 377,854 bytes | repo |
 | npm | not a surface — nothing published | DECISIONS.md D5 |
 | MCP Registry | not a surface — nothing published | DECISIONS.md D5 |
+
+### A digest trap on Windows
+
+`core.autocrlf=true` and no `.gitattributes`, so `dist-template/index.html` is
+checked out with CRLF: 378,167 bytes on disk against a 377,854-byte blob. The
+blob is what the Linux runner checks out and publishes, and it hashes
+`eeb5c4c7…`, matching all three assets — but hashing the local working copy
+gives a different digest and looks like a failed release. Hash
+`git cat-file blob HEAD:dist-template/index.html`, not the file on disk. This
+is also why the file reappears as modified after every local build.
 
 ## Asset names, and why all three ship
 
@@ -88,6 +101,38 @@ the same fetch at `v2.16.0` contains none of them.
 
 A build without an updater has to be replaced by hand — the updater ships
 inside each saved file, so it cannot be delivered retroactively.
+
+### Observed: a real v2.19.0 build finding v2.20.0 across the rename
+
+The point of the gate (PLAN.md v2.17.1) was to see an installed build update
+itself rather than argue that it could. Done 2026-10-28, and made harder on
+purpose by running it *after* the rename.
+
+`PowerRoadmap.html` was downloaded from the published **v2.19.0** release — a
+build with `GITHUB_REPO = 'CynaCons/powerplanner'`, the OLD name, compiled in
+and unchangeable. Served over `http://localhost:5181` so the page had a real
+origin, with the 6-hour check cache cleared first. Pressing **Check for
+updates** produced:
+
+```json
+{"available":true,"latestVersion":"2.20.0",
+ "downloadUrl":"https://github.com/CynaCons/powerroadmap/releases/download/v2.20.0/PowerRoadmap.html",
+ "releaseUrl":"https://github.com/CynaCons/powerroadmap/releases/tag/v2.20.0",
+ "tag":"v2.20.0"}
+```
+
+and the dialog offered "Update to 2.20.0". Note what the old build resolved:
+it asked under the old name and GitHub handed back URLs carrying the **new**
+one, so it follows the rename without knowing the name changed.
+
+The fetch the update would then perform was run in that same page, against the
+old name, and returned 200 with `<div id="root">` present — `fetchBuild`'s own
+acceptance guard — carrying `2.20.0`.
+
+**Not exercised:** the final write. Served over http there is no file handle,
+so `performUpdate` takes the download branch, and that was left for the owner
+to click. Everything up to the write is observed; the write itself is browser
+plumbing and independent of the rename.
 
 ## Update route — the one the in-app updater uses
 
