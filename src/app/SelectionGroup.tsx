@@ -1,6 +1,6 @@
 import { Trash2, SlidersHorizontal, Brackets as BracketIcon, Plus, Rows3 } from 'lucide-react';
 import { useDocumentStore } from '../stores/documentStore';
-import { useSelectionStore } from '../stores/selectionStore';
+import { useSelectionStore, type Selectable } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
 import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
@@ -109,15 +109,21 @@ function WrapInBracket({ taskIds }: { taskIds: string[] }) {
   );
 }
 
-/** The door to the details dialog. Opens it; never edits anything itself. */
-function DetailsButton({ what }: { what: string }) {
-  const setDetailsOpen = useViewStore((s) => s.setDetailsOpen);
+/**
+ * The door to the details dialog. Opens it; never edits anything itself.
+ *
+ * It names its own subject. Letting the dialog infer one from the selection
+ * meant the Row button opened Task details for the first task on that row,
+ * because selecting a row selects everything on it.
+ */
+function DetailsButton({ what, target }: { what: string; target: Selectable }) {
+  const openDetails = useViewStore((s) => s.openDetails);
   return (
     <button
       className="cmdbar__btn"
       title={`${what} details… (Enter)`}
       aria-label={`${what} details`}
-      onClick={() => setDetailsOpen(true)}
+      onClick={() => openDetails(target)}
     >
       <SlidersHorizontal size={14} strokeWidth={1.75} />
     </button>
@@ -144,7 +150,7 @@ function TaskFields({ task }: { task: Task }) {
       <Nudge label="−10%" title="Ten percent less complete" onClick={() => bump(-10)} />
       <Nudge label="+10%" title="Ten percent more complete" onClick={() => bump(10)} />
       <WrapInBracket taskIds={[task.id]} />
-      <DetailsButton what="Task" />
+      <DetailsButton what="Task" target={{ kind: 'task', id: task.id }} />
       <DeleteButton what="task" onClick={() => { deleteTask(task.id); clear(); }} />
     </Group>
   );
@@ -160,7 +166,7 @@ function MilestoneFields({ milestone }: { milestone: Milestone }) {
       <SelectionName value={milestone.label} />
       <Nudge label="−1d" title="Move a day earlier" onClick={() => update(milestone.id, { date: addDays(milestone.date, -1) })} />
       <Nudge label="+1d" title="Move a day later" onClick={() => update(milestone.id, { date: addDays(milestone.date, 1) })} />
-      <DetailsButton what="Milestone" />
+      <DetailsButton what="Milestone" target={{ kind: 'milestone', id: milestone.id }} />
       <DeleteButton what="milestone" onClick={() => { remove(milestone.id); clear(); }} />
     </Group>
   );
@@ -173,7 +179,7 @@ function BracketFields({ bracket }: { bracket: Bracket }) {
   return (
     <Group label="Bracket">
       <SelectionName value={bracket.label} />
-      <DetailsButton what="Bracket" />
+      <DetailsButton what="Bracket" target={{ kind: 'bracket', id: bracket.id }} />
       <DeleteButton what="bracket" onClick={() => { remove(bracket.id); clear(); }} />
     </Group>
   );
@@ -219,7 +225,7 @@ function RowFields({ rowId }: { rowId: string }) {
         <Rows3 size={14} strokeWidth={1.75} /><span>Row below</span>
       </button>
       <WrapInBracket taskIds={onRow.map((t) => t.id)} />
-      <DetailsButton what="Row" />
+      <DetailsButton what="Row" target={{ kind: 'row', id: rowId }} />
       <DeleteButton what="row" onClick={() => { deleteRow(rowId); clear(); }} />
     </Group>
   );

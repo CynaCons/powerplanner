@@ -2,7 +2,6 @@ import { useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useDocumentStore } from '../stores/documentStore';
-import { useSelectionStore } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
 import { ColorPalette } from './ColorPalette';
 import { LabelPositionPicker } from './LabelPositionPicker';
@@ -22,9 +21,9 @@ import type { LabelPlacement } from '../types/document';
  */
 export function DetailsDialog() {
   const open = useViewStore((s) => s.detailsOpen);
-  const setOpen = useViewStore((s) => s.setDetailsOpen);
-  const close = useCallback(() => setOpen(false), [setOpen]);
-  const items = useSelectionStore((s) => s.items);
+  const sel = useViewStore((s) => s.detailsTarget);
+  const closeDetails = useViewStore((s) => s.closeDetails);
+  const close = useCallback(() => closeDetails(), [closeDetails]);
   const doc = useDocumentStore((s) => s.doc);
 
   useEffect(() => {
@@ -39,11 +38,22 @@ export function DetailsDialog() {
     return () => window.removeEventListener('keydown', onKey, true);
   }, [open, close]);
 
-  if (!open) return null;
-  // The clicked thing owns the dialog; the row that came with it is a
-  // companion, the same rule the command bar follows.
-  const sel = items.find((i) => i.kind !== 'row') ?? items[0];
-  if (!sel) return null;
+  // Delete the thing being edited and the dialog has nothing to show. Without
+  // this it merely rendered nothing while `detailsOpen` stayed true, and the
+  // next ordinary click on a bar popped a modal nobody asked for.
+  const subjectExists =
+    !sel ? false
+    : sel.kind === 'task' ? doc.tasks.some((t) => t.id === sel.id)
+    : sel.kind === 'milestone' ? doc.milestones.some((m) => m.id === sel.id)
+    : sel.kind === 'bracket' ? doc.brackets.some((b) => b.id === sel.id)
+    : sel.kind === 'row' ? doc.rows.some((r) => r.id === sel.id)
+    : false;
+
+  useEffect(() => {
+    if (open && !subjectExists) closeDetails();
+  }, [open, subjectExists, closeDetails]);
+
+  if (!open || !sel || !subjectExists) return null;
 
   let title = '';
   let body: React.ReactNode = null;
@@ -51,22 +61,22 @@ export function DetailsDialog() {
   if (sel.kind === 'task') {
     const task = doc.tasks.find((t) => t.id === sel.id);
     if (!task) return null;
-    title = 'Task details';
+    title = `Task — ${task.label}`;
     body = <TaskBody id={task.id} />;
   } else if (sel.kind === 'milestone') {
     const m = doc.milestones.find((x) => x.id === sel.id);
     if (!m) return null;
-    title = 'Milestone details';
+    title = `Milestone — ${m.label}`;
     body = <MilestoneBody id={m.id} />;
   } else if (sel.kind === 'bracket') {
     const b = doc.brackets.find((x) => x.id === sel.id);
     if (!b) return null;
-    title = 'Bracket details';
+    title = `Bracket — ${b.label}`;
     body = <BracketBody id={b.id} />;
   } else if (sel.kind === 'row') {
     const r = doc.rows.find((x) => x.id === sel.id);
     if (!r) return null;
-    title = 'Row details';
+    title = `Row — ${r.label}`;
     body = <RowBody id={r.id} />;
   } else {
     return null;

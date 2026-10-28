@@ -51,7 +51,7 @@ export function ChartContextMenu() {
   const doc = useDocumentStore((s) => s.doc);
   const docActions = useDocumentStore();
   const setSelection = useSelectionStore((s) => s.setSelection);
-  const setDetailsOpen = useViewStore((s) => s.setDetailsOpen);
+  const openDetailsFor = useViewStore((s) => s.openDetails);
 
   /**
    * Select the thing, then open its details. Selecting first is what makes the
@@ -60,7 +60,7 @@ export function ChartContextMenu() {
    */
   const openDetails = (id: string, kind: 'task' | 'milestone' | 'bracket' | 'row') => {
     setSelection([{ kind, id }]);
-    setDetailsOpen(true);
+    openDetailsFor({ kind, id });
   };
   const beginEdit = useEditStore((s) => s.beginEdit);
 

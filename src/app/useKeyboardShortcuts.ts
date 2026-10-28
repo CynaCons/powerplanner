@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
-import { useSelectionStore } from '../stores/selectionStore';
+import { useSelectionStore, type Selectable, type SelectableKind } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
@@ -18,6 +18,12 @@ export function useKeyboardShortcuts() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target)) return;
+      // A modal owns the keyboard while it is open. Without this, Enter on the
+      // focused "Blank" button in the New-roadmap chooser was swallowed by the
+      // shortcut below — it opened the details dialog on top instead of
+      // starting the roadmap.
+      const modal = useViewStore.getState();
+      if (modal.detailsOpen || modal.newRoadmapOpen) return;
 
       const docStore = useDocumentStore.getState();
       const { undo, redo, addTask, addMilestone, addBracket, deleteTask, deleteMilestone, deleteBracket, deleteDependency, deleteMarker, updateTask, updateMilestone, doc } = docStore;
@@ -159,11 +165,20 @@ export function useKeyboardShortcuts() {
         view.fit(min, max, Math.max(200, width));
         return;
       }
-      // Enter opens the details editor for whatever is selected. It is the
+      // Enter opens the details editor for the selected element. It is the
       // keyboard path to everything that left the command bar in v2.20.0.
-      if (e.key === 'Enter' && sel.items.length > 0) {
+      //
+      // One element only, and only a kind the dialog can render. A marquee of
+      // five bars used to open the dialog on an arbitrary one of them and
+      // autofocus its name; a dependency selection used to set the flag with
+      // nothing to show, so the modal then appeared on the next ordinary
+      // click. The bar-plus-its-row pair is the one two-item selection that
+      // means a single thing.
+      if (e.key === 'Enter') {
+        const subject = detailsSubject(sel.items);
+        if (!subject) return;
         e.preventDefault();
-        useViewStore.getState().setDetailsOpen(true);
+        useViewStore.getState().openDetails(subject);
         return;
       }
       if (e.key === 'F2' && sel.items.length === 1 && sel.items[0].kind === 'task') {
@@ -199,4 +214,23 @@ export function useKeyboardShortcuts() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
+}
+
+/**
+ * The single element a details dialog could edit, or null.
+ *
+ * `row` is accepted on its own, but a row selected on the chart drags every
+ * task and milestone on it into the selection, so that case arrives as many
+ * items and is correctly refused.
+ */
+function detailsSubject(items: Selectable[]): Selectable | null {
+  const EDITABLE: SelectableKind[] = ['task', 'milestone', 'bracket', 'row'];
+  if (items.length === 1) {
+    return EDITABLE.includes(items[0].kind) ? items[0] : null;
+  }
+  // A bar plus the row it sits on is one thing, not a multi-selection.
+  if (items.length === 2 && items[1].kind === 'row' && EDITABLE.includes(items[0].kind)) {
+    return items[0];
+  }
+  return null;
 }

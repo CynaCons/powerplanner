@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { Selectable } from './selectionStore';
 
 interface ViewState {
   /**
@@ -8,8 +9,19 @@ interface ViewState {
    */
   newRoadmapOpen: boolean;
   setNewRoadmapOpen: (v: boolean) => void;
-  /** The details editor for whatever is selected (SRS-EDIT-015). */
+  /**
+   * The details editor, and WHAT it is editing (SRS-EDIT-015).
+   *
+   * The subject is carried explicitly rather than inferred from the selection.
+   * Inferring it meant the Row details button opened Task details for the
+   * first task on that row — selecting a row selects everything on it — so the
+   * name field a user typed into renamed the wrong object.
+   */
   detailsOpen: boolean;
+  detailsTarget: Selectable | null;
+  openDetails: (target: Selectable) => void;
+  closeDetails: () => void;
+  /** Kept for the places that only need to close it. */
   setDetailsOpen: (v: boolean) => void;
   showCriticalPath: boolean;
   showBaseline: boolean;
@@ -24,7 +36,10 @@ export const useViewStore = create<ViewState>((set, get) => ({
   newRoadmapOpen: false,
   setNewRoadmapOpen: (v) => set({ newRoadmapOpen: v }),
   detailsOpen: false,
-  setDetailsOpen: (v) => set({ detailsOpen: v }),
+  detailsTarget: null,
+  openDetails: (target) => set({ detailsOpen: true, detailsTarget: target }),
+  closeDetails: () => set({ detailsOpen: false, detailsTarget: null }),
+  setDetailsOpen: (v) => set(v ? { detailsOpen: true } : { detailsOpen: false, detailsTarget: null }),
   showCriticalPath: false,
   showBaseline: false,
   showMinimap: true,
