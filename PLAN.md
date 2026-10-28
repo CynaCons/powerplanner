@@ -917,7 +917,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] USER GATE: approve renaming the GitHub repository to powerroadmap [agent: owner]
 - [x] Review the session's own changes and fix what it confirms [agent: claude]
 
-### v2.21.0 — The seven open defects (current) (ACTIVE)
+### v2.21.0 — The seven open defects (COMPLETE)
 **Goal:** The chart clips, the keymap is declared once, and the app says what it did.
 - [x] Write SRS rows for clipping, keymap, geometry, notices and undo [agent: claude]
 - [x] Clip the chart body to the plot area, not the scroll [agent: claude]
@@ -931,7 +931,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Let a row carry overlapping bars as a document setting [agent: claude]
 - [x] Show several bars per row in the sample document [agent: claude]
 - [x] Close the loop: lint, unit, e2e, smoke and look at it [agent: claude]
-- [ ] Commit, release and publish the showcase [agent: claude]
+- [x] Commit, release and publish the showcase [agent: claude]
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
