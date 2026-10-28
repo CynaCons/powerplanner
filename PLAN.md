@@ -914,7 +914,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Run the UX audit and publish A/B drawings to the canvas [agent: claude]
 - [x] Close the loop: lint, unit, e2e, smoke and look at it [agent: claude]
 - [ ] Commit, release and update the deployment ledger
-- [ ] USER GATE: approve renaming the GitHub repository to powerroadmap
+- [x] USER GATE: approve renaming the GitHub repository to powerroadmap [agent: owner]
 - [x] Review the session's own changes and fix what it confirms [agent: claude]
 
 # Backlog (High-level, unscheduled — product & long-horizon only)

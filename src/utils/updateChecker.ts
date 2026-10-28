@@ -16,12 +16,13 @@ import {
  */
 
 /**
- * The REPOSITORY name, which did not change with the product name.
+ * The REPOSITORY name.
  *
- * It was held back because the updater ships inside every saved file and
- * cannot be corrected retroactively, so a rename that broke either route would
- * strand every build in the wild. Measured against a repository GitHub has
- * actually renamed (2026-10-27, docs/DEPLOYMENTS.md), both routes survive one:
+ * It lagged the product name by two releases, because the updater ships inside
+ * every saved file and cannot be corrected retroactively, so a rename that
+ * broke either route would strand every build in the wild. Measured against a
+ * repository GitHub had actually renamed (2026-10-27, docs/DEPLOYMENTS.md),
+ * both routes survive one:
  *
  *   api.github.com/repos/<old>/releases/latest
  *     -> 301 to /repositories/<id>/..., with access-control-allow-origin: *
@@ -29,10 +30,12 @@ import {
  *   raw.githubusercontent.com/<old>/<tag>/<path>
  *     -> 200 directly, no redirect needed, CORS present
  *
- * So this may be changed once the repository is renamed; the old name keeps
- * working either way.
+ * On that evidence the repository was renamed powerplanner -> powerroadmap on
+ * 2026-10-28, and this constant moved with it. Every build released before
+ * v2.20.0 still asks for the OLD name and still updates, by those redirects;
+ * do not retire them.
  */
-export const GITHUB_REPO = 'CynaCons/powerplanner';
+export const GITHUB_REPO = 'CynaCons/powerroadmap';
 /**
  * Every name the app has had, newest first: PowerPlanner until 2026-10-26,
  * PowerGantt for one release, PowerRoadmap since. The release ships a

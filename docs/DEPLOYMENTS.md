@@ -5,7 +5,9 @@ you actually saw — a query, a fetch, a page you opened — never from what a
 workflow's exit text implied or from what you expect to be true. The runbook is
 [`RELEASING.md`](RELEASING.md).
 
-Repository: `CynaCons/powerplanner`
+Repository: `CynaCons/powerroadmap` — renamed from `CynaCons/powerplanner` on
+2026-10-28. Observations recorded before that date name the old repository and
+are left as they were observed; the old name still resolves.
 
 ## Current state — observed 2026-10-26
 
@@ -38,23 +40,38 @@ remotely.
 
 Verified against the live API on 2026-10-26, not inferred.
 
-## Can the repository be renamed?
+## The rename — done 2026-10-28
 
-Yes. It was held back because the updater ships inside every saved file and
-cannot be fixed retroactively, so a rename that broke either route would strand
-every build in the wild. Measured on 2026-10-27 against `facebook/jest`, a
-repository GitHub has actually renamed:
+`CynaCons/powerplanner` → `CynaCons/powerroadmap`, on the owner's approval. It
+had been held back because the updater ships inside every saved file and cannot
+be fixed retroactively, so a rename that broke either route would strand every
+build in the wild.
 
-| Route | On a renamed repository |
+The prediction, measured 2026-10-27 against `facebook/jest` as a proxy, and the
+outcome, measured against this repository within minutes of renaming it:
+
+| Route, asked under the OLD name | Predicted | Observed 2026-10-28 |
+|---|---|---|
+| `api.github.com/repos/<old>/releases/latest` | 301 with CORS on the redirect | **301** to `/repositories/1250571066/releases/latest`, `access-control-allow-origin: *` on the 301 **and** on the followed 200 |
+| `raw.githubusercontent.com/<old>/main/package.json` | 200, no redirect | **200**, `access-control-allow-origin: *`, no redirect |
+| `github.com/<old>/releases/latest/download/PowerRoadmap.html` | not measured | **200** after redirects, resolves to `release-assets.githubusercontent.com` |
+
+So every build in the wild keeps updating through the old name, and the site's
+download buttons keep working from old links. `GITHUB_REPO` in
+`src/utils/updateChecker.ts` moved to the new name for builds from v2.20.0 on.
+
+### What the rename did break: the old Pages URL
+
+| URL | Observed 2026-10-28 |
 |---|---|
-| `api.github.com/repos/<old>/releases/latest` | 301 to `/repositories/<id>/…`, and the 301 itself carries `access-control-allow-origin: *`, so a page fetch follows it |
-| `raw.githubusercontent.com/<old>/<tag>/<path>` | 200 directly — no redirect, CORS present |
+| https://cynacons.github.io/powerplanner/ | **404**, with no `Location` — GitHub issues no Pages redirect for a renamed project site |
+| https://cynacons.github.io/powerroadmap/ | 200 |
 
-Both of the updater's routes survive a rename, so `CynaCons/powerplanner` may
-be renamed whenever the owner wants it. Builds already in the wild keep working
-through the old name.
-
-Not done yet: it changes a public URL, which is the owner's call.
+Anyone holding a link to the old landing page gets a 404. Nothing in the app
+depends on it — the updater never touches Pages — so no build is stranded, but
+the link is dead and only a placeholder repository at the old name, serving a
+redirect page, would revive it. Not done; it is a new public surface and the
+owner's call.
 
 ## Which releases can update themselves
 

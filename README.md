@@ -77,7 +77,7 @@ Every gesture and command is one undo entry, every command also lives in the rig
 
 ## Get started
 
-1. Download **`PowerRoadmap.html`** from the [latest release](https://github.com/CynaCons/powerplanner/releases/latest).
+1. Download **`PowerRoadmap.html`** from the [latest release](https://github.com/CynaCons/powerroadmap/releases/latest).
 2. Open it in any browser (Chrome / Edge / Safari / Firefox).
 3. Start editing.
 4. Press <kbd>Ctrl+S</kbd> to save back to the HTML file.
