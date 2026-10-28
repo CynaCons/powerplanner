@@ -965,3 +965,8 @@ See git for full historical web iterations (v0–v2).
 - D8: a task panel, and stop the sample naming each row after its task
 - deleteRow leaves orphaned children, so 'Delete section and its rows' lies
 - Date inputs commit every intermediate value while a year is typed
+- Exported SVG and PNG draw every bar full, losing the progress fill
+- The D/W/M/Q/Y scale controls relabel the axis without zooming
+- The embed renderer hard-codes the axis height, leaving a dead strip
+- Ten delete call sites still remove items with nothing said
+- A held nudge merges two different tasks into one undo step
