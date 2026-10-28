@@ -52,49 +52,70 @@ export function detachFile(): void {
 }
 
 /**
- * Whether a save actually reached the file the user chose.
+ * What actually happened to the bytes.
  *
- * `false` means the bytes went to the downloads folder instead — no picker in
- * this browser, or the user cancelled it. That is not the file they asked for,
- * so the document is still unsaved and the guards must keep saying so.
+ * `written` means they reached the file the user chose. The two `downloaded`
+ * outcomes mean they went to the downloads folder instead — there is no picker
+ * in this browser, or the user cancelled it — which is NOT the file they asked
+ * for, so the document stays dirty and the guards keep saying so. These used
+ * to be one boolean that the caller read only to gate `markSaved`, so all four
+ * outcomes, failure included, looked identical on screen.
  */
-export type SaveResult = { written: boolean };
+export type SaveOutcome = 'written' | 'downloaded-no-picker' | 'downloaded-cancelled' | 'failed';
+export interface SaveResult {
+  outcome: SaveOutcome;
+  name: string;
+  error?: string;
+}
+
+async function writeThrough(
+  handle: FileSystemFileHandleLike,
+  html: string,
+  name: string,
+): Promise<SaveResult> {
+  try {
+    const writable = await handle.createWritable();
+    await writable.write(html);
+    await writable.close();
+    currentHandle = handle;
+    return { outcome: 'written', name };
+  } catch (e) {
+    // Thrown, this became an unhandled rejection at a caller that neither
+    // awaited nor caught — a console event and nothing on screen.
+    return { outcome: 'failed', name, error: (e as Error).message };
+  }
+}
 
 export async function saveToFile(doc: GanttDocument, suggestedName = 'plan.html'): Promise<SaveResult> {
   const html = buildEmbeddedHtml(doc);
-  const handle = currentHandle ?? (await pickSaveHandle(suggestedName));
-  if (!handle) {
+  const picked = currentHandle ? { handle: currentHandle, why: null as null | SaveOutcome } : await pickSaveHandle(suggestedName);
+  if (!picked.handle) {
     downloadFile(suggestedName, html, 'text/html');
-    return { written: false };
+    return { outcome: picked.why ?? 'downloaded-no-picker', name: suggestedName };
   }
-  currentHandle = handle;
-  const writable = await handle.createWritable();
-  await writable.write(html);
-  await writable.close();
-  return { written: true };
+  return writeThrough(picked.handle, html, suggestedName);
 }
 
 export async function saveAs(doc: GanttDocument, suggestedName = 'plan.html'): Promise<SaveResult> {
   const html = buildEmbeddedHtml(doc);
-  const handle = await pickSaveHandle(suggestedName);
-  if (!handle) {
+  const picked = await pickSaveHandle(suggestedName);
+  if (!picked.handle) {
     downloadFile(suggestedName, html, 'text/html');
-    return { written: false };
+    return { outcome: picked.why ?? 'downloaded-no-picker', name: suggestedName };
   }
-  currentHandle = handle;
-  const writable = await handle.createWritable();
-  await writable.write(html);
-  await writable.close();
-  return { written: true };
+  return writeThrough(picked.handle, html, suggestedName);
 }
 
-async function pickSaveHandle(suggestedName: string): Promise<FileSystemFileHandleLike | null> {
-  if (!window.showSaveFilePicker) return null;
+/** The handle, and — when there is none — WHY there is none. */
+async function pickSaveHandle(
+  suggestedName: string,
+): Promise<{ handle: FileSystemFileHandleLike | null; why: SaveOutcome | null }> {
+  if (!window.showSaveFilePicker) return { handle: null, why: 'downloaded-no-picker' };
   try {
-    return await window.showSaveFilePicker({ suggestedName, types: FILE_PICKER_TYPES });
+    return { handle: await window.showSaveFilePicker({ suggestedName, types: FILE_PICKER_TYPES }), why: null };
   } catch (e) {
-    if ((e as { name?: string }).name === 'AbortError') return null;
-    throw e;
+    if ((e as { name?: string }).name === 'AbortError') return { handle: null, why: 'downloaded-cancelled' };
+    return { handle: null, why: 'downloaded-no-picker' };
   }
 }
 
@@ -159,35 +180,55 @@ export async function writeHtmlToHandle(
   }
 }
 
-export async function openFile(): Promise<GanttDocument | null> {
+/**
+ * Why an open produced no document.
+ *
+ * Both branches report through the same return, which ends an asymmetry worth
+ * naming: the legacy `<input type=file>` path raised an `alert`, while the
+ * File System Access path rethrew into an unhandled rejection — so Firefox and
+ * Safari told the user the file was not a roadmap and Chrome and Edge, the only
+ * browsers where saving works at all, said nothing.
+ */
+export type OpenResult =
+  | { doc: GanttDocument; name: string }
+  | { error: 'cancelled' | 'not-a-roadmap'; name?: string; message?: string };
+
+function readInto(name: string, text: string): OpenResult {
+  try {
+    return { doc: parseFileContents(name, text), name };
+  } catch (e) {
+    return { error: 'not-a-roadmap', name, message: (e as Error).message };
+  }
+}
+
+export async function openFile(): Promise<OpenResult> {
   if (window.showOpenFilePicker) {
+    let handle: FileSystemFileHandleLike;
     try {
-      const [handle] = await window.showOpenFilePicker({
+      [handle] = await window.showOpenFilePicker({
         types: [
           { description: 'PowerRoadmap', accept: { 'text/html': ['.html'], 'application/json': ['.json'], 'text/yaml': ['.yaml', '.yml'] } as Record<string, string[]> },
         ],
       });
-      const file = await handle.getFile();
-      currentHandle = handle;
-      return parseFileContents(file.name, await file.text());
     } catch (e) {
-      if ((e as { name?: string }).name === 'AbortError') return null;
-      throw e;
+      if ((e as { name?: string }).name === 'AbortError') return { error: 'cancelled' };
+      return { error: 'not-a-roadmap', message: (e as Error).message };
     }
+    const file = await handle.getFile();
+    const result = readInto(file.name, await file.text());
+    // Bind ONLY a file that turned out to hold a roadmap: binding one that did
+    // not would make the next save overwrite it.
+    if ('doc' in result) currentHandle = handle;
+    return result;
   }
-  return new Promise<GanttDocument | null>((resolve) => {
+  return new Promise<OpenResult>((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.html,.json,.yaml,.yml';
     input.onchange = async () => {
       const file = input.files?.[0];
-      if (!file) return resolve(null);
-      try {
-        resolve(parseFileContents(file.name, await file.text()));
-      } catch (e) {
-        alert(`Failed to open file: ${(e as Error).message}`);
-        resolve(null);
-      }
+      if (!file) return resolve({ error: 'cancelled' });
+      resolve(readInto(file.name, await file.text()));
     };
     input.click();
   });
@@ -213,27 +254,35 @@ export function parseFileContents(name: string, text: string): GanttDocument {
   }
 }
 
-export function exportJson(doc: GanttDocument): void {
+/** Every export says whether the file was produced, and why not if it was not. */
+export type ExportResult = { ok: true; name: string } | { ok: false; error: string };
+
+export function exportJson(doc: GanttDocument): ExportResult {
   downloadFile('plan.json', JSON.stringify(doc, null, 2), 'application/json');
+  return { ok: true, name: 'plan.json' };
 }
 
-export function exportYaml(doc: GanttDocument): void {
+export function exportYaml(doc: GanttDocument): ExportResult {
   downloadFile('plan.yaml', toYaml(doc), 'text/yaml');
+  return { ok: true, name: 'plan.yaml' };
 }
 
-export function exportSvg(): void {
+export function exportSvg(): ExportResult {
   const svg = document.querySelector('.chart-area svg');
-  if (!svg) return;
+  // `if (!svg) return;` was a hard silent no-op: the user clicked Export and
+  // nothing happened, with nothing said.
+  if (!svg) return { ok: false, error: 'there is no chart on screen to export' };
   const cloned = svg.cloneNode(true) as SVGSVGElement;
   inlineComputedStyles(svg as SVGSVGElement, cloned);
   const serialized = new XMLSerializer().serializeToString(cloned);
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n${serialized}`;
   downloadFile('plan.svg', xml, 'image/svg+xml');
+  return { ok: true, name: 'plan.svg' };
 }
 
-export async function exportPng(scale = 2): Promise<void> {
+export async function exportPng(scale = 2): Promise<ExportResult> {
   const svg = document.querySelector('.chart-area svg');
-  if (!svg) return;
+  if (!svg) return { ok: false, error: 'there is no chart on screen to export' };
   const cloned = svg.cloneNode(true) as SVGSVGElement;
   inlineComputedStyles(svg as SVGSVGElement, cloned);
   const w = Number(cloned.getAttribute('width') ?? 800);
@@ -245,21 +294,25 @@ export async function exportPng(scale = 2): Promise<void> {
     const img = new Image();
     await new Promise<void>((resolve, reject) => {
       img.onload = () => resolve();
-      img.onerror = reject;
+      img.onerror = () => reject(new Error('the chart could not be rasterised'));
       img.src = url;
     });
     const canvas = document.createElement('canvas');
     canvas.width = w * scale;
     canvas.height = h * scale;
     const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Canvas 2D not supported');
+    if (!ctx) return { ok: false, error: 'this browser has no 2D canvas' };
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--color-bg') || '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.scale(scale, scale);
     ctx.drawImage(img, 0, 0);
-    canvas.toBlob((blob) => {
-      if (blob) downloadFile('plan.png', blob, 'image/png');
-    }, 'image/png');
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    // A null blob did nothing at all, and said nothing at all.
+    if (!blob) return { ok: false, error: 'the image could not be encoded' };
+    downloadFile('plan.png', blob, 'image/png');
+    return { ok: true, name: 'plan.png' };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
   } finally {
     URL.revokeObjectURL(url);
   }

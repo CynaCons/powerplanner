@@ -4,6 +4,7 @@ import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { computeDocStats } from '../utils/docStats';
 import { APP_VERSION } from '../version';
+import { Notices } from './Notices';
 
 export function StatusBar() {
   const doc = useDocumentStore((s) => s.doc);
@@ -30,6 +31,9 @@ export function StatusBar() {
         {stats.avgPercent}% complete · view starts {startDate}
       </div>
       <div className="app-status-right">
+        {/* What the app has just done. First, because it is the newest fact
+            on screen and the only one that is news (SRS-PERS-025). */}
+        <Notices />
         {/*
           While a bridge session is attached the user must always be able to
           explain why the document is changing (SRS-ABR-060).

@@ -6,8 +6,15 @@ import { useToolStore, type Tool } from '../stores/toolStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
 import { shortcutFor } from './keymap';
-import { detachFile, exportJson, exportYaml, exportSvg, exportPng } from '../persistence/fileIo';
-import { openIntoApp, saveCurrent } from './documentActions';
+import { exportJson, exportYaml, exportSvg, exportPng, type ExportResult } from '../persistence/fileIo';
+import { deleteSelection, openIntoApp, saveCurrent, startDocument } from './documentActions';
+import { notify } from '../stores/noticeStore';
+
+/** Every export says whether a file was produced (SRS-PERS-025). */
+function reportExport(r: ExportResult): void {
+  if (r.ok) notify(`Exported ${r.name} to your downloads.`);
+  else notify(`Export failed: ${r.error}.`, 'fail');
+}
 import { TEMPLATES } from '../utils/templates';
 import { todayISO, addDays } from '../utils/dates';
 import { newId } from '../utils/ids';
@@ -315,28 +322,14 @@ function useCommands(close: () => void): Command[] {
     const tpl = TEMPLATES.find((x) => x.id === templateId);
     if (!tpl) return;
     if (!confirm(`Replace the current chart with the "${tpl.name}" template? Your current chart will be lost unless saved.`)) return;
-    // Same reason as the New-roadmap chooser: this replaces the document, so
-    // the previous plan's file must stop being the save target.
-    detachFile();
-    // Deep clone so user edits don't mutate the template
-    useDocumentStore.getState().setDocument(JSON.parse(JSON.stringify(tpl.doc)));
+    // Through `startDocument`, like the New-roadmap chooser: this hand-rolled
+    // its own copy of the rules, which is how the two surfaces drifted apart.
+    // Deep clone so user edits don't mutate the template.
+    startDocument(JSON.parse(JSON.stringify(tpl.doc)), tpl.name);
   }
 
   function showShortcuts() {
     useViewStore.getState().setShortcutsOpen(true);
-  }
-
-  function deleteSelection() {
-    const s = useSelectionStore.getState();
-    const d = useDocumentStore.getState();
-    for (const item of s.items) {
-      if (item.kind === 'task') d.deleteTask(item.id);
-      else if (item.kind === 'milestone') d.deleteMilestone(item.id);
-      else if (item.kind === 'bracket') d.deleteBracket(item.id);
-      else if (item.kind === 'dependency') d.deleteDependency(item.id);
-      else if (item.kind === 'marker') d.deleteMarker(item.id);
-    }
-    s.clear();
   }
 
   const cmds: Command[] = [];
@@ -421,11 +414,11 @@ function useCommands(close: () => void): Command[] {
   cmds.push({ id: 'file-save', label: 'Save', group: 'File', icon: Save, shortcut: shortcutFor('save'), keywords: 'embed html', run: run(() => { void saveCurrent(); }) });
   cmds.push({ id: 'file-new', label: 'New roadmap…', group: 'File', icon: FilePlus2, keywords: 'blank start over empty template', run: run(() => useViewStore.getState().setNewRoadmapOpen(true)) });
   cmds.push({ id: 'file-open', label: 'Open file…', group: 'File', icon: FolderOpen, keywords: 'load', run: run(() => { void openIntoApp(); }) });
-  cmds.push({ id: 'file-export-json', label: 'Export as JSON', group: 'File', icon: Download, run: run(() => exportJson(useDocumentStore.getState().doc)) });
-  cmds.push({ id: 'file-export-yaml', label: 'Export as YAML', group: 'File', icon: Download, run: run(() => exportYaml(useDocumentStore.getState().doc)) });
-  cmds.push({ id: 'file-export-svg', label: 'Export as SVG', group: 'File', icon: Download, run: run(() => exportSvg()) });
-  cmds.push({ id: 'file-export-png-1', label: 'Export as PNG (1×)', group: 'File', icon: Download, run: run(() => exportPng(1)) });
-  cmds.push({ id: 'file-export-png-2', label: 'Export as PNG (2×)', group: 'File', icon: Download, run: run(() => exportPng(2)) });
+  cmds.push({ id: 'file-export-json', label: 'Export as JSON', group: 'File', icon: Download, run: run(() => reportExport(exportJson(useDocumentStore.getState().doc))) });
+  cmds.push({ id: 'file-export-yaml', label: 'Export as YAML', group: 'File', icon: Download, run: run(() => reportExport(exportYaml(useDocumentStore.getState().doc))) });
+  cmds.push({ id: 'file-export-svg', label: 'Export as SVG', group: 'File', icon: Download, run: run(() => reportExport(exportSvg())) });
+  cmds.push({ id: 'file-export-png-1', label: 'Export as PNG (1×)', group: 'File', icon: Download, run: run(() => void exportPng(1).then(reportExport)) });
+  cmds.push({ id: 'file-export-png-2', label: 'Export as PNG (2×)', group: 'File', icon: Download, run: run(() => void exportPng(2).then(reportExport)) });
   cmds.push({ id: 'file-print', label: 'Print or save as PDF…', group: 'File', icon: Printer, run: run(() => window.print()) });
 
   // TEMPLATES
@@ -449,7 +442,11 @@ function useCommands(close: () => void): Command[] {
     group: 'Edit',
     icon: GitCompare,
     keywords: 'snapshot save current dates',
-    run: run(() => useDocumentStore.getState().captureBaseline()),
+    run: run(() => {
+      useDocumentStore.getState().captureBaseline();
+      const shown = useViewStore.getState().showBaseline;
+      notify(`Baseline captured.${shown ? '' : ' Turn on the baseline view to see drift against it.'}`);
+    }),
   });
   if (useDocumentStore.getState().doc.baseline) {
     cmds.push({
@@ -457,11 +454,14 @@ function useCommands(close: () => void): Command[] {
       label: 'Clear baseline',
       group: 'Edit',
       icon: Trash2,
-      run: run(() => useDocumentStore.getState().clearBaseline()),
+      run: run(() => {
+        useDocumentStore.getState().clearBaseline();
+        notify('Baseline cleared.', 'warn');
+      }),
     });
   }
   if (sel.items.length > 0) {
-    cmds.push({ id: 'edit-delete', label: `Delete ${sel.items.length} selected`, group: 'Edit', icon: Trash2, shortcut: shortcutFor('delete-selection'), run: run(deleteSelection) });
+    cmds.push({ id: 'edit-delete', label: `Delete ${sel.items.length} selected`, group: 'Edit', icon: Trash2, shortcut: shortcutFor('delete-selection'), run: run(() => { deleteSelection(); }) });
   }
 
   // HELP

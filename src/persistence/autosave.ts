@@ -13,11 +13,17 @@ export function loadAutosave(): GanttDocument | null {
   }
 }
 
-export function saveAutosave(doc: GanttDocument): void {
+/**
+ * Returns false when the snapshot did not land. It used to swallow every
+ * write error on a path that fires every 800ms, so a full localStorage meant
+ * crash safety was gone and nothing on screen said so.
+ */
+export function saveAutosave(doc: GanttDocument): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(doc));
+    return true;
   } catch {
-    // Ignore quota errors
+    return false;
   }
 }
 

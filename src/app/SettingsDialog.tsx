@@ -5,6 +5,7 @@ import { APP_VERSION } from '../version';
 import { useDocumentStore } from '../stores/documentStore';
 import { checkForUpdate, performUpdate, type UpdateInfo } from '../utils/updateChecker';
 import { getCurrentHandle } from '../persistence/fileIo';
+import { notify } from '../stores/noticeStore';
 
 type Status =
   | 'idle'
@@ -26,6 +27,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const doc = useDocumentStore((s) => s.doc);
   const [status, setStatus] = useState<Status>('idle');
   const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [inPlaceFailed, setInPlaceFailed] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -63,10 +65,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
     if (!result.ok) {
       setStatus('failed');
+      notify('The update could not be fetched.', 'fail');
       return;
     }
     // live-swap reloads the page, so there is nothing left to show.
-    if (result.mode === 'download') setStatus('downloaded');
+    if (result.mode === 'download') {
+      setInPlaceFailed(result.inPlaceFailed === true);
+      setStatus('downloaded');
+      // Through the one live region too, so the report survives closing this
+      // dialog — which used to lose it.
+      notify(
+        result.inPlaceFailed
+          ? `Could not rewrite this file. The new version and a backup are both in your downloads.`
+          : `Downloaded version ${info.latestVersion}. Open the new file to continue.`,
+        result.inPlaceFailed ? 'fail' : 'done',
+      );
+    }
   };
 
   return createPortal(
@@ -105,15 +119,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             )}
           </div>
 
-          <p className="settings-note" role="status">
+          {/* Not a live region: the status bar holds the one announced copy,
+              and two polite regions mutating together stall a screen reader. */}
+          <p className="settings-note">
             {status === 'up-to-date' && `You are on the newest release (${info?.latestVersion ?? APP_VERSION}).`}
             {status === 'available' && `Version ${info?.latestVersion} is available.`}
             {status === 'updating-live' &&
               'Updating this file in place. A backup is saved first, then the page reloads.'}
             {status === 'updating-download' &&
               'Downloading the new version with this plan inside it.'}
-            {status === 'downloaded' &&
+            {status === 'downloaded' && !inPlaceFailed &&
               'Downloaded. Open the new file to continue — the one you have now is untouched.'}
+            {status === 'downloaded' && inPlaceFailed &&
+              'This file could not be rewritten, so the new version was downloaded instead. A backup of the current one was downloaded first, and the file you have open may not have survived the attempt — open the downloaded copy.'}
             {status === 'failed' && (
               <>
                 Could not reach the update service.{' '}

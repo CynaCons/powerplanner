@@ -13,6 +13,7 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
 import { loadAutosave, saveAutosave, clearAutosave } from '../persistence/autosave';
+import { notify } from '../stores/noticeStore';
 import type { GanttDocument } from '../types/document';
 
 interface AppProps {
@@ -49,9 +50,27 @@ export function App({ compact = false }: AppProps) {
 
   // Autosave debounced
   useEffect(() => {
-    const t = setTimeout(() => saveAutosave(doc), 800);
+    const t = setTimeout(() => {
+      if (!saveAutosave(doc)) {
+        // The notice store collapses a repeat into a count, so a permanently
+        // full localStorage says this once rather than every 800ms.
+        notify('This browser will not keep a local backup — there is no space. Save to a file.', 'fail');
+      }
+    }, 800);
     return () => clearTimeout(t);
   }, [doc]);
+
+  // Closing the tab on work that is in no file is the one unrecoverable
+  // action left, and nothing stood in front of it (SRS-PERS-025).
+  useEffect(() => {
+    const onUnload = (e: BeforeUnloadEvent) => {
+      const { revision, savedRevision } = useDocumentStore.getState();
+      if (revision === savedRevision) return;
+      e.preventDefault();
+    };
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, []);
 
   // Save, the shortcuts sheet and the palette were a second window listener
   // with its own idea of what a modifier means. They are entries in the keymap

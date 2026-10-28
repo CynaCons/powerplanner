@@ -924,7 +924,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Fix the embed renderer's inverted clip and regenerate the figures [agent: claude]
 - [x] Declare every keyboard binding once in a keymap table [agent: claude]
 - [x] Teach every shortcut from the keymap on every surface [agent: claude]
-- [ ] Give the chart one shared geometry source for pointer gestures [agent: claude]
+- [x] Give the chart one shared geometry source for pointer gestures [agent: claude]
 - [ ] Tell the user the outcome of every file and delete action [agent: claude]
 - [ ] Correct the update dialog when the in-place write fails [agent: claude]
 - [ ] Make one gesture cost one undo step [agent: claude]

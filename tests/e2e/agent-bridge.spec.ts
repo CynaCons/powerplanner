@@ -80,7 +80,9 @@ class McpClient {
 async function connectBridge(page: Page): Promise<void> {
   await page.goto('/');
   await page.getByRole('button', { name: /agent/i }).click();
-  await expect(page.getByRole('status')).toContainText('agent connected', { timeout: 10_000 });
+  // Narrowed to the agent chip: the status bar now also carries the one
+  // live region that reports file and edit outcomes (SRS-PERS-025).
+  await expect(page.locator('.app-status .agent-indicator')).toContainText('agent connected', { timeout: 10_000 });
 }
 
 function plan(rows: number, tasksPerRow: number) {
@@ -251,7 +253,7 @@ test.describe('web agent bridge', () => {
   test('disconnecting from the UI ends the session immediately (SRS-ABR-061)', async ({ page }) => {
     await connectBridge(page);
     await page.getByRole('button', { name: /agent on/i }).click();
-    await expect(page.getByRole('status')).toHaveCount(0);
+    await expect(page.locator('.app-status .agent-indicator')).toHaveCount(0);
 
     const { isError, payload } = await mcp.call('get_status');
     expect(isError).toBe(true);

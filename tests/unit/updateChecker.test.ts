@@ -41,6 +41,30 @@ describe('performUpdate', () => {
     expect(deps.writeHandle.mock.calls[0][1]).toContain(doc.title);
   });
 
+  /**
+   * SRS-PERS-025. A failed in-place write and "there was no file to write to"
+   * both fell through to the download branch and returned the SAME value, so
+   * the dialog printed "the one you have now is untouched" over a file it had
+   * just tried to overwrite — and over a backup already in the downloads
+   * folder, leaving two files and one explanation.
+   *
+   * Observed red on 0801c19: both calls returned { ok: true, mode: 'download' }.
+   */
+  it('a failed in-place write is distinguishable from never having a file', async () => {
+    const noFile = await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, {
+      ...base(),
+      getHandle: () => null,
+    });
+    const failedWrite = await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, {
+      ...base(),
+      getHandle: () => ({}) as unknown as FileSystemFileHandleLike,
+      writeHandle: vi.fn(async () => false),
+    });
+
+    expect(noFile).toEqual({ ok: true, mode: 'download' });
+    expect(failedWrite).not.toEqual(noFile);
+  });
+
   it('settles write permission BEFORE fetching, while the click is still live', async () => {
     const order: string[] = [];
     const deps = {
@@ -86,7 +110,9 @@ describe('performUpdate', () => {
       writeHandle: vi.fn(async (_h: FileSystemFileHandleLike, _html: string) => false),
     };
     const result = await performUpdate(doc, '2.16.0', '2.17.0', 'v2.17.0', undefined, deps);
-    expect(result).toEqual({ ok: true, mode: 'download' });
+    // And it SAYS the rewrite was attempted, so the dialog cannot claim the
+    // file you have now is untouched.
+    expect(result).toEqual({ ok: true, mode: 'download', inPlaceFailed: true });
     expect(deps.reload).not.toHaveBeenCalled();
   });
 

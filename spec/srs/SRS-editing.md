@@ -30,6 +30,7 @@ Traces up to: `../interaction.md`, `../data-model.md`.
 | SRS-EDIT-016 | Delete shall remove the selected element(s) and any dependencies referencing a deleted task. | No dangling references after delete. | Test (delete task removes its deps) | data-model invariants |
 | SRS-EDIT-017 | The system shall start a new document, either empty or seeded with the sample programme, and the user shall choose which. | Without it the only way to a chart of one's own is to delete the demo content row by row, and a planner who wants to see a worked example cannot get it back. | Test (e2e) | documentStore `newDocument`; ExportMenu |
 | SRS-EDIT-018 | Starting a new document, or opening a file, shall require confirmation while the current document has unsaved changes, naming what would be lost. | Discarding a half-built roadmap to an unguarded menu click is unrecoverable; autosave restores the last session, not the document being replaced. | Test (e2e) | documentStore `isDirty`; ExportMenu |
+| SRS-EDIT-019 | A destructive edit shall say what it removed and how many, and shall say that undo brings it back. | Ten single-delete call sites and three bulk ones each looped their own copy of the rules and none of them reported, so deleting a marquee of bars was indistinguishable from a misclick that did nothing — and the one recovery, undo, was never named. | Test: `tests/e2e/announcements.spec.ts` | `documentActions` `deleteSelection`; `keymap`; `CommandPalette`; `SelectionGroup` |
 
 ## Pointer affordance
 

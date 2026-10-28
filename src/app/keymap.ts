@@ -7,6 +7,7 @@ import { useToolStore } from '../stores/toolStore';
 import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 import { saveCurrent } from './documentActions';
+import { deleteSelection } from './documentActions';
 
 /**
  * Every keyboard binding the app has, declared once (SRS-EDIT-040/041).
@@ -242,19 +243,7 @@ export const KEYMAP: readonly Binding[] = [
     label: 'Delete selection',
     group: 'Editing',
     when: 'canvas',
-    run: () => {
-      const sel = useSelectionStore.getState();
-      if (sel.items.length === 0) return;
-      const s = useDocumentStore.getState();
-      for (const item of sel.items) {
-        if (item.kind === 'task') s.deleteTask(item.id);
-        else if (item.kind === 'milestone') s.deleteMilestone(item.id);
-        else if (item.kind === 'bracket') s.deleteBracket(item.id);
-        else if (item.kind === 'dependency') s.deleteDependency(item.id);
-        else if (item.kind === 'marker') s.deleteMarker(item.id);
-      }
-      sel.clear();
-    },
+    run: () => deleteSelection(),
   },
   {
     id: 'rename',

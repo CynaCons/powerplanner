@@ -546,6 +546,34 @@ kbd {
   flex-shrink: 0;
 }
 
+/* Status bar.
+
+   This rule was deleted whole by the command-bar commit (19146cf), which
+   removed the "Status bar" block while adding `.cmdbar__selname` next to it.
+   The footer then had no styling at all, so its two children stacked as plain
+   blocks inside a 26px grid row and the second line — scale, zoom, selection
+   count — has been clipped off the bottom of the window ever since. */
+.app-status {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  font-size: 11px;
+  color: var(--color-text-soft);
+  border-top: 1px solid var(--color-border-hairline);
+  background: var(--color-bg-panel);
+  font-feature-settings: 'tnum';
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.app-status > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .app-status-right {
   display: flex;
   align-items: center;
@@ -588,6 +616,64 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-indicator-dot { animation: none; }
+}
+
+/* What the app has just done (SRS-PERS-025).
+
+   Two surfaces, one source. The status-bar line is the announced copy — a
+   polite role="status" the screen reader reads once — and the toast stack is
+   its visual echo, aria-hidden so nothing is read twice. Text and a dismiss
+   only: the status bar is read-only telemetry (DECISIONS.md D10), so a
+   failure here does not grow a Save-as button. */
+.notice-status {
+  max-width: 44ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-soft);
+}
+
+.notice-stack {
+  position: fixed;
+  right: 16px;
+  bottom: calc(var(--status-h) + 56px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid var(--color-border-hairline);
+  border-left: 3px solid var(--color-text-dim);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elev);
+  box-shadow: var(--shadow-3);
+  color: var(--color-text);
+  font-size: 12.5px;
+  line-height: 1.45;
+  pointer-events: auto;
+}
+
+.notice--warn { border-left-color: var(--color-deadline, #c2770a); }
+.notice--fail { border-left-color: var(--color-today); }
+
+.notice button {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-dim);
 }
 
 /* Document settings — theme + fiscal year, relocated out of the inspector
@@ -703,7 +789,7 @@ kbd {
 }
 
 @media print {
-  .app-header, .app-status, .cmdbar { display: none !important; }
+  .app-header, .app-status, .cmdbar, .notice-stack { display: none !important; }
   .app-shell { grid-template-rows: 1fr; grid-template-columns: 1fr; grid-template-areas: 'chart'; }
   .chart-area { overflow: visible; }
 }

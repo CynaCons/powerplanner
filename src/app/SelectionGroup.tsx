@@ -5,6 +5,7 @@ import { useViewStore } from '../stores/viewStore';
 import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 import { ColorPalette } from './ColorPalette';
+import { deleteSelection } from './documentActions';
 import type { Task, Milestone, Bracket } from '../types/document';
 
 /**
@@ -233,17 +234,10 @@ function RowFields({ rowId }: { rowId: string }) {
 
 function MultiFields({ count }: { count: number }) {
   const items = useSelectionStore((s) => s.items);
-  const clear = useSelectionStore((s) => s.clear);
-  const store = useDocumentStore();
 
-  const deleteAll = () => {
-    for (const it of items) {
-      if (it.kind === 'task') store.deleteTask(it.id);
-      else if (it.kind === 'milestone') store.deleteMilestone(it.id);
-      else if (it.kind === 'bracket') store.deleteBracket(it.id);
-    }
-    clear();
-  };
+  // One function for all three delete surfaces, so the rules cannot drift and
+  // every one of them reports (SRS-EDIT-019).
+  const deleteAll = () => { deleteSelection(); };
 
   return (
     <Group label="Selection">

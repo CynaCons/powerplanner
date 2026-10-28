@@ -69,7 +69,16 @@ export interface UpdateInfo {
 }
 
 export type UpdateMode = 'live-swap' | 'download';
-export type PerformUpdateResult = { ok: true; mode: UpdateMode } | { ok: false };
+/**
+ * `inPlaceFailed` separates "there was no file to rewrite" from "the rewrite
+ * was attempted and failed". Both fell through to the download branch and
+ * returned the same value, so the dialog said "the one you have now is
+ * untouched" over a file it had just tried to overwrite — and over a backup
+ * already sitting in the downloads folder (SRS-PERS-025).
+ */
+export type PerformUpdateResult =
+  | { ok: true; mode: UpdateMode; inPlaceFailed?: boolean }
+  | { ok: false };
 
 /** Compare dotted numeric versions. Returns >0 when `a` is newer than `b`. */
 export function compareVersions(a: string, b: string): number {
@@ -316,7 +325,11 @@ export async function performUpdate(
         reload();
         return { ok: true, mode: 'live-swap' };
       }
-      // Fall through to the download path if the write failed.
+      // The write was attempted and failed. Fall through to the download, but
+      // SAY that it was attempted — a backup is already in the downloads
+      // folder and the open file may not be what it was.
+      download(`${safeName} (v${newVersion}).html`, finalHtml, 'text/html');
+      return { ok: true, mode: 'download', inPlaceFailed: true };
     }
 
     // No backup here, deliberately: nothing has been overwritten on this path,

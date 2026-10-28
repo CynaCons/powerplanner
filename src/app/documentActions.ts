@@ -1,7 +1,8 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
-import { detachFile, openFile, saveAs, saveToFile } from '../persistence/fileIo';
+import { detachFile, openFile, saveAs, saveToFile, type SaveResult } from '../persistence/fileIo';
+import { notify } from '../stores/noticeStore';
 import type { GanttDocument } from '../types/document';
 
 /**
@@ -33,31 +34,52 @@ export function confirmDiscard(whatHappensNext: string): boolean {
 }
 
 /**
- * Save, and mark the document clean ONLY if the bytes reached the file the
- * user picked. A cancelled picker falls back to a download, which is not the
- * file they asked for — marking that clean silenced both guards above.
+ * Mark the document clean ONLY if the bytes reached the file the user picked,
+ * and say which of the four things happened. A cancelled picker falls back to
+ * a download, which is not the file they asked for — marking that clean
+ * silenced both guards above, and saying nothing made it indistinguishable
+ * from a save that worked.
  */
+function reportSave(result: SaveResult): void {
+  switch (result.outcome) {
+    case 'written':
+      useDocumentStore.getState().markSaved();
+      notify(`Saved to ${result.name}.`);
+      return;
+    case 'downloaded-cancelled':
+      notify(`You cancelled the save, so ${result.name} went to your downloads instead. The plan is still unsaved.`, 'warn');
+      return;
+    case 'downloaded-no-picker':
+      notify(`This browser cannot save in place, so ${result.name} went to your downloads. The plan is still unsaved.`, 'warn');
+      return;
+    case 'failed':
+      notify(`${result.name} could not be saved: ${result.error ?? 'the write failed'}.`, 'fail');
+  }
+}
+
 export async function saveCurrent(): Promise<void> {
   const store = useDocumentStore.getState();
-  const { written } = await saveToFile(store.doc, suggestedName(store.doc.title));
-  if (written) useDocumentStore.getState().markSaved();
+  reportSave(await saveToFile(store.doc, suggestedName(store.doc.title)));
 }
 
 export async function saveCurrentAs(): Promise<void> {
   const store = useDocumentStore.getState();
-  const { written } = await saveAs(store.doc, suggestedName(store.doc.title));
-  if (written) useDocumentStore.getState().markSaved();
+  reportSave(await saveAs(store.doc, suggestedName(store.doc.title)));
 }
 
 /** Open a file into the app, after asking if that would lose anything. */
 export async function openIntoApp(): Promise<void> {
   if (!confirmDiscard('Opening another roadmap replaces it.')) return;
-  const next = await openFile();
-  if (next) {
-    useSelectionStore.getState().clear();
-    useViewStore.getState().setDetailsOpen(false);
-    useDocumentStore.getState().setDocument(next);
+  const result = await openFile();
+  if ('error' in result) {
+    if (result.error === 'cancelled') return;
+    notify(`${result.name ?? 'That file'} is not a PowerRoadmap file: ${result.message ?? 'it holds no plan'}.`, 'fail');
+    return;
   }
+  useSelectionStore.getState().clear();
+  useViewStore.getState().setDetailsOpen(false);
+  useDocumentStore.getState().setDocument(result.doc);
+  notify(`Opened ${result.name}.`);
 }
 
 /**
@@ -67,9 +89,41 @@ export async function openIntoApp(): Promise<void> {
  * outlives the document, so without it the next Ctrl+S writes this document
  * over the file the previous one came from.
  */
-export function startDocument(doc: GanttDocument): void {
+export function startDocument(doc: GanttDocument, what = doc.title): void {
   detachFile();
   useSelectionStore.getState().clear();
   useViewStore.getState().setDetailsOpen(false);
   useDocumentStore.getState().newDocument(doc);
+  // Releasing the save target is invisible, and the next Ctrl+S opens a picker
+  // with no explanation unless it is said here.
+  notify(`Started “${what}”. It is not saved to a file yet.`);
+}
+
+/**
+ * Delete everything selected, and say what went.
+ *
+ * Three surfaces looped per-item store calls with their own copy of this
+ * (the Delete key, the palette, the selection bar), so the rules could drift
+ * and none of them reported. One function, one announcement.
+ */
+export function deleteSelection(): number {
+  const sel = useSelectionStore.getState();
+  const items = sel.items.filter((i) => i.kind !== 'row');
+  if (items.length === 0) return 0;
+  const s = useDocumentStore.getState();
+  for (const item of items) {
+    if (item.kind === 'task') s.deleteTask(item.id);
+    else if (item.kind === 'milestone') s.deleteMilestone(item.id);
+    else if (item.kind === 'bracket') s.deleteBracket(item.id);
+    else if (item.kind === 'dependency') s.deleteDependency(item.id);
+    else if (item.kind === 'marker') s.deleteMarker(item.id);
+  }
+  sel.clear();
+  const noun = items.length === 1 ? nounFor(items[0].kind) : 'items';
+  notify(`Deleted ${items.length} ${noun}. Undo brings ${items.length === 1 ? 'it' : 'them'} back.`, 'warn');
+  return items.length;
+}
+
+function nounFor(kind: string): string {
+  return kind === 'dependency' ? 'dependency' : kind;
 }

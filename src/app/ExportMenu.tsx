@@ -1,6 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
-import { exportJson, exportYaml, exportSvg, exportPng } from '../persistence/fileIo';
+import { exportJson, exportYaml, exportSvg, exportPng, type ExportResult } from '../persistence/fileIo';
+import { notify } from '../stores/noticeStore';
+
+/** Every export says whether a file was produced (SRS-PERS-025). */
+function reportExport(r: ExportResult): void {
+  if (r.ok) notify(`Exported ${r.name} to your downloads.`);
+  else notify(`Export failed: ${r.error}.`, 'fail');
+}
 import { openIntoApp, saveCurrent, saveCurrentAs } from './documentActions';
 import { shortcutFor } from './keymap';
 import { ChevronDown, Download, Save, FolderOpen, FilePlus2 } from 'lucide-react';
@@ -67,11 +74,11 @@ export function ExportMenu() {
           <MenuItem icon={<Save size={14} />} label="Save as…" onClick={onSaveAs} />
           <MenuItem icon={<FolderOpen size={14} />} label="Open file…" onClick={onOpen} />
           <Divider />
-          <MenuItem icon={<Download size={14} />} label="Export JSON" onClick={() => { exportJson(doc); setOpen(false); }} />
-          <MenuItem icon={<Download size={14} />} label="Export YAML" onClick={() => { exportYaml(doc); setOpen(false); }} />
-          <MenuItem icon={<Download size={14} />} label="Export SVG" onClick={() => { exportSvg(); setOpen(false); }} />
-          <MenuItem icon={<Download size={14} />} label="Export PNG 1×" onClick={() => { exportPng(1); setOpen(false); }} />
-          <MenuItem icon={<Download size={14} />} label="Export PNG 2×" onClick={() => { exportPng(2); setOpen(false); }} />
+          <MenuItem icon={<Download size={14} />} label="Export JSON" onClick={() => { reportExport(exportJson(doc)); setOpen(false); }} />
+          <MenuItem icon={<Download size={14} />} label="Export YAML" onClick={() => { reportExport(exportYaml(doc)); setOpen(false); }} />
+          <MenuItem icon={<Download size={14} />} label="Export SVG" onClick={() => { reportExport(exportSvg()); setOpen(false); }} />
+          <MenuItem icon={<Download size={14} />} label="Export PNG 1×" onClick={() => { void exportPng(1).then(reportExport); setOpen(false); }} />
+          <MenuItem icon={<Download size={14} />} label="Export PNG 2×" onClick={() => { void exportPng(2).then(reportExport); setOpen(false); }} />
           <MenuItem icon={<Download size={14} />} label="Print / PDF" onClick={() => { window.print(); setOpen(false); }} />
         </div>
       )}
