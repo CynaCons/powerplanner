@@ -19,11 +19,17 @@ import type { LabelPlacement } from '../types/document';
  * Reached from the right-click menu, from Enter on a selection, and from the
  * one button in the bar that admits it is a door rather than an editor.
  */
+/** Any field leaving focus closes the gesture frame (SRS-EDIT-022). */
+const endFrame = () => useDocumentStore.getState().endFrame();
+
 export function DetailsDialog() {
   const open = useViewStore((s) => s.detailsOpen);
   const sel = useViewStore((s) => s.detailsTarget);
   const closeDetails = useViewStore((s) => s.closeDetails);
-  const close = useCallback(() => closeDetails(), [closeDetails]);
+  const close = useCallback(() => {
+    endFrame();
+    closeDetails();
+  }, [closeDetails]);
   const doc = useDocumentStore((s) => s.doc);
 
   useEffect(() => {
@@ -52,6 +58,10 @@ export function DetailsDialog() {
   useEffect(() => {
     if (open && !subjectExists) closeDetails();
   }, [open, subjectExists, closeDetails]);
+
+  // Escape, the scrim and unmount all have to close the frame, and a blur
+  // does not reliably fire when React removes the node.
+  useEffect(() => endFrame, []);
 
   if (!open || !sel || !subjectExists) return null;
 
@@ -139,16 +149,17 @@ function TaskBody({ id }: { id: string }) {
           className="dialog__input"
           value={task.label}
           autoFocus
-          onChange={(e) => updateTask(task.id, { label: e.target.value })}
+          onChange={(e) => updateTask(task.id, { label: e.target.value }, `task:${task.id}:label`)}
+          onBlur={endFrame}
         />
       </Field>
       <RowSelect value={task.rowId} onChange={(rowId) => updateTask(task.id, { rowId })} />
       <div className="dialog__row">
         <Field label="Start">
-          <input type="date" className="dialog__input" value={task.start} onChange={(e) => updateTask(task.id, { start: e.target.value })} />
+          <input type="date" className="dialog__input" value={task.start} onChange={(e) => updateTask(task.id, { start: e.target.value }, `task:${task.id}:start`)} onBlur={endFrame} />
         </Field>
         <Field label="End">
-          <input type="date" className="dialog__input" value={task.end} onChange={(e) => updateTask(task.id, { end: e.target.value })} />
+          <input type="date" className="dialog__input" value={task.end} onChange={(e) => updateTask(task.id, { end: e.target.value }, `task:${task.id}:end`)} onBlur={endFrame} />
         </Field>
       </div>
       <Field label={`Complete — ${pct}%`}>
@@ -157,7 +168,8 @@ function TaskBody({ id }: { id: string }) {
           min={0}
           max={100}
           value={pct}
-          onChange={(e) => updateTask(task.id, { percentComplete: Number(e.target.value) })}
+          onChange={(e) => updateTask(task.id, { percentComplete: Number(e.target.value) }, `task:${task.id}:pct`)}
+          onBlur={endFrame}
         />
       </Field>
       <Field label="Colour">
@@ -168,7 +180,8 @@ function TaskBody({ id }: { id: string }) {
           className="dialog__textarea"
           value={task.notes ?? ''}
           placeholder="Context, links, decisions…"
-          onChange={(e) => updateTask(task.id, { notes: e.target.value })}
+          onChange={(e) => updateTask(task.id, { notes: e.target.value }, `task:${task.id}:notes`)}
+          onBlur={endFrame}
         />
       </Field>
       <LabelPositionPicker
@@ -249,7 +262,7 @@ function RowBody({ id }: { id: string }) {
           className="dialog__input"
           value={row.label}
           autoFocus
-          onChange={(e) => updateRow(row.id, { label: e.target.value })}
+          onChange={(e) => updateRow(row.id, { label: e.target.value }, `row:${row.id}:label`)}
         />
       </Field>
       <Field label="Section">

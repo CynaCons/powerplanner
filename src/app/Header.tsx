@@ -46,7 +46,7 @@ export function Header() {
       <div className="brand">
         <BrandLogo variant="full" size={22} />
         <div className="brand__sep" aria-hidden="true" />
-        <TitleChip title={title} onChange={setTitle} />
+        <TitleChip title={title} onChange={(v) => setTitle(v, 'doc:title')} />
       </div>
 
       <div className="toolbar">
@@ -114,6 +114,9 @@ function TitleChip({ title, onChange }: { title: string; onChange: (v: string) =
       aria-label="Chart title"
       value={title}
       onChange={(e) => onChange(e.target.value)}
+      /* Leaving the field closes the gesture frame, so the next edit is
+         its own undo step (SRS-EDIT-022). */
+      onBlur={() => useDocumentStore.getState().endFrame()}
       placeholder="Untitled plan"
       className="title-chip"
     />

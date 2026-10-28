@@ -55,6 +55,7 @@ Traces up to: `../interaction.md`, `../data-model.md`.
 |----|-------------|-----------|--------------|-------|
 | SRS-EDIT-020 | The system shall support selecting one element and extending the selection to multiple. | Bulk operations need multi-select. | Demo | interaction §core operations |
 | SRS-EDIT-021 | Edits shall be undoable/redoable through the host's history. | Safe experimentation. | Demo | interaction §undo |
+| SRS-EDIT-022 | One continuous input gesture — a name typed into a field, a percent slider dragged, a date typed, a nudge key tapped in one direction — and one multi-item command shall each produce exactly one undo frame, however many characters, steps or items it covers. | Undo is the app's only recovery path and it was spent on characters: `mutate` pushed a frame on every call and the store had no notion of a gesture, so a 12-character rename cost 12 frames and a 120-character note evicted the whole 100-frame history. The agent path already had this guarantee (SRS-ABR-013); the user's did not. | Test: `tests/e2e/undo-granularity.spec.ts`, `tests/unit/undoFrames.test.ts` | documentStore `mutate` key / `transact` / `endFrame`; DetailsDialog; Header `TitleChip`; keymap `nudge`; documentActions `deleteSelection` |
 
 ## Open items
 

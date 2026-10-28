@@ -111,13 +111,17 @@ export function deleteSelection(): number {
   const items = sel.items.filter((i) => i.kind !== 'row');
   if (items.length === 0) return 0;
   const s = useDocumentStore.getState();
-  for (const item of items) {
-    if (item.kind === 'task') s.deleteTask(item.id);
-    else if (item.kind === 'milestone') s.deleteMilestone(item.id);
-    else if (item.kind === 'bracket') s.deleteBracket(item.id);
-    else if (item.kind === 'dependency') s.deleteDependency(item.id);
-    else if (item.kind === 'marker') s.deleteMarker(item.id);
-  }
+  // One undo frame for the whole command. Deleting five bars used to cost
+  // five Ctrl+Z, with the items reappearing one at a time.
+  s.transact(() => {
+    for (const item of items) {
+      if (item.kind === 'task') s.deleteTask(item.id);
+      else if (item.kind === 'milestone') s.deleteMilestone(item.id);
+      else if (item.kind === 'bracket') s.deleteBracket(item.id);
+      else if (item.kind === 'dependency') s.deleteDependency(item.id);
+      else if (item.kind === 'marker') s.deleteMarker(item.id);
+    }
+  });
   sel.clear();
   const noun = items.length === 1 ? nounFor(items[0].kind) : 'items';
   notify(`Deleted ${items.length} ${noun}. Undo brings ${items.length === 1 ? 'it' : 'them'} back.`, 'warn');

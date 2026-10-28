@@ -107,20 +107,31 @@ export function detailsSubject(items: Selectable[]): Selectable | null {
   return null;
 }
 
+/**
+ * Slip the selection by whole days, as ONE undo step however many items are
+ * selected and however many times the key repeats in the same direction
+ * (SRS-EDIT-022).
+ *
+ * The frame is keyed on the direction rather than ended on keyup: tapping the
+ * arrow six times to move a week is one intention, and a user who then
+ * presses Ctrl+Z means to be back where they started. The store's idle
+ * backstop separates a later, deliberate press.
+ */
 function nudge(days: number) {
-  const { updateTask, updateMilestone } = useDocumentStore.getState();
   const sel = useSelectionStore.getState();
   if (sel.items.length === 0) return;
+  const store = useDocumentStore.getState();
+  const key = `nudge:${days}`;
   const d = doc();
   for (const item of sel.items) {
     if (item.kind === 'task') {
       const t = d.tasks.find((x) => x.id === item.id);
       if (!t) continue;
-      updateTask(t.id, { start: addDays(t.start, days), end: addDays(t.end, days) });
+      store.updateTask(t.id, { start: addDays(t.start, days), end: addDays(t.end, days) }, key);
     } else if (item.kind === 'milestone') {
       const m = d.milestones.find((x) => x.id === item.id);
       if (!m) continue;
-      updateMilestone(m.id, { date: addDays(m.date, days) });
+      store.updateMilestone(m.id, { date: addDays(m.date, days) }, key);
     }
   }
 }
