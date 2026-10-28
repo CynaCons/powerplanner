@@ -928,9 +928,9 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Tell the user the outcome of every file and delete action [agent: claude]
 - [x] Correct the update dialog when the in-place write fails [agent: claude]
 - [x] Make one gesture cost one undo step [agent: claude]
-- [ ] Let a row carry overlapping bars as a document setting [agent: claude]
-- [ ] Show several bars per row in the sample document [agent: claude]
-- [ ] Close the loop: lint, unit, e2e, smoke and look at it [agent: claude]
+- [x] Let a row carry overlapping bars as a document setting [agent: claude]
+- [x] Show several bars per row in the sample document [agent: claude]
+- [x] Close the loop: lint, unit, e2e, smoke and look at it [agent: claude]
 - [ ] Commit, release and publish the showcase [agent: claude]
 
 # Backlog (High-level, unscheduled — product & long-horizon only)

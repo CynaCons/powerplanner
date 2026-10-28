@@ -51,11 +51,15 @@ export function App({ compact = false }: AppProps) {
   // Autosave debounced
   useEffect(() => {
     const t = setTimeout(() => {
-      if (!saveAutosave(doc)) {
-        // The notice store collapses a repeat into a count, so a permanently
-        // full localStorage says this once rather than every 800ms.
-        notify('This browser will not keep a local backup — there is no space. Save to a file.', 'fail');
-      }
+      if (saveAutosave(doc)) return;
+      // Only once there is work to lose. The portable build is opened from
+      // disk, where some browsers refuse local storage outright, and warning
+      // about a backup of an untouched sample is a false alarm on every open.
+      const { revision, savedRevision } = useDocumentStore.getState();
+      if (revision === savedRevision) return;
+      // The notice store collapses a repeat into a count, so a blocked or full
+      // local storage says this once rather than every 800ms.
+      notify('This browser will not keep a local backup of your changes — save to a file.', 'fail');
     }, 800);
     return () => clearTimeout(t);
   }, [doc]);
