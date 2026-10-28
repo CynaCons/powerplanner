@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { useDocumentStore, useIsDirty } from '../stores/documentStore';
-import { exportJson, exportYaml, exportSvg, exportPng, saveToFile, saveAs, openFile } from '../persistence/fileIo';
+import { useDocumentStore } from '../stores/documentStore';
+import { exportJson, exportYaml, exportSvg, exportPng } from '../persistence/fileIo';
+import { openIntoApp, saveCurrent, saveCurrentAs } from './documentActions';
 import { ChevronDown, Download, Save, FolderOpen, FilePlus2 } from 'lucide-react';
 import { useViewStore } from '../stores/viewStore';
 
@@ -8,9 +9,6 @@ export function ExportMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const doc = useDocumentStore((s) => s.doc);
-  const setDocument = useDocumentStore((s) => s.setDocument);
-  const markSaved = useDocumentStore((s) => s.markSaved);
-  const dirty = useIsDirty();
   const openNewRoadmap = useViewStore((s) => s.setNewRoadmapOpen);
 
   useEffect(() => {
@@ -23,30 +21,17 @@ export function ExportMenu() {
 
   const onSave = async () => {
     setOpen(false);
-    await saveToFile(doc, suggestedName(doc.title));
-    markSaved();
+    await saveCurrent();
   };
 
   const onSaveAs = async () => {
     setOpen(false);
-    await saveAs(doc, suggestedName(doc.title));
-    markSaved();
+    await saveCurrentAs();
   };
 
   const onOpen = async () => {
     setOpen(false);
-    // Opening replaces what is on screen, and undo does not reach across it
-    // (SRS-EDIT-018). Only worth asking when there is something to lose.
-    if (
-      dirty &&
-      !window.confirm(
-        `“${doc.title}” has changes that are not in a file. Opening another roadmap replaces it. Continue?`,
-      )
-    ) {
-      return;
-    }
-    const next = await openFile();
-    if (next) setDocument(next);
+    await openIntoApp();
   };
 
   const onNew = () => {
@@ -121,9 +106,4 @@ function MenuItem({ icon, label, onClick }: { icon: React.ReactNode; label: stri
 
 function Divider() {
   return <div style={{ height: 1, background: 'var(--color-border-soft)', margin: '4px 2px' }} />;
-}
-
-function suggestedName(title: string): string {
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-  return `${slug || 'plan'}.html`;
 }

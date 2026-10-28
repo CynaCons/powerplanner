@@ -5,7 +5,8 @@ import { useEditStore } from '../stores/editStore';
 import { useToolStore, type Tool } from '../stores/toolStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
-import { saveToFile, openFile, exportJson, exportYaml, exportSvg, exportPng } from '../persistence/fileIo';
+import { detachFile, exportJson, exportYaml, exportSvg, exportPng } from '../persistence/fileIo';
+import { openIntoApp, saveCurrent } from './documentActions';
 import { TEMPLATES } from '../utils/templates';
 import { todayISO, addDays } from '../utils/dates';
 import { newId } from '../utils/ids';
@@ -77,7 +78,12 @@ export function CommandPalette({ open, onClose }: Props) {
     if (open) {
       setQuery('');
       setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      // Synchronously, not on a timeout. A deferred focus leaves a window in
+      // which keystrokes land on <body> and run as global shortcuts: typing
+      // "milestone" into a palette that had not focused yet inserted a
+      // milestone from the bare 'm' binding before the query ever reached the
+      // input.
+      inputRef.current?.focus();
     }
   }, [open]);
 
@@ -94,6 +100,16 @@ export function CommandPalette({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
+      // While the palette is open it owns the keyboard, whatever has focus.
+      // This listener is capture-phase on window, so stopping here keeps every
+      // global shortcut — including the bare letters that insert tasks and
+      // milestones — from firing underneath it.
+      //
+      // Except the chord that opens the palette: that one lives in App's
+      // bubble-phase listener, and swallowing it would mean Ctrl+K could open
+      // the palette but never close it again.
+      const isPaletteToggle = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k';
+      if (!isPaletteToggle) e.stopPropagation();
       if (e.key === 'Escape') {
         e.preventDefault();
         onClose();
@@ -105,11 +121,6 @@ export function CommandPalette({ open, onClose }: Props) {
         setSelectedIndex((i) => Math.max(0, i - 1));
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        // The palette is a capture-phase listener on window, so the same
-        // Enter would carry on to every other keydown handler in the app once
-        // the palette has closed itself. Stopping it here means a command runs
-        // exactly once, whatever else happens to be listening.
-        e.stopPropagation();
         if (ranRef.current) return;
         const cmd = filtered[selectedIndex];
         if (cmd) {
@@ -260,10 +271,6 @@ function useCommands(close: () => void): Command[] {
     };
   }
 
-  function withSuggested(name: string): string {
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-    return `${slug || 'plan'}.html`;
-  }
 
   function quickAddTask() {
     const d = useDocumentStore.getState();
@@ -309,6 +316,9 @@ function useCommands(close: () => void): Command[] {
     const tpl = TEMPLATES.find((x) => x.id === templateId);
     if (!tpl) return;
     if (!confirm(`Replace the current chart with the "${tpl.name}" template? Your current chart will be lost unless saved.`)) return;
+    // Same reason as the New-roadmap chooser: this replaces the document, so
+    // the previous plan's file must stop being the save target.
+    detachFile();
     // Deep clone so user edits don't mutate the template
     useDocumentStore.getState().setDocument(JSON.parse(JSON.stringify(tpl.doc)));
   }
@@ -409,9 +419,9 @@ function useCommands(close: () => void): Command[] {
   cmds.push({ id: 'theme-print', label: 'Theme: Print (high-contrast)', group: 'Theme', icon: Printer, run: run(() => setTheme('print')) });
 
   // FILE
-  cmds.push({ id: 'file-save', label: 'Save', group: 'File', icon: Save, shortcut: '⌘S', keywords: 'embed html', run: run(() => { const d = useDocumentStore.getState().doc; void saveToFile(d, withSuggested(d.title)); }) });
+  cmds.push({ id: 'file-save', label: 'Save', group: 'File', icon: Save, shortcut: '⌘S', keywords: 'embed html', run: run(() => { void saveCurrent(); }) });
   cmds.push({ id: 'file-new', label: 'New roadmap…', group: 'File', icon: FilePlus2, keywords: 'blank start over empty template', run: run(() => useViewStore.getState().setNewRoadmapOpen(true)) });
-  cmds.push({ id: 'file-open', label: 'Open file…', group: 'File', icon: FolderOpen, keywords: 'load', run: run(() => { void openFile().then((d) => { if (d) useDocumentStore.getState().setDocument(d); }); }) });
+  cmds.push({ id: 'file-open', label: 'Open file…', group: 'File', icon: FolderOpen, keywords: 'load', run: run(() => { void openIntoApp(); }) });
   cmds.push({ id: 'file-export-json', label: 'Export as JSON', group: 'File', icon: Download, run: run(() => exportJson(useDocumentStore.getState().doc)) });
   cmds.push({ id: 'file-export-yaml', label: 'Export as YAML', group: 'File', icon: Download, run: run(() => exportYaml(useDocumentStore.getState().doc)) });
   cmds.push({ id: 'file-export-svg', label: 'Export as SVG', group: 'File', icon: Download, run: run(() => exportSvg()) });

@@ -39,30 +39,53 @@ declare global {
 
 let currentHandle: FileSystemFileHandleLike | null = null;
 
-export async function saveToFile(doc: GanttDocument, suggestedName = 'plan.html'): Promise<void> {
+/**
+ * Forget the file this app is bound to (SRS-PERS-022).
+ *
+ * The binding is module state and outlives the document, so without this a
+ * File > New roadmap left the previous plan's handle in place and the very
+ * next Ctrl+S wrote the new, empty roadmap over it — no picker, no prompt,
+ * and no undo, because replacing the document clears the history.
+ */
+export function detachFile(): void {
+  currentHandle = null;
+}
+
+/**
+ * Whether a save actually reached the file the user chose.
+ *
+ * `false` means the bytes went to the downloads folder instead — no picker in
+ * this browser, or the user cancelled it. That is not the file they asked for,
+ * so the document is still unsaved and the guards must keep saying so.
+ */
+export type SaveResult = { written: boolean };
+
+export async function saveToFile(doc: GanttDocument, suggestedName = 'plan.html'): Promise<SaveResult> {
   const html = buildEmbeddedHtml(doc);
   const handle = currentHandle ?? (await pickSaveHandle(suggestedName));
   if (!handle) {
     downloadFile(suggestedName, html, 'text/html');
-    return;
+    return { written: false };
   }
   currentHandle = handle;
   const writable = await handle.createWritable();
   await writable.write(html);
   await writable.close();
+  return { written: true };
 }
 
-export async function saveAs(doc: GanttDocument, suggestedName = 'plan.html'): Promise<void> {
+export async function saveAs(doc: GanttDocument, suggestedName = 'plan.html'): Promise<SaveResult> {
   const html = buildEmbeddedHtml(doc);
   const handle = await pickSaveHandle(suggestedName);
   if (!handle) {
     downloadFile(suggestedName, html, 'text/html');
-    return;
+    return { written: false };
   }
   currentHandle = handle;
   const writable = await handle.createWritable();
   await writable.write(html);
   await writable.close();
+  return { written: true };
 }
 
 async function pickSaveHandle(suggestedName: string): Promise<FileSystemFileHandleLike | null> {

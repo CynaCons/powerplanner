@@ -5,6 +5,7 @@ import { useDocumentStore, useIsDirty } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
 import { NEW_ROADMAP_CHOICES } from '../utils/templates';
+import { detachFile } from '../persistence/fileIo';
 
 /**
  * Starting a roadmap of your own (SRS-EDIT-017).
@@ -44,6 +45,10 @@ export function NewRoadmapDialog() {
   const start = (id: string) => {
     const choice = NEW_ROADMAP_CHOICES.find((c) => c.id === id);
     if (!choice) return;
+    // Release the previous plan's file FIRST. The binding is module state and
+    // outlives the document, so leaving it in place meant the next Ctrl+S
+    // wrote this empty roadmap over the plan the user just left.
+    detachFile();
     // A deep clone, so editing the new roadmap cannot reach back into the
     // template object every later New would hand out.
     newDocument(JSON.parse(JSON.stringify(choice.build())));

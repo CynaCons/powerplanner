@@ -29,6 +29,9 @@ Reference impl: `src/persistence/` (`schema.ts`, `yaml.ts`, `embedded.ts`,
 |----|-------------|-----------|--------------|-------|
 | SRS-PERS-020 | The system shall autosave a debounced snapshot to local storage while editing and offer to restore it on next launch. | Crash/refresh safety without explicit saves. | Demo | autosave.ts |
 | SRS-PERS-021 `[web]` | The system shall save via the File System Access API where available and fall back to a download otherwise. | Native save on modern browsers; works everywhere. | Demo | fileIo.ts |
+| SRS-PERS-022 `[web]` | Replacing the document — a new roadmap, a template — shall release the file the app is bound to, so the next save asks where to write. | The binding is module state that outlives the document. Left in place, the next Ctrl+S wrote the new, empty roadmap over the file the previous one came from, with no picker, no prompt and no undo. | Test (`detachFile`) | fileIo `detachFile`; documentActions `startDocument` |
+| SRS-PERS-023 `[web]` | A save shall report whether the bytes reached the file the user chose, and the document shall be marked saved only then. | A cancelled picker falls back to a download, which is not the file they asked for. Marking that clean silenced the guards on New and Open. | Test | fileIo `SaveResult`; documentActions `saveCurrent` |
+| SRS-PERS-024 `[web]` | A document restored from the autosave snapshot shall be marked as having unsaved changes. | It is the one whole document that by definition is in no file; marking it clean made the guards stay silent over the very work they exist to protect. | Test | App `onRestore` → `replaceDocument` |
 
 ## Open items
 
