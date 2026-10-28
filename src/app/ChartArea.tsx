@@ -20,7 +20,6 @@ import { useChartInteractions } from './useChartInteractions';
 import { ConnectorOverlay } from './ConnectorOverlay';
 import { useToolStore, cursorForTool } from '../stores/toolStore';
 
-const AXIS_TOTAL_H = 56;
 const ROW_GUTTER_W_BASE = 200;
 const ROW_GUTTER_W_MIN = 120;
 const ROW_GUTTER_W_MAX = 520;
@@ -107,20 +106,30 @@ export function ChartArea() {
     [doc, viewStart, pxPerDay],
   );
 
+  const axis = useMemo(
+    () => buildAxis(viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.fiscalYearStart),
+    [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.fiscalYearStart],
+  );
+
+  /** The header band is exactly the bands the axis built — not a constant that
+   *  happens to be near them. It was 56 for every scale while the real sum runs
+   *  44 (week) to 64 (day), so the day-number band overflowed into the first row
+   *  and every other scale left a dead strip. One number now feeds the clip, the
+   *  transforms, the rule and the pointer arithmetic, so they cannot disagree. */
+  const AXIS_TOTAL_H = axis.major.height + axis.minor.height + (axis.micro?.height ?? 0);
+
   /** Where the chart sheet ends: after the last row, or at the viewport edge
    *  when the plan is taller than the window. */
   const sheetBottom = Math.min(size.height, AXIS_TOTAL_H + layout.chartHeight);
 
   // The wheel scrolls the body. A plan that already fits has nothing to
-  // scroll, so maxScroll is 0 and the view stays put.
-  const bodyHeight = Math.max(0, size.height - AXIS_TOTAL_H);
+  // scroll, so maxScroll is 0 and the view stays put. The command bar floats
+  // over the foot of the chart, so the scroll range carries its height too —
+  // otherwise the last row can never be read.
+  const CHROME_H = 52;
+  const bodyHeight = Math.max(0, size.height - AXIS_TOTAL_H - CHROME_H);
   const maxScroll = Math.max(0, layout.chartHeight - bodyHeight);
   const scrollY = useViewportStore((s) => s.scrollY);
-
-  const axis = useMemo(
-    () => buildAxis(viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.fiscalYearStart),
-    [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.fiscalYearStart],
-  );
 
   const today = todayISO();
   const todayX = dateToX(today, viewStart, pxPerDay);
@@ -202,59 +211,67 @@ export function ChartArea() {
           stroke="var(--color-border-soft)"
         />
 
-        {/* Weekend stripes (in chart area) */}
-        <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`}>
-          {weekendStripes.map((s, i) => (
-            <rect key={i} x={s.x} y={0} width={s.w} height={layout.chartHeight} fill="var(--color-weekend)" opacity={0.4} />
-          ))}
-        </g>
+        {/*
+          Clipping, and the one rule that governs it: a `clip-path` resolves in
+          the REFERENCING element's own post-transform user space. These three
+          rects are written in absolute coordinates, so each one must hang on a
+          group that carries no transform; the scrolled groups sit inside.
 
-        {/* Row separators */}
-        <g transform={`translate(0 ${AXIS_TOTAL_H - scrollY})`}>
-          <Rows
-            rows={layout.visibleRows}
-            rowHeights={layout.rowHeights}
-            rowOffsets={layout.rowOffsets}
-            width={size.width}
-          />
-        </g>
-
-        {/* Row gutter labels */}
-        <g transform={`translate(0 ${AXIS_TOTAL_H - scrollY})`}>
-          <RowGutter rows={layout.visibleRows} rowHeights={layout.rowHeights} rowOffsets={layout.rowOffsets} width={ROW_GUTTER_W} />
-        </g>
-
-        {/* Time axis */}
-        <g transform={`translate(${ROW_GUTTER_W} 0)`} clipPath="url(#chart-clip)">
-          <TimeAxis axis={axis} />
-        </g>
-
-        {/* Chart content (clipped) */}
+          The chart used to hang a `y=0` clip on the group carrying
+          `translate(gutter, axisH - scrollY)`, so the window was dragged up by
+          exactly the scroll offset: the top edge rose and bars painted over the
+          calendar, the bottom edge rose and the foot of the plan went blank,
+          and the TODAY pill at negative local y was outside the window at every
+          offset. Never put a clip on a transformed element again.
+        */}
         <defs>
-          <clipPath id="chart-clip">
-            <rect x={0} y={0} width={chartWidth} height={size.height} />
+          <clipPath id="chart-body-clip">
+            <rect x={0} y={AXIS_TOTAL_H} width={size.width} height={Math.max(0, sheetBottom - AXIS_TOTAL_H)} />
+          </clipPath>
+          <clipPath id="chart-plot-clip">
+            <rect x={ROW_GUTTER_W} y={AXIS_TOTAL_H} width={chartWidth} height={Math.max(0, sheetBottom - AXIS_TOTAL_H)} />
+          </clipPath>
+          <clipPath id="chart-axis-clip">
+            <rect x={ROW_GUTTER_W} y={0} width={chartWidth} height={AXIS_TOTAL_H} />
           </clipPath>
         </defs>
 
-        <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`} clipPath="url(#chart-clip)">
-          {/* Today line + pill label */}
+        {/* Row separators and gutter labels: the sheet, below the header */}
+        <g clipPath="url(#chart-body-clip)">
+          <g transform={`translate(0 ${AXIS_TOTAL_H - scrollY})`}>
+            <Rows
+              rows={layout.visibleRows}
+              rowHeights={layout.rowHeights}
+              rowOffsets={layout.rowOffsets}
+              width={size.width}
+            />
+          </g>
+          <g transform={`translate(0 ${AXIS_TOTAL_H - scrollY})`}>
+            <RowGutter rows={layout.visibleRows} rowHeights={layout.rowHeights} rowOffsets={layout.rowOffsets} width={ROW_GUTTER_W} />
+          </g>
+        </g>
+
+        {/* Everything right of the gutter, clipped to the plot area */}
+        <g clipPath="url(#chart-plot-clip)">
+          {/* Weekend stripes */}
+          <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`}>
+            {weekendStripes.map((s, i) => (
+              <rect key={i} x={s.x} y={0} width={s.w} height={layout.chartHeight} fill="var(--color-weekend)" opacity={0.4} />
+            ))}
+          </g>
+
+          <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`}>
+            {/* Today line. The pill belongs to the header, not to the body. */}
           {showToday && (
-            <g pointerEvents="none">
-              <line
-                x1={todayX}
-                y1={0}
-                x2={todayX}
-                y2={layout.chartHeight}
-                stroke="var(--color-today)"
-                strokeWidth={1.5}
-              />
-              <g transform={`translate(${todayX - 22} -2)`}>
-                <rect x={0} y={-14} width={44} height={14} rx={3} fill="var(--color-today)" />
-                <text x={22} y={-3} textAnchor="middle" fontSize={9} fontWeight={600} fill="white" letterSpacing={0.3}>
-                  TODAY
-                </text>
-              </g>
-            </g>
+            <line
+              x1={todayX}
+              y1={0}
+              x2={todayX}
+              y2={layout.chartHeight}
+              stroke="var(--color-today)"
+              strokeWidth={1.5}
+              pointerEvents="none"
+            />
           )}
 
           <Brackets layout={layout} />
@@ -284,6 +301,29 @@ export function ChartArea() {
               strokeDasharray="3 3"
               pointerEvents="none"
             />
+          )}
+        </g>
+        </g>
+
+        {/*
+          The calendar header is painted LAST and owns the top layer. The clip
+          keeps the body out of the band; the paint order means even a future
+          element that escapes the clip cannot bury the structure the chart's
+          whole claim rests on.
+        */}
+        <g clipPath="url(#chart-axis-clip)">
+          <g transform={`translate(${ROW_GUTTER_W} 0)`}>
+            <TimeAxis axis={axis} />
+          </g>
+          {/* The TODAY pill sits in the header, so it neither scrolls away nor
+              falls outside the body clip at negative local y. */}
+          {showToday && (
+            <g transform={`translate(${ROW_GUTTER_W + todayX - 22} ${AXIS_TOTAL_H - 16})`} pointerEvents="none">
+              <rect x={0} y={0} width={44} height={14} rx={3} fill="var(--color-today)" />
+              <text x={22} y={11} textAnchor="middle" fontSize={9} fontWeight={600} fill="white" letterSpacing={0.3}>
+                TODAY
+              </text>
+            </g>
           )}
         </g>
 

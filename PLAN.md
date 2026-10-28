@@ -917,6 +917,22 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] USER GATE: approve renaming the GitHub repository to powerroadmap [agent: owner]
 - [x] Review the session's own changes and fix what it confirms [agent: claude]
 
+### v2.21.0 — The seven open defects
+**Goal:** The chart clips, the keymap is declared once, and the app says what it did.
+- [ ] Write SRS rows for clipping, keymap, geometry, notices and undo [agent: claude]
+- [x] Clip the chart body to the plot area, not the scroll [agent: claude]
+- [x] Fix the embed renderer's inverted clip and regenerate the figures [agent: claude]
+- [ ] Declare every keyboard binding once in a keymap table [agent: claude]
+- [ ] Teach every shortcut from the keymap on every surface [agent: claude]
+- [ ] Give the chart one shared geometry source for pointer gestures [agent: claude]
+- [ ] Tell the user the outcome of every file and delete action [agent: claude]
+- [ ] Correct the update dialog when the in-place write fails [agent: claude]
+- [ ] Make one gesture cost one undo step [agent: claude]
+- [ ] Let a row carry overlapping bars as a document setting [agent: claude]
+- [ ] Show several bars per row in the sample document [agent: claude]
+- [ ] Close the loop: lint, unit, e2e, smoke and look at it [agent: claude]
+- [ ] Commit, release and publish the showcase [agent: claude]
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
@@ -944,3 +960,8 @@ See git for full historical web iterations (v0–v2).
 - UX audit T6: step rows by whole blocks, and roll progress up to the group
 - UX audit T7: draw the axis as labelled cells instead of ticks
 - UX audit T8: declare every shortcut once, in one keymap table
+- Add a .gitattributes so the portable template stays LF on checkout
+- D7: make a group an object so roll-up reaches the whole subtree
+- D8: a task panel, and stop the sample naming each row after its task
+- deleteRow leaves orphaned children, so 'Delete section and its rows' lies
+- Date inputs commit every intermediate value while a year is typed

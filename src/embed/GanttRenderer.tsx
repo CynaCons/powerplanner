@@ -197,8 +197,14 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
         ))}
       </g>
 
-      {/* Chart content (clipped) */}
-      <g transform={`translate(${gutterW} ${AXIS_H})`} clipPath={`url(#pp-clip-${document.title.replace(/\W/g, '')})`}>
+      {/* Chart content. The clip rect is written in ABSOLUTE coordinates, so it
+          hangs on a group with no transform of its own — a `clip-path` resolves
+          in the referencing element's post-transform space, and putting it on
+          the translated group below landed the window at (2*gutterW, 2*AXIS_H),
+          destroying the left 180px of the plot and the first one and a half
+          rows of every embed and committed visual-spec figure. */}
+      <g clipPath={`url(#pp-clip-${document.title.replace(/\W/g, '')})`}>
+      <g transform={`translate(${gutterW} ${AXIS_H})`}>
         {/* Weekend stripes */}
         {weekendStripes.map((s, i) => (
           <rect key={`w-${i}`} x={s.x} y={0} width={s.w} height={layout.chartHeight} fill="var(--pp-weekend, rgba(0,0,0,0.025))" />
@@ -327,6 +333,7 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
             pointerEvents="none"
           />
         ))}
+      </g>
       </g>
 
       {/* Bottom border between axis and chart */}

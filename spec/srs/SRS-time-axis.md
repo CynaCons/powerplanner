@@ -40,6 +40,13 @@ Reference impl: `src/layout/timeAxis.ts`.
 | SRS-TAX-030 | The system shall accept a `workingDays` set (subset of 0–6) and `holidays` (dates) in the calendar. | Plans differ on which days count as working. | Test: `tests/unit/persistence` (schema) | data-model (CalendarSettings); schema.ts |
 | SRS-TAX-031 | On day/week scales the system shall shade non-working days (weekend mask) as a background hint, without affecting element positions. | Visual context for working vs non-working time. | Demo (weekend stripes) | visual-vocabulary; `GanttRenderer` showWeekends |
 
+## Header integrity
+
+| ID | Requirement | Rationale | Verification | Trace |
+|----|-------------|-----------|--------------|-------|
+| SRS-TAX-040 | The chart body shall be clipped to the plot area itself — from the foot of the calendar header to the foot of the sheet — by a clip written in absolute coordinates and referenced from an element carrying no transform, so that the window cannot move with the scroll offset. | A `clip-path` resolves in the referencing element's own post-transform user space. Hung on the scrolled body group, a `y=0` window rode the scroll: bars painted over the calendar band, the foot of the plan went blank once the scroll passed the viewport height, and anything at negative local y was outside the window at every offset. | Test: `tests/e2e/chart-clipping.spec.ts`, `tests/unit/embedClip.test.ts` | `ChartArea` §clip layers; `embed/GanttRenderer`; SRS-TAX-002 |
+| SRS-TAX-041 | The calendar header's height shall be the sum of the bands the axis actually built, and the same value shall feed the clip, the body transform, the dividing rule and the pointer arithmetic. | A constant 56 stood for a band sum that runs 44 (week) to 64 (day): the day-number band overflowed into the first row, every other scale left a dead strip, and the clip and the drag arithmetic could disagree about where the chart began. | Test: `tests/e2e/chart-clipping.spec.ts` (the band is read from the rendered rule) | `ChartArea` `AXIS_TOTAL_H`; `timeAxis` `AxisLevel.height` |
+
 ## Open items
 
 - Per-scale axis-level fixtures are added in F2 (conformance breadth); SRS-TAX-002
