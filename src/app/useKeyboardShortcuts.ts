@@ -1,12 +1,6 @@
 import { useEffect } from 'react';
-import { useDocumentStore } from '../stores/documentStore';
-import { useSelectionStore, type Selectable, type SelectableKind } from '../stores/selectionStore';
-import { useViewStore } from '../stores/viewStore';
-import { useViewportStore } from '../stores/viewportStore';
-import { useEditStore } from '../stores/editStore';
-import { useToolStore } from '../stores/toolStore';
-import { addDays, todayISO } from '../utils/dates';
-import { newId } from '../utils/ids';
+import { resolve } from './keymap';
+import { anyModalOpen } from '../stores/viewStore';
 
 function isEditableTarget(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;
@@ -14,223 +8,34 @@ function isEditableTarget(t: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
 }
 
+/**
+ * The whole global keyboard, in one dispatch (SRS-EDIT-040).
+ *
+ * Everything this hook knows is in `keymap.ts`. Here there are only the three
+ * questions that are about the page rather than about a binding: is the user
+ * typing into a field, does a dialog or sheet own the keyboard, and did any
+ * binding claim this chord. An unclaimed chord runs nothing and — this is the
+ * part that matters — preventDefaults nothing, so Ctrl+N is the browser's
+ * "new" again and Alt+← is Back again.
+ */
 export function useKeyboardShortcuts() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target)) return;
-      // A modal owns the keyboard while it is open. Without this, Enter on the
-      // focused "Blank" button in the New-roadmap chooser was swallowed by the
-      // shortcut below — it opened the details dialog on top instead of
-      // starting the roadmap.
-      const modal = useViewStore.getState();
-      if (modal.detailsOpen || modal.newRoadmapOpen) return;
+      const binding = resolve(e);
+      if (!binding) return;
 
-      const docStore = useDocumentStore.getState();
-      const { undo, redo, addTask, addMilestone, addBracket, deleteTask, deleteMilestone, deleteBracket, deleteDependency, deleteMarker, updateTask, updateMilestone, doc } = docStore;
-      const sel = useSelectionStore.getState();
-      const view = useViewportStore.getState();
-      const edit = useEditStore.getState();
-      const tool = useToolStore.getState();
+      if (!binding.whileTyping && isEditableTarget(e.target)) return;
 
-      const meta = e.metaKey || e.ctrlKey;
-      if (meta && e.key.toLowerCase() === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-        return;
-      }
-      if (meta && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        redo();
-        return;
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (sel.items.length === 0) return;
-        e.preventDefault();
-        for (const item of sel.items) {
-          if (item.kind === 'task') deleteTask(item.id);
-          else if (item.kind === 'milestone') deleteMilestone(item.id);
-          else if (item.kind === 'bracket') deleteBracket(item.id);
-          else if (item.kind === 'dependency') deleteDependency(item.id);
-          else if (item.kind === 'marker') deleteMarker(item.id);
-        }
-        sel.clear();
-        return;
-      }
-      if (e.key.toLowerCase() === 'b' && !meta) {
-        e.preventDefault();
-        if (doc.rows.length === 0) return;
-        const taskIds = sel.items.filter((s) => s.kind === 'task').map((s) => s.id);
-        const tasks = doc.tasks.filter((t) => taskIds.includes(t.id));
-        if (tasks.length === 0) {
-          const t = todayISO();
-          addBracket({ id: newId('br'), label: 'Phase', start: t, end: addDays(t, 14), rowIds: [doc.rows[0].id] });
-        } else {
-          const start = tasks.reduce((a, t) => (t.start < a ? t.start : a), tasks[0].start);
-          const end = tasks.reduce((a, t) => (t.end > a ? t.end : a), tasks[0].end);
-          const rowIds = Array.from(new Set(tasks.map((t) => t.rowId)));
-          addBracket({ id: newId('br'), label: 'Phase', start, end, rowIds });
-        }
-        return;
-      }
-      if (e.key.toLowerCase() === 'n') {
-        e.preventDefault();
-        if (doc.rows.length === 0) return;
-        const today = todayISO();
-        addTask({
-          id: newId('task'),
-          rowId: doc.rows[0].id,
-          label: 'New task',
-          start: today,
-          end: addDays(today, 7),
-          percentComplete: 0,
-        });
-        return;
-      }
-      if (e.key.toLowerCase() === 'm') {
-        e.preventDefault();
-        if (doc.rows.length === 0) return;
-        addMilestone({
-          id: newId('ms'),
-          rowId: doc.rows[0].id,
-          label: 'New milestone',
-          date: todayISO(),
-        });
-        return;
-      }
-      if (e.key === 'Escape') {
-        sel.clear();
-        edit.endEdit();
-        if (tool.activeTool !== 'select') tool.setTool('select', true);
-        return;
-      }
-      // Tool switching (Figma-style single-letter)
-      if (!meta && !e.shiftKey) {
-        if (e.key.toLowerCase() === 'v') {
-          e.preventDefault();
-          tool.setTool('select', true);
-          return;
-        }
-        if (e.key.toLowerCase() === 't') {
-          e.preventDefault();
-          tool.setTool('add-task', true);
-          return;
-        }
-        if (e.key.toLowerCase() === 'y') {
-          e.preventDefault();
-          tool.setTool('add-milestone', true);
-          return;
-        }
-        if (e.key.toLowerCase() === 'h') {
-          e.preventDefault();
-          tool.setTool('pan', true);
-          return;
-        }
-        if (e.key.toLowerCase() === 'r') {
-          e.preventDefault();
-          tool.setTool('marquee', true);
-          return;
-        }
-      }
-      // Linear-style scale shortcuts (Shift+letter to avoid clashing with tools)
-      if (e.shiftKey && !meta) {
-        const scaleKey = e.key.toLowerCase();
-        if (scaleKey === 'd' || scaleKey === 'w' || scaleKey === 'm' || scaleKey === 'q' || scaleKey === 'y') {
-          const scaleMap = { d: 'day', w: 'week', m: 'month', q: 'quarter', y: 'year' } as const;
-          e.preventDefault();
-          docStore.setScale(scaleMap[scaleKey as keyof typeof scaleMap]);
-          return;
-        }
-      }
-      if (e.key === '+' || e.key === '=') {
-        e.preventDefault();
-        view.zoom(1.25, 400);
-        return;
-      }
-      if (e.key === '-') {
-        e.preventDefault();
-        view.zoom(0.8, 400);
-        return;
-      }
-      if (e.key === 'Home') {
-        e.preventDefault();
-        const dates = [
-          ...doc.tasks.flatMap((t) => [t.start, t.end]),
-          ...doc.milestones.map((m) => m.date),
-        ];
-        if (dates.length === 0) return;
-        const min = dates.reduce((a, b) => (a < b ? a : b));
-        const max = dates.reduce((a, b) => (a > b ? a : b));
-        const chartArea = document.querySelector('.chart-area');
-        const width = (chartArea?.clientWidth ?? 800) - 200;
-        view.fit(min, max, Math.max(200, width));
-        return;
-      }
-      // Enter opens the details editor for the selected element. It is the
-      // keyboard path to everything that left the command bar in v2.20.0.
-      //
-      // One element only, and only a kind the dialog can render. A marquee of
-      // five bars used to open the dialog on an arbitrary one of them and
-      // autofocus its name; a dependency selection used to set the flag with
-      // nothing to show, so the modal then appeared on the next ordinary
-      // click. The bar-plus-its-row pair is the one two-item selection that
-      // means a single thing.
-      if (e.key === 'Enter') {
-        const subject = detailsSubject(sel.items);
-        if (!subject) return;
-        e.preventDefault();
-        useViewStore.getState().openDetails(subject);
-        return;
-      }
-      if (e.key === 'F2' && sel.items.length === 1 && sel.items[0].kind === 'task') {
-        e.preventDefault();
-        edit.beginEdit(sel.items[0].id);
-        return;
-      }
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        if (sel.items.length === 0) return;
-        e.preventDefault();
-        const direction = e.key === 'ArrowLeft' ? -1 : 1;
-        const step = e.shiftKey ? 7 : 1;
-        const delta = direction * step;
-        for (const item of sel.items) {
-          if (item.kind === 'task') {
-            const t = doc.tasks.find((x) => x.id === item.id);
-            if (!t) continue;
-            updateTask(t.id, { start: addDays(t.start, delta), end: addDays(t.end, delta) });
-          } else if (item.kind === 'milestone') {
-            const m = doc.milestones.find((x) => x.id === item.id);
-            if (!m) continue;
-            updateMilestone(m.id, { date: addDays(m.date, delta) });
-          }
-        }
-        return;
-      }
-      if (e.key.toLowerCase() === 's' && !meta) {
-        e.preventDefault();
-        edit.setSnap(!edit.snapEnabled);
-        return;
-      }
+      // A dialog or a teaching sheet owns the keyboard while it is open; only
+      // the chords declared 'always' (save, the palette, the sheet's own
+      // toggle) get through. Without this, M inserted a milestone on row one
+      // while the user was reading the shortcuts sheet that lists M.
+      if (binding.when !== 'always' && anyModalOpen()) return;
+
+      if (binding.preventDefault !== false) e.preventDefault();
+      binding.run();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
-}
-
-/**
- * The single element a details dialog could edit, or null.
- *
- * `row` is accepted on its own, but a row selected on the chart drags every
- * task and milestone on it into the selection, so that case arrives as many
- * items and is correctly refused.
- */
-function detailsSubject(items: Selectable[]): Selectable | null {
-  const EDITABLE: SelectableKind[] = ['task', 'milestone', 'bracket', 'row'];
-  if (items.length === 1) {
-    return EDITABLE.includes(items[0].kind) ? items[0] : null;
-  }
-  // A bar plus the row it sits on is one thing, not a multi-selection.
-  if (items.length === 2 && items[1].kind === 'row' && EDITABLE.includes(items[0].kind)) {
-    return items[0];
-  }
-  return null;
 }

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
 import { exportJson, exportYaml, exportSvg, exportPng } from '../persistence/fileIo';
 import { openIntoApp, saveCurrent, saveCurrentAs } from './documentActions';
+import { shortcutFor } from './keymap';
 import { ChevronDown, Download, Save, FolderOpen, FilePlus2 } from 'lucide-react';
 import { useViewStore } from '../stores/viewStore';
 
@@ -62,7 +63,7 @@ export function ExportMenu() {
         >
           <MenuItem icon={<FilePlus2 size={14} />} label="New roadmap…" onClick={onNew} />
           <Divider />
-          <MenuItem icon={<Save size={14} />} label="Save (Ctrl+S)" onClick={onSave} />
+          <MenuItem icon={<Save size={14} />} label={`Save (${shortcutFor('save')})`} onClick={onSave} />
           <MenuItem icon={<Save size={14} />} label="Save as…" onClick={onSaveAs} />
           <MenuItem icon={<FolderOpen size={14} />} label="Open file…" onClick={onOpen} />
           <Divider />

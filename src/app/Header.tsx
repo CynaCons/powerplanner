@@ -1,9 +1,11 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useEditStore } from '../stores/editStore';
+import { useViewStore } from '../stores/viewStore';
+import { shortcutFor } from './keymap';
 import { Undo2, Redo2, Magnet, HelpCircle, Settings } from 'lucide-react';
 import { ExportMenu } from './ExportMenu';
 import { BrandLogo } from './BrandLogo';
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense } from 'react';
 import { SettingsDialog } from './SettingsDialog';
 
 /**
@@ -28,7 +30,10 @@ export function Header() {
   const canRedo = useDocumentStore((s) => s.future.length > 0);
   const snapEnabled = useEditStore((s) => s.snapEnabled);
   const setSnap = useEditStore((s) => s.setSnap);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // In the view store, not local state: the keyboard dispatch has to be
+  // able to see that a dialog is open (SRS-EDIT-040).
+  const settingsOpen = useViewStore((v) => v.settingsOpen);
+  const setSettingsOpen = useViewStore((v) => v.setSettingsOpen);
 
 
 
@@ -66,13 +71,13 @@ export function Header() {
           <IconBtn
             onClick={undo}
             disabled={!canUndo}
-            title="Undo (Ctrl+Z)"
+            title={`Undo (${shortcutFor('undo')})`}
             icon={<Undo2 size={14} strokeWidth={1.75} />}
           />
           <IconBtn
             onClick={redo}
             disabled={!canRedo}
-            title="Redo (Ctrl+Shift+Z)"
+            title={`Redo (${shortcutFor('redo')})`}
             icon={<Redo2 size={14} strokeWidth={1.75} />}
           />
         </Cluster>

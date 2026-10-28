@@ -1,73 +1,37 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { X } from 'lucide-react';
+import { KEYMAP, GESTURES, chordKeys, type BindingGroup } from './keymap';
+import { useViewStore } from '../stores/viewStore';
 
-interface Shortcut { keys: string[]; label: string; }
-interface Group { title: string; items: Shortcut[]; }
+/**
+ * The shortcuts sheet, rendered FROM the keymap (SRS-EDIT-041).
+ *
+ * It used to be a hand-maintained copy of the same facts. The copy drifted:
+ * it taught ⇧M → Month, which the bare-'m' insert branch made unreachable; it
+ * taught "Wheel → Zoom at cursor", which stopped being true when the wheel
+ * became a scroll; and it had no row at all for N, M or B, the three bare
+ * letters that mutate the document. There is now nothing to keep in step.
+ */
 
-const GROUPS: Group[] = [
-  {
-    title: 'Tools',
-    items: [
-      { keys: ['V'], label: 'Select' },
-      { keys: ['T'], label: 'Add task' },
-      { keys: ['Y'], label: 'Add milestone' },
-      { keys: ['H'], label: 'Pan' },
-      { keys: ['R'], label: 'Marquee' },
-      { keys: ['Esc'], label: 'Revert to Select' },
-    ],
-  },
-  {
-    title: 'Scale',
-    items: [
-      { keys: ['⇧', 'D'], label: 'Day' },
-      { keys: ['⇧', 'W'], label: 'Week' },
-      { keys: ['⇧', 'M'], label: 'Month' },
-      { keys: ['⇧', 'Q'], label: 'Quarter' },
-      { keys: ['⇧', 'Y'], label: 'Year' },
-    ],
-  },
-  {
-    title: 'Selection',
-    items: [
-      { keys: ['Click'], label: 'Select item' },
-      { keys: ['⇧', 'Click'], label: 'Add to selection' },
-      { keys: ['Drag'], label: 'Move (on bar)' },
-      { keys: ['Esc'], label: 'Clear selection' },
-    ],
-  },
-  {
-    title: 'Editing',
-    items: [
-      { keys: ['⌘', 'Z'], label: 'Undo' },
-      { keys: ['⌘', '⇧', 'Z'], label: 'Redo' },
-      { keys: ['Del'], label: 'Delete selection' },
-      { keys: ['F2'], label: 'Rename' },
-      { keys: ['←', '→'], label: 'Nudge by day (⇧ = 7 days)' },
-      { keys: ['S'], label: 'Toggle snap' },
-    ],
-  },
-  {
-    title: 'Navigation',
-    items: [
-      { keys: ['Wheel'], label: 'Zoom at cursor' },
-      { keys: ['⇧', 'Wheel'], label: 'Pan horizontally' },
-      { keys: ['Drag bg'], label: 'Pan view (default tool)' },
-      { keys: ['+', '−'], label: 'Zoom in / out' },
-      { keys: ['Home'], label: 'Fit to data' },
-    ],
-  },
-  {
-    title: 'File',
-    items: [
-      { keys: ['⌘', 'S'], label: 'Save (embeds chart in HTML)' },
-      { keys: ['?'], label: 'Show shortcuts' },
-    ],
-  },
-];
+const ORDER: BindingGroup[] = ['Tools', 'Insert', 'Scale', 'Editing', 'Navigation', 'File', 'Help'];
 
-interface ShortcutsOverlayProps { open: boolean; onClose: () => void; }
+export function ShortcutsOverlay() {
+  const open = useViewStore((v) => v.shortcutsOpen);
+  const setOpen = useViewStore((v) => v.setShortcutsOpen);
+  const onClose = () => setOpen(false);
 
-export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
+  const groups = useMemo(() => {
+    const byGroup = new Map<BindingGroup, { keys: string[]; label: string }[]>();
+    for (const b of KEYMAP) {
+      const rows = byGroup.get(b.group) ?? [];
+      rows.push({ keys: chordKeys(b.chord), label: b.label });
+      byGroup.set(b.group, rows);
+    }
+    const out = ORDER.filter((g) => byGroup.has(g)).map((g) => ({ title: g, items: byGroup.get(g)! }));
+    out.push({ title: 'Pointer' as BindingGroup, items: [...GESTURES] });
+    return out;
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -116,7 +80,7 @@ export function ShortcutsOverlay({ open, onClose }: ShortcutsOverlayProps) {
             gap: '18px 28px',
           }}
         >
-          {GROUPS.map((g) => (
+          {groups.map((g) => (
             <section key={g.title}>
               <h3 style={{ margin: '0 0 8px', fontSize: 10.5, fontWeight: 600, letterSpacing: 0.8, textTransform: 'uppercase', color: 'var(--color-text-dim)' }}>
                 {g.title}

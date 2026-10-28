@@ -13,7 +13,6 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
 import { loadAutosave, saveAutosave, clearAutosave } from '../persistence/autosave';
-import { saveCurrent } from './documentActions';
 import type { GanttDocument } from '../types/document';
 
 interface AppProps {
@@ -28,8 +27,6 @@ export function App({ compact = false }: AppProps) {
   const replaceDocument = useDocumentStore((s) => s.replaceDocument);
   const didHydrate = useRef(false);
   const [pendingRestore, setPendingRestore] = useState<GanttDocument | null>(null);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -56,30 +53,9 @@ export function App({ compact = false }: AppProps) {
     return () => clearTimeout(t);
   }, [doc]);
 
-  // Ctrl+S → save; ? → show shortcuts overlay
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const target = e.target as HTMLElement | null;
-      const isEditable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        void saveCurrent();
-        return;
-      }
-      if (!isEditable && (e.key === '?' || (e.shiftKey && e.key === '/'))) {
-        e.preventDefault();
-        setShortcutsOpen((v) => !v);
-      }
-      // Cmd/Ctrl+K opens the command palette
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-      }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
+  // Save, the shortcuts sheet and the palette were a second window listener
+  // with its own idea of what a modifier means. They are entries in the keymap
+  // now, so there is one listener and one declaration (SRS-EDIT-040).
   useKeyboardShortcuts();
 
   return (
@@ -105,8 +81,8 @@ export function App({ compact = false }: AppProps) {
         />
       )}
       <ChartContextMenu />
-      <ShortcutsOverlay open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <ShortcutsOverlay />
+      <CommandPalette />
       <NewRoadmapDialog />
       <DetailsDialog />
     </div>

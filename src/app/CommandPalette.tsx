@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
 import { useToolStore, type Tool } from '../stores/toolStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
+import { shortcutFor } from './keymap';
 import { detachFile, exportJson, exportYaml, exportSvg, exportPng } from '../persistence/fileIo';
 import { openIntoApp, saveCurrent } from './documentActions';
 import { TEMPLATES } from '../utils/templates';
@@ -52,12 +53,10 @@ interface Command {
   run: () => void;
 }
 
-interface Props {
-  open: boolean;
-  onClose: () => void;
-}
-
-export function CommandPalette({ open, onClose }: Props) {
+export function CommandPalette() {
+  const open = useViewStore((v) => v.paletteOpen);
+  const setPaletteOpen = useViewStore((v) => v.setPaletteOpen);
+  const onClose = useCallback(() => setPaletteOpen(false), [setPaletteOpen]);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -324,7 +323,7 @@ function useCommands(close: () => void): Command[] {
   }
 
   function showShortcuts() {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true }));
+    useViewStore.getState().setShortcutsOpen(true);
   }
 
   function deleteSelection() {
@@ -343,14 +342,14 @@ function useCommands(close: () => void): Command[] {
   const cmds: Command[] = [];
 
   // CREATE
-  cmds.push({ id: 'create-task', label: 'New task', group: 'Create', icon: Plus, shortcut: 'T', keywords: 'add', run: run(quickAddTask) });
-  cmds.push({ id: 'create-ms', label: 'New milestone', group: 'Create', icon: Diamond, shortcut: 'Y', keywords: 'add', run: run(quickAddMilestone) });
+  cmds.push({ id: 'create-task', label: 'New task', group: 'Create', icon: Plus, shortcut: shortcutFor('insert-task'), keywords: 'add', run: run(quickAddTask) });
+  cmds.push({ id: 'create-ms', label: 'New milestone', group: 'Create', icon: Diamond, shortcut: shortcutFor('insert-milestone'), keywords: 'add', run: run(quickAddMilestone) });
   cmds.push({
     id: 'create-bracket',
     label: 'New bracket from selection',
     group: 'Create',
     icon: BracketIcon,
-    shortcut: 'B',
+    shortcut: shortcutFor('insert-bracket'),
     keywords: 'phase group add',
     run: run(() => {
       const d = useDocumentStore.getState();
@@ -370,25 +369,25 @@ function useCommands(close: () => void): Command[] {
   cmds.push({ id: 'create-row', label: 'New row', group: 'Create', icon: Rows3, keywords: 'add lane swimlane', run: run(() => { const d = useDocumentStore.getState(); d.addRow({ id: newId('row'), label: `Row ${d.doc.rows.length + 1}`, groupId: null }); }) });
 
   // TOOLS
-  cmds.push({ id: 'tool-select', label: 'Switch to Select tool', group: 'Tools', icon: MousePointer2, shortcut: 'V', run: run(() => setTool('select')) });
-  cmds.push({ id: 'tool-task', label: 'Switch to Add Task tool', group: 'Tools', icon: Plus, shortcut: 'T', run: run(() => setTool('add-task')) });
-  cmds.push({ id: 'tool-ms', label: 'Switch to Add Milestone tool', group: 'Tools', icon: Diamond, shortcut: 'Y', run: run(() => setTool('add-milestone')) });
-  cmds.push({ id: 'tool-marquee', label: 'Switch to Marquee tool', group: 'Tools', icon: BoxSelect, shortcut: 'R', run: run(() => setTool('marquee')) });
-  cmds.push({ id: 'tool-pan', label: 'Switch to Pan tool', group: 'Tools', icon: Hand, shortcut: 'H', run: run(() => setTool('pan')) });
+  cmds.push({ id: 'tool-select', label: 'Switch to Select tool', group: 'Tools', icon: MousePointer2, shortcut: shortcutFor('tool-select'), run: run(() => setTool('select')) });
+  cmds.push({ id: 'tool-task', label: 'Switch to Add Task tool', group: 'Tools', icon: Plus, shortcut: shortcutFor('tool-task'), run: run(() => setTool('add-task')) });
+  cmds.push({ id: 'tool-ms', label: 'Switch to Add Milestone tool', group: 'Tools', icon: Diamond, shortcut: shortcutFor('tool-milestone'), run: run(() => setTool('add-milestone')) });
+  cmds.push({ id: 'tool-marquee', label: 'Switch to Marquee tool', group: 'Tools', icon: BoxSelect, shortcut: shortcutFor('tool-marquee'), run: run(() => setTool('marquee')) });
+  cmds.push({ id: 'tool-pan', label: 'Switch to Pan tool', group: 'Tools', icon: Hand, shortcut: shortcutFor('tool-pan'), run: run(() => setTool('pan')) });
 
   // SCALE
-  cmds.push({ id: 'scale-d', label: 'Scale: Day', group: 'Scale', icon: CalendarDays, shortcut: '⇧D', run: run(() => setScale('day')) });
-  cmds.push({ id: 'scale-w', label: 'Scale: Week', group: 'Scale', icon: CalendarDays, shortcut: '⇧W', run: run(() => setScale('week')) });
-  cmds.push({ id: 'scale-m', label: 'Scale: Month', group: 'Scale', icon: CalendarDays, shortcut: '⇧M', run: run(() => setScale('month')) });
-  cmds.push({ id: 'scale-q', label: 'Scale: Quarter', group: 'Scale', icon: CalendarDays, shortcut: '⇧Q', run: run(() => setScale('quarter')) });
-  cmds.push({ id: 'scale-y', label: 'Scale: Year', group: 'Scale', icon: CalendarDays, shortcut: '⇧Y', run: run(() => setScale('year')) });
+  cmds.push({ id: 'scale-d', label: 'Scale: Day', group: 'Scale', icon: CalendarDays, shortcut: shortcutFor('scale-day'), run: run(() => setScale('day')) });
+  cmds.push({ id: 'scale-w', label: 'Scale: Week', group: 'Scale', icon: CalendarDays, shortcut: shortcutFor('scale-week'), run: run(() => setScale('week')) });
+  cmds.push({ id: 'scale-m', label: 'Scale: Month', group: 'Scale', icon: CalendarDays, shortcut: shortcutFor('scale-month'), run: run(() => setScale('month')) });
+  cmds.push({ id: 'scale-q', label: 'Scale: Quarter', group: 'Scale', icon: CalendarDays, shortcut: shortcutFor('scale-quarter'), run: run(() => setScale('quarter')) });
+  cmds.push({ id: 'scale-y', label: 'Scale: Year', group: 'Scale', icon: CalendarDays, shortcut: shortcutFor('scale-year'), run: run(() => setScale('year')) });
 
   // VIEW
   const vw = useViewStore.getState();
-  cmds.push({ id: 'view-fit', label: 'Fit chart to data', group: 'View', icon: Maximize2, shortcut: 'Home', run: run(fitAll) });
-  cmds.push({ id: 'view-snap', label: edit.snapEnabled ? 'Turn snap off' : 'Turn snap on', group: 'View', icon: Magnet, shortcut: 'S', keywords: 'snap toggle', run: run(() => useEditStore.getState().setSnap(!useEditStore.getState().snapEnabled)) });
-  cmds.push({ id: 'view-zoom-in', label: 'Zoom in', group: 'View', shortcut: '+', run: run(() => view.zoom(1.25, 400)) });
-  cmds.push({ id: 'view-zoom-out', label: 'Zoom out', group: 'View', shortcut: '−', run: run(() => view.zoom(0.8, 400)) });
+  cmds.push({ id: 'view-fit', label: 'Fit chart to data', group: 'View', icon: Maximize2, shortcut: shortcutFor('fit'), run: run(fitAll) });
+  cmds.push({ id: 'view-snap', label: edit.snapEnabled ? 'Turn snap off' : 'Turn snap on', group: 'View', icon: Magnet, shortcut: shortcutFor('snap'), keywords: 'snap toggle', run: run(() => useEditStore.getState().setSnap(!useEditStore.getState().snapEnabled)) });
+  cmds.push({ id: 'view-zoom-in', label: 'Zoom in', group: 'View', shortcut: shortcutFor('zoom-in'), run: run(() => view.zoom(1.25, 400)) });
+  cmds.push({ id: 'view-zoom-out', label: 'Zoom out', group: 'View', shortcut: shortcutFor('zoom-out'), run: run(() => view.zoom(0.8, 400)) });
   cmds.push({
     id: 'view-critical',
     label: vw.showCriticalPath ? 'Hide critical path' : 'Show critical path',
@@ -419,7 +418,7 @@ function useCommands(close: () => void): Command[] {
   cmds.push({ id: 'theme-print', label: 'Theme: Print (high-contrast)', group: 'Theme', icon: Printer, run: run(() => setTheme('print')) });
 
   // FILE
-  cmds.push({ id: 'file-save', label: 'Save', group: 'File', icon: Save, shortcut: '⌘S', keywords: 'embed html', run: run(() => { void saveCurrent(); }) });
+  cmds.push({ id: 'file-save', label: 'Save', group: 'File', icon: Save, shortcut: shortcutFor('save'), keywords: 'embed html', run: run(() => { void saveCurrent(); }) });
   cmds.push({ id: 'file-new', label: 'New roadmap…', group: 'File', icon: FilePlus2, keywords: 'blank start over empty template', run: run(() => useViewStore.getState().setNewRoadmapOpen(true)) });
   cmds.push({ id: 'file-open', label: 'Open file…', group: 'File', icon: FolderOpen, keywords: 'load', run: run(() => { void openIntoApp(); }) });
   cmds.push({ id: 'file-export-json', label: 'Export as JSON', group: 'File', icon: Download, run: run(() => exportJson(useDocumentStore.getState().doc)) });
@@ -442,8 +441,8 @@ function useCommands(close: () => void): Command[] {
   }
 
   // EDIT
-  cmds.push({ id: 'edit-undo', label: 'Undo', group: 'Edit', icon: Undo2, shortcut: '⌘Z', run: run(() => docActions.undo()) });
-  cmds.push({ id: 'edit-redo', label: 'Redo', group: 'Edit', icon: Redo2, shortcut: '⌘⇧Z', run: run(() => docActions.redo()) });
+  cmds.push({ id: 'edit-undo', label: 'Undo', group: 'Edit', icon: Undo2, shortcut: shortcutFor('undo'), run: run(() => docActions.undo()) });
+  cmds.push({ id: 'edit-redo', label: 'Redo', group: 'Edit', icon: Redo2, shortcut: shortcutFor('redo'), run: run(() => docActions.redo()) });
   cmds.push({
     id: 'edit-baseline-capture',
     label: useDocumentStore.getState().doc.baseline ? 'Re-capture baseline (overwrite)' : 'Capture baseline',
@@ -462,11 +461,11 @@ function useCommands(close: () => void): Command[] {
     });
   }
   if (sel.items.length > 0) {
-    cmds.push({ id: 'edit-delete', label: `Delete ${sel.items.length} selected`, group: 'Edit', icon: Trash2, shortcut: 'Del', run: run(deleteSelection) });
+    cmds.push({ id: 'edit-delete', label: `Delete ${sel.items.length} selected`, group: 'Edit', icon: Trash2, shortcut: shortcutFor('delete-selection'), run: run(deleteSelection) });
   }
 
   // HELP
-  cmds.push({ id: 'help-shortcuts', label: 'Show keyboard shortcuts', group: 'Help', icon: HelpCircle, shortcut: '?', run: run(showShortcuts) });
+  cmds.push({ id: 'help-shortcuts', label: 'Show keyboard shortcuts', group: 'Help', icon: HelpCircle, shortcut: shortcutFor('shortcuts'), run: run(showShortcuts) });
 
   return cmds;
 }

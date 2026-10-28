@@ -17,6 +17,7 @@ import { Dependencies } from '../renderer/Dependencies';
 import { Markers } from '../renderer/Markers';
 import { RowGutter } from '../renderer/RowGutter';
 import { useChartInteractions } from './useChartInteractions';
+import { chordKeys } from './keymap';
 import { ConnectorOverlay } from './ConnectorOverlay';
 import { useToolStore, cursorForTool } from '../stores/toolStore';
 
@@ -168,7 +169,7 @@ export function ChartArea() {
         <div className="empty-state">
           <div className="empty-title">Your chart is empty</div>
           <div className="empty-hint">
-            Right-click the canvas to add a task where you click, or press <kbd>⌘</kbd><kbd>K</kbd> for
+            Right-click the canvas to add a task where you click, or press {chordKeys('mod+k').map((k) => (<kbd key={k}>{k}</kbd>))} for
             the command palette. To start from a worked example instead, use <strong>File → New
             roadmap</strong>.
           </div>

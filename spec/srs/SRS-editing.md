@@ -39,6 +39,14 @@ Traces up to: `../interaction.md`, `../data-model.md`.
 | SRS-EDIT-031 `[web]` | A cursor shall change to its active form while the gesture is in progress, and return when it ends. | Without it there is no feedback that a drag was picked up, only that something moved. | Test (e2e) | useChartInteractions |
 | SRS-EDIT-032 `[web]` | No interactive region shall carry the default arrow cursor where a gesture exists, and no non-interactive region shall carry a gesture cursor. | A cursor that lies in either direction costs a user a wasted drag and the undo that follows. | Test (e2e sweeps the surface) | renderer/* |
 
+## Keyboard
+
+| ID | Requirement | Rationale | Verification | Trace |
+|----|-------------|-----------|--------------|-------|
+| SRS-EDIT-040 `[web]` | Every keyboard binding shall be declared once in a single keymap table as a full chord stating each of Ctrl/Cmd, Alt and Shift as required or forbidden, and a key press shall run only the binding whose chord it matches exactly; an unmatched chord shall run nothing and suppress nothing. | Bindings matched by an if-chain of bare letters let an earlier branch claim a chord meant for a later one and return before it. The bare-`m` insert shadowed the scale block, so the documented `⇧M → Month` inserted a milestone on the first row at today's date and the month scale was unreachable from the keyboard; `Ctrl+N` inserted a task and suppressed the user's "new"; `altKey` was read nowhere in the app at all. | Test: `tests/unit/keymapBehaviour.test.ts`, `tests/unit/keymap.test.ts` | `app/keymap.ts`; `useKeyboardShortcuts`; `App` |
+| SRS-EDIT-041 `[web]` | Every surface that teaches a binding — the shortcuts sheet, the command palette, menu labels and tooltips — shall render its key and its label from the keymap table, with the primary modifier drawn by one platform-correct helper. | Three hand-maintained copies of the same facts diverged with nothing to catch it: the sheet taught a chord that could not fire and omitted the three bare letters that mutate the document, the palette named `T` for a command bound to `N`, and ⌘ appeared on four surfaces with "Ctrl" on a tooltip an inch away. | Test: `tests/unit/keymap.test.ts` (`shortcutFor` throws on an unknown id) | `ShortcutsOverlay`; `CommandPalette`; `ExportMenu`; `Header`; `ChartArea` |
+| SRS-EDIT-042 `[web]` | While a dialog, a teaching sheet or the command palette is open, no binding that acts on the chart or the document shall run. | Open state lived in three separate component `useState` flags, so the one check that asks whether a modal owns the keyboard could not see them: pressing `M` while reading the shortcuts sheet inserted a milestone behind the scrim, and `Del` deleted the selection underneath it. | Test: `tests/unit/keymapBehaviour.test.ts` | `stores/viewStore` `anyModalOpen`; `useKeyboardShortcuts` |
+
 ## Selection & history
 
 | ID | Requirement | Rationale | Verification | Trace |

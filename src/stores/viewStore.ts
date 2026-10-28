@@ -10,6 +10,20 @@ interface ViewState {
   newRoadmapOpen: boolean;
   setNewRoadmapOpen: (v: boolean) => void;
   /**
+   * The teaching surfaces and the palette.
+   *
+   * These were three separate `useState` flags — two in App, one in Header —
+   * so the one place that asks "does a modal own the keyboard?" could not see
+   * them. Pressing M while reading the shortcuts sheet inserted a milestone on
+   * row one, and Del deleted the selection behind the scrim.
+   */
+  shortcutsOpen: boolean;
+  paletteOpen: boolean;
+  settingsOpen: boolean;
+  setShortcutsOpen: (v: boolean) => void;
+  setPaletteOpen: (v: boolean) => void;
+  setSettingsOpen: (v: boolean) => void;
+  /**
    * The details editor, and WHAT it is editing (SRS-EDIT-015).
    *
    * The subject is carried explicitly rather than inferred from the selection.
@@ -32,9 +46,21 @@ interface ViewState {
   toggle: (key: 'showCriticalPath' | 'showBaseline' | 'showMinimap') => void;
 }
 
+/** True while anything owns the keyboard: a dialog, a sheet, the palette. */
+export function anyModalOpen(): boolean {
+  const v = useViewStore.getState();
+  return v.detailsOpen || v.newRoadmapOpen || v.shortcutsOpen || v.paletteOpen || v.settingsOpen;
+}
+
 export const useViewStore = create<ViewState>((set, get) => ({
   newRoadmapOpen: false,
   setNewRoadmapOpen: (v) => set({ newRoadmapOpen: v }),
+  shortcutsOpen: false,
+  paletteOpen: false,
+  settingsOpen: false,
+  setShortcutsOpen: (v) => set({ shortcutsOpen: v }),
+  setPaletteOpen: (v) => set({ paletteOpen: v }),
+  setSettingsOpen: (v) => set({ settingsOpen: v }),
   detailsOpen: false,
   detailsTarget: null,
   openDetails: (target) => set({ detailsOpen: true, detailsTarget: target }),
