@@ -27,13 +27,25 @@ import type {
   TimeScale,
   ThemeName,
   ISODate,
+  GridDelimiter,
+  WeekendDisplay,
 } from '../types/document';
+import { GRID_DELIMITERS, WEEKEND_DISPLAYS } from '../types/document';
 
 export type DocOp =
   | { op: 'set_title'; title: string }
   | { op: 'set_scale'; scale: TimeScale }
   | { op: 'set_fiscal_year_start'; month: number }
   | { op: 'set_theme'; theme: ThemeName }
+  // The four below closed a parity hole found 2026-10-29 (SRS-ABR-025): each of
+  // these is a setting a person can change from the document-settings context of
+  // the command bar, and none of them had an operation, so an agent could only
+  // reach them by replacing the whole document — which is not an operation at
+  // all, and loses the all-or-nothing and single-undo-frame guarantees.
+  | { op: 'set_grid_delimiter'; delimiter: GridDelimiter }
+  | { op: 'set_weekend_display'; display: WeekendDisplay }
+  | { op: 'set_allow_overlap'; allow: boolean }
+  | { op: 'set_style_preset'; preset: string }
   | { op: 'add_row'; row: Row }
   | { op: 'update_row'; id: string; patch: Partial<Row> }
   | { op: 'delete_row'; id: string }
@@ -55,6 +67,21 @@ export type DocOp =
   | { op: 'add_marker'; marker: Marker }
   | { op: 'update_marker'; id: string; patch: Partial<Marker> }
   | { op: 'delete_marker'; id: string }
+  /**
+   * Delete a whole selection, the way one Delete key does (SRS-ABR-027).
+   *
+   * A batch of single deletes cannot express this. `delete_task` already
+   * cascades that task's dependencies, so a selection holding a task AND one of
+   * that task's dependencies — the commonest multi-selection there is — makes
+   * the following `delete_dependency` throw on a row that is already gone, and
+   * SRS-ABR-012's all-or-nothing reduction then discards the entire batch and
+   * deletes nothing. `documentStore.transact` exists for exactly this reason on
+   * the user's path; this is the operation form of it.
+   *
+   * Unknown ids are skipped rather than fatal: after a cascade they are the
+   * normal case, not a caller error.
+   */
+  | { op: 'delete_items'; items: Array<{ kind: 'task' | 'milestone' | 'bracket' | 'dependency' | 'marker' | 'row'; id: string }> }
   | { op: 'capture_baseline' }
   | { op: 'clear_baseline' };
 
@@ -111,6 +138,37 @@ export function applyOp(doc: GanttDocument, op: DocOp): GanttDocument {
 
     case 'set_theme':
       return { ...doc, style: { ...doc.style, theme: op.theme } };
+
+    /**
+     * The grid and weekend settings are validated against the same lists the
+     * reader uses (SRS-TAX-057), not merely typed: an agent is untrusted input,
+     * and a calendar carrying `"gridDelimiter": "fortnight"` would pass the
+     * compiler, write cleanly to the autosave, and then be silently defaulted
+     * on every open — a value that is wrong only after a reload.
+     */
+    case 'set_grid_delimiter':
+      if (!GRID_DELIMITERS.includes(op.delimiter)) {
+        throw new Error(`gridDelimiter must be one of ${GRID_DELIMITERS.join(', ')}, got ${String(op.delimiter)}`);
+      }
+      return { ...doc, calendar: { ...doc.calendar, gridDelimiter: op.delimiter } };
+
+    case 'set_weekend_display':
+      if (!WEEKEND_DISPLAYS.includes(op.display)) {
+        throw new Error(`weekendDisplay must be one of ${WEEKEND_DISPLAYS.join(', ')}, got ${String(op.display)}`);
+      }
+      return { ...doc, calendar: { ...doc.calendar, weekendDisplay: op.display } };
+
+    case 'set_allow_overlap':
+      if (typeof op.allow !== 'boolean') {
+        throw new Error(`allowOverlap must be a boolean, got ${typeof op.allow}`);
+      }
+      return { ...doc, style: { ...doc.style, allowOverlap: op.allow } };
+
+    case 'set_style_preset':
+      if (typeof op.preset !== 'string' || op.preset.length === 0) {
+        throw new Error('preset must be a non-empty string');
+      }
+      return { ...doc, style: { ...doc.style, preset: op.preset } };
 
     case 'add_row':
       assertUniqueId(doc.rows, op.row.id, 'row');
@@ -253,6 +311,31 @@ export function applyOp(doc: GanttDocument, op: DocOp): GanttDocument {
     case 'clear_baseline': {
       const next = { ...doc };
       delete next.baseline;
+      return next;
+    }
+
+    case 'delete_items': {
+      if (!Array.isArray(op.items)) throw new Error('delete_items.items must be an array');
+      // Folded one at a time through the same cases a single delete uses, so
+      // every cascade rule stays in one place and cannot drift. The skip is
+      // what makes the fold possible: `delete_task` removes that task's
+      // dependencies, so a dependency named later in the same selection is
+      // already gone and its absence is expected, not an error.
+      let next = doc;
+      for (const item of op.items) {
+        if (!item || typeof item.id !== 'string') throw new Error('delete_items.items need a kind and an id');
+        const present =
+          item.kind === 'task' ? next.tasks
+          : item.kind === 'milestone' ? next.milestones
+          : item.kind === 'bracket' ? next.brackets
+          : item.kind === 'dependency' ? next.dependencies
+          : item.kind === 'marker' ? next.markers
+          : item.kind === 'row' ? next.rows
+          : null;
+        if (!present) throw new Error(`delete_items cannot delete a '${String(item.kind)}'`);
+        if (!present.some((e) => e.id === item.id)) continue;
+        next = applyOp(next, { op: `delete_${item.kind}`, id: item.id } as DocOp);
+      }
       return next;
     }
 

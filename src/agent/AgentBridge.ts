@@ -21,6 +21,26 @@ import { validateDocument } from '../persistence/schema';
 import { blankDocument } from '../embed/index';
 import type { DocOp } from '../stores/docOps';
 import { DocOpError } from '../stores/docOps';
+// Serialising, rasterising and the on-screen census live next door so they can
+// be tested without a socket; `exportSvg()` in src/persistence/fileIo.ts cannot
+// be reused for any of it because it triggers a download (design review F7).
+import { renderChart, viewSummary } from './feedback';
+import { startDocument } from '../app/documentActions';
+
+/**
+ * Resolve after the browser has painted the next frame.
+ *
+ * Scrolling and revealing are applied by a React effect in `ChartArea`, so a
+ * summary taken synchronously after the store write describes the frame BEFORE
+ * the move. Two frames, because the effect that scrolls runs on the render the
+ * store change schedules, and the geometry is only right after that render has
+ * been painted.
+ */
+function afterPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
 import {
   BRIDGE_PROTOCOL_VERSION,
   DEFAULT_BRIDGE_PORT,
@@ -112,7 +132,10 @@ export class AgentBridge {
         return;
       }
       if (call?.type !== 'call') return;
-      this.send(this.handleCall(call));
+      // `get_render` rasterises, which cannot be synchronous. Nothing else
+      // awaits, and the server issues one call at a time per client, so the
+      // `lastSeenUserRevision` bookkeeping below is not racing itself.
+      void this.handleCall(call).then((result) => this.send(result));
     };
 
     socket.onclose = () => {
@@ -146,7 +169,7 @@ export class AgentBridge {
     }
   }
 
-  private handleCall(call: CallMessage): ResultMessage {
+  private async handleCall(call: CallMessage): Promise<ResultMessage> {
     // Replay rather than re-apply, so a retry after TIMEOUT is safe.
     if (call.opId) {
       const cached = this.applied.get(call.opId);
@@ -158,7 +181,7 @@ export class AgentBridge {
 
     let result: ResultMessage;
     try {
-      const data = this.dispatch(call);
+      const data = await this.dispatch(call);
       const after = useDocumentStore.getState();
       result = {
         type: 'result',
@@ -198,7 +221,7 @@ export class AgentBridge {
     return result;
   }
 
-  private dispatch(call: CallMessage): unknown {
+  private dispatch(call: CallMessage): unknown | Promise<unknown> {
     const params = (call.params ?? {}) as Record<string, unknown>;
     const store = useDocumentStore.getState();
 
@@ -219,57 +242,103 @@ export class AgentBridge {
             markers: s.doc.markers.length,
             brackets: s.doc.brackets.length,
           },
+          // What the person is actually looking at, not just what exists
+          // (SRS-ABR-035). An agent that never reads this can author a chart
+          // nobody can see.
+          view: viewSummary(),
         };
       }
 
       case 'get_document':
         return store.doc;
 
-      case 'get_view': {
-        const vp = useViewportStore.getState();
-        return {
-          startDate: vp.startDate,
-          pxPerDay: vp.pxPerDay,
-          scale: store.doc.calendar.scale,
-          selection: useSelectionStore.getState().items,
-        };
-      }
+      case 'get_view':
+        return viewSummary();
 
       case 'get_render':
-        // Evidence to show the user; must not trigger a download (SRS-ABR-031).
-        return { svg: serializeChartSvg() };
+        // Evidence to show the user (SRS-ABR-031), and now also something the
+        // AGENT can see (SRS-ABR-033/034). Must not trigger a download.
+        return renderChart().then((render) => ({ ...render, view: viewSummary() }));
 
       case 'apply_batch': {
         const { ops, expectedRevision } = params as unknown as ApplyBatchParams;
         if (!Array.isArray(ops)) throw new BridgeError('VALIDATION_FAILED', 'params.ops must be an array');
         this.assertRevision(expectedRevision);
         store.applyBatch(ops as DocOp[], 'agent');
-        return { applied: ops.length, revision: useDocumentStore.getState().revision };
+        return {
+          applied: ops.length,
+          revision: useDocumentStore.getState().revision,
+          view: viewSummary(),
+        };
       }
 
       case 'new_document': {
         this.assertRevision(params.expectedRevision as number | undefined);
         const doc = blankDocument(typeof params.title === 'string' ? params.title : undefined);
         // Same validation path as loading a file — an agent is untrusted input.
-        store.replaceDocument(validateDocument(doc));
-        return { title: doc.title };
+        const validated = validateDocument(doc);
+        // `startDocument`, not `replaceDocument`: the save target is module
+        // state that outlives the document, so replacing the document without
+        // detaching the file left the previous plan's file bound — and the
+        // user's next Ctrl+S would write this blank document over the roadmap
+        // they had opened. It also clears the selection, which would otherwise
+        // still name ids that no longer exist, and starts the plan clean rather
+        // than dirty and undoable. This is the same call the UI's New makes.
+        startDocument(validated);
+        return { title: validated.title, view: viewSummary() };
+      }
+
+      /**
+       * The vertical axis, which no method could reach (SRS-ABR-026).
+       *
+       * Without these, SRS-ABR-035 is diagnosis with no remedy: the view report
+       * tells an agent that the row it just wrote to is off screen, and nothing
+       * lets it do anything about that. Neither is a document change, so
+       * neither is a DocOp and neither makes a history frame (SRS-ABR-016).
+       */
+      case 'reveal': {
+        const rowId = params.rowId;
+        if (typeof rowId !== 'string') {
+          throw new BridgeError('VALIDATION_FAILED', 'params.rowId must be a string');
+        }
+        if (!store.doc.rows.some((r) => r.id === rowId)) {
+          throw new BridgeError('UNKNOWN_ID', `no row '${rowId}'`);
+        }
+        // ChartArea owns the arithmetic — it is the only place that knows the
+        // plot height, the body height and therefore the scroll ceiling — so
+        // this asks for the row and then waits for that pass to run.
+        useViewportStore.getState().reveal(rowId);
+        return afterPaint().then(() => ({ revealed: rowId, view: viewSummary() }));
       }
 
       case 'undo':
         store.undo('agent');
-        return { revision: useDocumentStore.getState().revision };
+        return { revision: useDocumentStore.getState().revision, view: viewSummary() };
 
       case 'redo':
         store.redo('agent');
-        return { revision: useDocumentStore.getState().revision };
+        return { revision: useDocumentStore.getState().revision, view: viewSummary() };
 
       case 'set_viewport': {
         const vp = useViewportStore.getState();
-        const { startDate, pxPerDay } = params as Record<string, string | number | undefined>;
+        const { startDate, pxPerDay, scrollY } = params as Record<string, string | number | undefined>;
         if (typeof startDate === 'string') vp.setStart(startDate);
         if (typeof pxPerDay === 'number') vp.setPxPerDay(pxPerDay);
+        if (typeof scrollY === 'number') {
+          // The ceiling comes from what is actually drawn below the fold rather
+          // than from a layout number this module cannot see, so it is right
+          // for whatever the chart currently contains.
+          const below = viewSummary().viewportPx.contentBelow;
+          const current = useViewportStore.getState().scrollY;
+          vp.scrollBy(scrollY - current, current + below);
+        }
         const after = useViewportStore.getState();
-        return { startDate: after.startDate, pxPerDay: after.pxPerDay };
+        return afterPaint().then(() => ({
+          startDate: after.startDate,
+          pxPerDay: after.pxPerDay,
+          scrollY: useViewportStore.getState().scrollY,
+          view: viewSummary(),
+        }));
       }
 
       case 'fit_to_tasks': {
@@ -313,18 +382,6 @@ export class AgentBridge {
       );
     }
   }
-}
-
-/**
- * Serialize the live chart SVG to markup.
- *
- * `exportSvg()` in src/persistence/fileIo.ts triggers a download and cannot be
- * reused here (design review F7).
- */
-function serializeChartSvg(): string {
-  const svg = document.querySelector('.chart-area svg') ?? document.querySelector('svg');
-  if (!svg) throw new BridgeError('VALIDATION_FAILED', 'no chart SVG present in the document');
-  return new XMLSerializer().serializeToString(svg);
 }
 
 /**

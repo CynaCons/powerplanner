@@ -15,6 +15,7 @@ import { SelectionGroup } from './SelectionGroup';
 import { todayISO, addDays } from '../utils/dates';
 import type { TimeScale, ThemeName } from '../types/document';
 import { gridDelimiterOf, weekendDisplayOf, type GridDelimiter, type WeekendDisplay } from '../types/document';
+import type { DocOp } from '../stores/docOps';
 
 /**
  * The contextual command bar (PLAN.md Phase 16 / v2.13.1).
@@ -265,18 +266,25 @@ function DocumentGroup() {
   const allowOverlap = useDocumentStore((s) => s.doc.style.allowOverlap ?? false);
   const setAllowOverlap = useDocumentStore((s) => s.setAllowOverlap);
   const calendar = useDocumentStore((s) => s.doc.calendar);
-  const replaceDocument = useDocumentStore((s) => s.replaceDocument);
+  const applyBatch = useDocumentStore((s) => s.applyBatch);
   const gridDelimiter = gridDelimiterOf(calendar);
   const weekendDisplay = weekendDisplayOf(calendar);
 
   /**
-   * Written through `replaceDocument`, which is the undoable whole-document
-   * path, so switching delimiters is one Ctrl+Z like any other edit and the
-   * autosave sees it. These two have no dedicated store action yet.
+   * Written as operations, which is what an agent sends too (SRS-ABR-025).
+   *
+   * This used to call `replaceDocument` with a whole new document, and that is
+   * how the two settings came to have no operation at all: nothing forced the
+   * op vocabulary to keep up with a control that bypassed it. Going through
+   * `applyBatch` means a person and an agent now travel one path, so the next
+   * setting added here cannot silently become unreachable to an agent. Still
+   * one undo frame — that is what a batch is.
    */
-  const patchCalendar = (patch: Partial<typeof calendar>) => {
-    const doc = useDocumentStore.getState().doc;
-    replaceDocument({ ...doc, calendar: { ...doc.calendar, ...patch } });
+  const patchCalendar = (patch: { gridDelimiter?: GridDelimiter; weekendDisplay?: WeekendDisplay }) => {
+    const ops: DocOp[] = [];
+    if (patch.gridDelimiter !== undefined) ops.push({ op: 'set_grid_delimiter', delimiter: patch.gridDelimiter });
+    if (patch.weekendDisplay !== undefined) ops.push({ op: 'set_weekend_display', display: patch.weekendDisplay });
+    if (ops.length > 0) applyBatch(ops, 'user');
   };
 
   return (

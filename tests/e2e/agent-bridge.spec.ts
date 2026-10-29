@@ -57,7 +57,9 @@ class McpClient {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  request(method: string, params: unknown): Promise<{ result?: { content?: Array<{ text: string }>; isError?: boolean } }> {
+  request(method: string, params: unknown): Promise<{
+    result?: { content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean };
+  }> {
     const id = this.nextId++;
     return new Promise((resolvePromise) => {
       this.waiters.set(id, resolvePromise as (value: unknown) => void);
@@ -65,11 +67,23 @@ class McpClient {
     });
   }
 
-  /** Call a tool and return its parsed payload plus whether it reported an error. */
+  /**
+   * Call a tool and return its parsed payload plus whether it reported an error.
+   *
+   * The text block is found by type rather than taken from index 0: a render
+   * puts an image block first (SRS-ABR-034), and indexing blindly would read
+   * the picture's base64 as if it were the JSON.
+   */
   async call(name: string, args: Record<string, unknown> = {}) {
     const response = await this.request('tools/call', { name, arguments: args });
-    const text = response.result?.content?.[0]?.text ?? '{}';
-    return { isError: response.result?.isError === true, payload: JSON.parse(text) as Record<string, unknown> };
+    const content = response.result?.content ?? [];
+    const text = content.find((c) => c.type === 'text' || typeof c.text === 'string')?.text ?? '{}';
+    return {
+      isError: response.result?.isError === true,
+      payload: JSON.parse(text) as Record<string, unknown>,
+      image: content.find((c) => c.type === 'image'),
+      blocks: content.map((c) => c.type ?? 'text'),
+    };
   }
 
   dispose(): void {
@@ -248,6 +262,184 @@ test.describe('web agent bridge', () => {
     expect(status.isError).toBe(false);
     // The document survived the outage untouched.
     expect((status.payload.counts as Record<string, number>).tasks).toBe(2);
+  });
+
+  test('the four settings that had no operation are now reachable (SRS-ABR-025)', async ({ page }) => {
+    await connectBridge(page);
+
+    const before = await mcp.call('get_view');
+    expect(before.payload.gridDelimiter).toBe('week');
+    expect(before.payload.weekendDisplay).toBe('shaded');
+
+    // One batch, which is the point: before this they could only be reached by
+    // replacing the whole document, so they could not travel with other ops.
+    const applied = await mcp.call('apply_batch', {
+      ops: [
+        { op: 'set_grid_delimiter', delimiter: 'quarter' },
+        { op: 'set_weekend_display', display: 'off' },
+        { op: 'set_allow_overlap', allow: true },
+        { op: 'set_style_preset', preset: 'mono' },
+      ],
+    });
+    expect(applied.isError).toBe(false);
+    expect(applied.payload.applied).toBe(4);
+
+    const view = applied.payload.view as Record<string, unknown>;
+    expect(view.gridDelimiter).toBe('quarter');
+    expect(view.weekendDisplay).toBe('off');
+
+    // It reached the chart, not just the model.
+    expect(await page.locator('.grid-weekend').count()).toBe(0);
+
+    const doc = (await mcp.call('get_document')).payload as {
+      calendar: Record<string, unknown>;
+      style: Record<string, unknown>;
+    };
+    expect(doc.calendar.gridDelimiter).toBe('quarter');
+    expect(doc.style.allowOverlap).toBe(true);
+    expect(doc.style.preset).toBe('mono');
+
+    // And it is one frame, like any other batch (SRS-ABR-013).
+    await mcp.call('undo');
+    expect((await mcp.call('get_view')).payload.weekendDisplay).toBe('shaded');
+  });
+
+  test('a batch with one bad setting changes nothing (SRS-ABR-012)', async ({ page }) => {
+    await connectBridge(page);
+    const bad = await mcp.call('apply_batch', {
+      ops: [
+        { op: 'set_grid_delimiter', delimiter: 'quarter' },
+        { op: 'set_weekend_display', display: 'hatched' },
+      ],
+    });
+    expect(bad.isError).toBe(true);
+    expect((await mcp.call('get_view')).payload.gridDelimiter).toBe('week');
+  });
+
+  test('the render comes back as a picture, not markup to read (SRS-ABR-034)', async ({ page }) => {
+    await connectBridge(page);
+    await mcp.call('apply_batch', { ops: plan(6, 3) });
+
+    const render = await mcp.call('get_render');
+    expect(render.isError).toBe(false);
+
+    // An image block, first, so an agent can look at the chart.
+    expect(render.blocks).toContain('image');
+    expect(render.image?.mimeType).toBe('image/png');
+    const png = render.image?.data ?? '';
+    // A real raster of a real chart, not a 1x1 placeholder. PNG base64 always
+    // begins iVBORw0KGgo.
+    expect(png.startsWith('iVBORw0KGgo')).toBe(true);
+    expect(png.length).toBeGreaterThan(5_000);
+    expect(render.payload.pngError ?? null).toBeNull();
+
+    // This payload is larger than one WebSocket frame, so it also proves the
+    // reassembly: before the fix the call returned TIMEOUT because the first
+    // fragment was parsed as a whole message and the continuations dropped.
+    expect(render.payload.svgBytes as number).toBeGreaterThan(5_000);
+    expect(render.payload.width as number).toBeGreaterThan(0);
+  });
+
+  test('the agent is told what is off screen, not just what exists (SRS-ABR-035)', async ({ page }) => {
+    await connectBridge(page);
+    // Far more rows than fit: the document is healthy and the view is not.
+    await mcp.call('apply_batch', { ops: plan(30, 1) });
+
+    const view = (await mcp.call('get_view')).payload as {
+      hasLayout: boolean;
+      onScreen: Record<string, { visible: number; clipped: number; below: number }>;
+      warnings: string[];
+      viewportPx: { height: number; contentBelow: number; contentAbove: number };
+    };
+
+    expect(view.hasLayout).toBe(true);
+    expect(view.onScreen.task.visible).toBeGreaterThan(0);
+    // The counts have to disagree with the document, or they are telling an
+    // agent nothing it could not read from get_document.
+    expect(view.onScreen.task.below).toBeGreaterThan(0);
+    expect(view.warnings.join(' ')).toMatch(/off screen/);
+    // Measured from what is drawn, not from the SVG node: the chart scrolls by
+    // translating its contents inside a window-sized svg, so the node's height
+    // is always the window's and would make this assertion unfalsifiable.
+    expect(view.viewportPx.contentBelow).toBeGreaterThan(0);
+
+    // Scrolling changes the answer, which is what makes it a view and not a
+    // property of the document.
+    const box = (await page.locator('.chart-area').boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let i = 0; i < 8; i++) await page.mouse.wheel(0, 200);
+    await page.waitForTimeout(200);
+
+    const after = (await mcp.call('get_view')).payload as {
+      onScreen: Record<string, { below: number; above: number }>;
+    };
+    expect(after.onScreen.task.above).toBeGreaterThan(0);
+    expect(after.onScreen.task.below).toBeLessThan(view.onScreen.task.below);
+  });
+
+  test('an agent can act on its own off-screen report (SRS-ABR-026)', async ({ page }) => {
+    await connectBridge(page);
+    await mcp.call('apply_batch', { ops: plan(30, 1) });
+
+    const before = (await mcp.call('get_view')).payload as {
+      onScreen: Record<string, { visible: number; below: number }>;
+      viewportPx: { scrollY: number; contentBelow: number };
+    };
+    expect(before.viewportPx.scrollY).toBe(0);
+    expect(before.onScreen.row.below).toBeGreaterThan(0);
+
+    // The last row the agent authored is off screen. Reveal is the remedy, and
+    // the app does the arithmetic.
+    const revealed = await mcp.call('reveal', { rowId: 'r29' });
+    expect(revealed.isError).toBe(false);
+    const after = revealed.payload.view as {
+      onScreen: Record<string, { visible: number }>;
+      viewportPx: { scrollY: number };
+    };
+    expect(after.viewportPx.scrollY).toBeGreaterThan(0);
+
+    // The row is now actually drawn inside the chart area, measured in the page.
+    const onScreen = await page.evaluate(() => {
+      const el = document.querySelector('[data-pp-kind="row"][data-pp-id="r29"]');
+      const area = document.querySelector('.chart-area');
+      if (!el || !area) return false;
+      const r = el.getBoundingClientRect();
+      const a = area.getBoundingClientRect();
+      return r.top < a.bottom && r.bottom > a.top;
+    });
+    expect(onScreen).toBe(true);
+
+    // scrollY is readable and settable, and 0 puts it back at the top.
+    const home = await mcp.call('set_viewport', { scrollY: 0 });
+    expect((home.payload.view as { viewportPx: { scrollY: number } }).viewportPx.scrollY).toBe(0);
+  });
+
+  test('reveal refuses a row that does not exist', async ({ page }) => {
+    await connectBridge(page);
+    const { isError, payload } = await mcp.call('reveal', { rowId: 'no-such-row' });
+    expect(isError).toBe(true);
+    expect(payload.error).toBe('UNKNOWN_ID');
+  });
+
+  test('a new document releases the file the old one was bound to (SRS-ABR-028)', async ({ page }) => {
+    await connectBridge(page);
+    await mcp.call('apply_batch', { ops: plan(2, 1) });
+    await page.locator('[data-pp-kind="task"]').first().click();
+    await expect(page.locator('.app-status')).toContainText('1 selected');
+
+    const { isError } = await mcp.call('new_document', { title: 'Fresh' });
+    expect(isError).toBe(false);
+
+    // The selection named ids that no longer exist; it must be gone.
+    await expect(page.locator('.app-status')).not.toContainText('1 selected');
+    // And the plan starts clean, not dirty and undoable: the title chip carries
+    // the dirty mark, so a bullet here would mean the blank document arrived
+    // already needing a save.
+    await expect(page.locator('.app-header')).not.toContainText('•');
+
+    const status = await mcp.call('get_status');
+    expect(status.payload.title).toBe('Fresh');
+    expect((status.payload.counts as Record<string, number>).tasks).toBe(0);
   });
 
   test('disconnecting from the UI ends the session immediately (SRS-ABR-061)', async ({ page }) => {

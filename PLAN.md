@@ -1023,9 +1023,31 @@ Four questions the prototypes must put in front of the owner, because they are v
 
 ### v2.29.0 — The suite catches up with the release (current) (ACTIVE)
 **Goal:** The e2e suite runs green against what was shipped as v2.28.0.
-- [ ] Run the full e2e suite against the shipped build [agent: claude]
-- [ ] Fix whatever the eleven unrun specs report [agent: claude]
+- [x] Run the full e2e suite against the shipped build [agent: claude]
 - [ ] Prove the two repaired axis-zoom gates actually fail when they should [agent: claude]
+- [ ] Stop the connector hit layer blocking bars and milestones
+- [ ] Keep a short bar renameable under its progress grip
+- [ ] Give the marker chip a reachable home on a tall plan
+- [ ] Persist the grid and weekend settings across a reload
+- [ ] Rewrite the command-bar specs for the stepper-free bar
+- [ ] Fix the connector-selection and scale-button locators
+- [ ] Settle the today rule, the carry drag and the post-zoom sweep
+- [ ] Re-run the suite on desktop, tablet and mobile
+
+### v2.30.0 — Agents can do everything, and can see what they did
+**Goal:** Every user action is reachable by an agent, and the agent can see the chart.
+- [x] Add document ops for the settings that bypass the op vocabulary [agent: claude]
+- [x] Make the serialized chart carry its own colours [agent: claude]
+- [x] Return the chart to an agent as an image it can see [agent: claude]
+- [x] Report the viewport and what is off-screen after every change [agent: claude]
+- [x] Carry a fragmented render back without losing it [agent: claude]
+- [x] Correct the three view numbers that cannot vary [agent: claude]
+- [x] Let an agent scroll the chart and reveal a row [agent: claude]
+- [x] Stop a new document leaving the old file bound [agent: claude]
+- [x] Delete a whole selection in one operation [agent: claude]
+- [x] Write the parity and feedback rows into the SRS [agent: claude]
+- [x] Drive every action through MCP as proof [agent: claude]
+- [ ] Reach snap, the overlays, the tool and the templates from the bridge
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition

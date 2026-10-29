@@ -41,7 +41,9 @@ export type BridgeMethod =
   | 'get_render'
   | 'set_viewport'
   | 'select'
-  | 'fit_to_tasks';
+  | 'fit_to_tasks'
+  /** Scroll a row into view (SRS-ABR-026). Not a document change. */
+  | 'reveal';
 
 export interface HelloMessage {
   type: 'hello';

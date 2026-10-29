@@ -21,6 +21,7 @@ import { writeFileSync, unlinkSync, readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
+import { FrameReader, encodeFrame, OPCODE } from './frames.mjs';
 const PROTOCOL_VERSION = 1;
 const PORT = Number(process.env.POWERPLANNER_BRIDGE_PORT ?? 5199);
 const CALL_TIMEOUT_MS = Number(process.env.POWERPLANNER_BRIDGE_TIMEOUT_MS ?? 5000);
@@ -71,13 +72,20 @@ const TOOLS = [
   },
   {
     name: 'get_view',
-    description: 'Current viewport (start date, px/day), time scale, and selection.',
+    description:
+      'What the person can actually SEE: the visible date window, px/day, time scale, the grid and weekend settings, the selection, ' +
+      'the chart area in pixels, and a census of how many elements of each kind are on screen versus off it (above, below, before or after the view). ' +
+      '`warnings` names anything a person would notice and you would not — every marker off screen, a plot taller than its window. ' +
+      'The document saying a thing exists is not the same as the user being able to see it.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'get_render',
     description:
-      'The rendered chart as SVG markup, for showing the user what was built. Does not download a file.',
+      'A PICTURE of the chart as it is on screen right now, returned as a PNG you can look at, plus the same view summary get_view gives. ' +
+      'Call it after authoring to check your work the way the user will see it — colours, crowding, truncated names, things that do not fit. ' +
+      'The raster carries the page background and the resolved theme colours, so it looks like the app and not like black text on nothing. ' +
+      'Does not download a file. If rasterising is refused the reply says why in `pngError` instead of silently handing you markup.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -85,11 +93,16 @@ const TOOLS = [
     description:
       'Apply an ordered list of document operations as ONE undo frame. All-or-nothing: if any operation is invalid, nothing is applied. This is the primary way to author a chart — prefer one batch over many single calls, so the user can revert your whole turn with a single Ctrl+Z.\n\n' +
       'Operations: set_title, set_scale, set_fiscal_year_start, set_theme, ' +
+      'set_grid_delimiter (none|day|week|month|quarter), set_weekend_display (off|shaded), ' +
+      'set_allow_overlap, set_style_preset, ' +
       'add_row/update_row/delete_row, add_task/update_task/delete_task, ' +
       'add_milestone/update_milestone/delete_milestone, ' +
       'add_bracket/update_bracket/delete_bracket, ' +
       'add_dependency/update_dependency/delete_dependency, ' +
-      'add_marker/update_marker/delete_marker, capture_baseline, clear_baseline.\n\n' +
+      'add_marker/update_marker/delete_marker, delete_items, capture_baseline, clear_baseline.\n\n' +
+      'Use delete_items to clear a whole selection at once. A batch of single deletes CANNOT do it: ' +
+      'delete_task already removes that task’s dependencies, so a dependency named later in the same ' +
+      'batch aborts the whole batch and nothing is deleted.\n\n' +
       'Example: {"ops":[{"op":"add_row","row":{"id":"r1","label":"Design","groupId":null}},' +
       '{"op":"add_task","task":{"id":"t1","rowId":"r1","label":"Wireframes","start":"2026-03-02","end":"2026-03-16"}}]}\n\n' +
       'Ids must be supplied and unique. Dates are ISO (YYYY-MM-DD). Later ops may ' +
@@ -130,10 +143,27 @@ const TOOLS = [
   {
     name: 'set_viewport',
     description:
-      'Move the visible time window. Never called automatically by edits — only move the view when the user would want it moved.',
+      'Move the view: the left-hand date, the zoom in px/day, and how far down the plan is scrolled. ' +
+      'scrollY is the one that answers the "N tasks are off screen (N below)" report from get_view — without it that report is a diagnosis with no remedy. ' +
+      'Clamped to what is actually drawn. Changes no document state and makes no undo frame. Returns the view after the frame has painted.',
     inputSchema: {
       type: 'object',
-      properties: { startDate: { type: 'string' }, pxPerDay: { type: 'number' } },
+      properties: {
+        startDate: { type: 'string', description: 'ISO date for the left edge of the plot.' },
+        pxPerDay: { type: 'number', description: 'Zoom. Clamped to the range the app allows.' },
+        scrollY: { type: 'number', description: 'Pixels scrolled down the plan. 0 is the top.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'reveal',
+    description:
+      'Scroll a row into view by id. Prefer this over set_viewport.scrollY after writing to a row: the app does the arithmetic, so it lands correctly whatever the height of the plan and of the window. Makes no undo frame.',
+    inputSchema: {
+      type: 'object',
+      properties: { rowId: { type: 'string' } },
+      required: ['rowId'],
       additionalProperties: false,
     },
   },
@@ -215,19 +245,22 @@ httpServer.on('upgrade', (req, socket) => {
   );
 
   const client = { socket, id: null, meta: {}, lastSeen: Date.now() };
-  let buffer = Buffer.alloc(0);
+
+  // Fragmentation, masking and control frames are the codec's problem;
+  // see mcp/agent-bridge/frames.mjs for why that is a module of its own.
+  const reader = new FrameReader();
 
   socket.on('data', (chunk) => {
-    buffer = Buffer.concat([buffer, chunk]);
-    let frame;
-    while ((frame = decodeFrame(buffer))) {
-      buffer = buffer.subarray(frame.consumed);
-      if (frame.opcode === 0x8) {
+    for (const action of reader.push(chunk)) {
+      if (action.type === 'close') {
         socket.end();
         return;
       }
-      if (frame.opcode !== 0x1) continue;
-      handleClientMessage(client, frame.payload.toString('utf8'), socket);
+      if (action.type === 'pong') {
+        socket.write(encodeFrame(action.payload, OPCODE.pong));
+        continue;
+      }
+      handleClientMessage(client, action.text, socket);
     }
   });
 
@@ -340,60 +373,6 @@ function callClient(method, params, opId, clientId) {
   });
 }
 
-/* --- frame codecs (server sends unmasked, receives masked) --------- */
-
-function decodeFrame(buf) {
-  if (buf.length < 2) return null;
-  const opcode = buf[0] & 0x0f;
-  const masked = (buf[1] & 0x80) !== 0;
-  let length = buf[1] & 0x7f;
-  let offset = 2;
-
-  if (length === 126) {
-    if (buf.length < offset + 2) return null;
-    length = buf.readUInt16BE(offset);
-    offset += 2;
-  } else if (length === 127) {
-    if (buf.length < offset + 8) return null;
-    length = Number(buf.readBigUInt64BE(offset));
-    offset += 8;
-  }
-
-  let mask = null;
-  if (masked) {
-    if (buf.length < offset + 4) return null;
-    mask = buf.subarray(offset, offset + 4);
-    offset += 4;
-  }
-
-  if (buf.length < offset + length) return null;
-  const payload = Buffer.from(buf.subarray(offset, offset + length));
-  if (mask) for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
-
-  return { opcode, payload, consumed: offset + length };
-}
-
-function encodeFrame(text) {
-  const payload = Buffer.from(text, 'utf8');
-  const length = payload.length;
-  let header;
-
-  if (length < 126) {
-    header = Buffer.from([0x81, length]);
-  } else if (length < 65536) {
-    header = Buffer.alloc(4);
-    header[0] = 0x81;
-    header[1] = 126;
-    header.writeUInt16BE(length, 2);
-  } else {
-    header = Buffer.alloc(10);
-    header[0] = 0x81;
-    header[1] = 127;
-    header.writeBigUInt64BE(BigInt(length), 2);
-  }
-  return Buffer.concat([header, payload]);
-}
-
 /* ------------------------------------------------------------------ */
 /* MCP stdio                                                           */
 /* ------------------------------------------------------------------ */
@@ -406,11 +385,40 @@ function mcpResult(id, result) {
   writeMcp({ jsonrpc: '2.0', id, result });
 }
 
+/**
+ * Send a tool result.
+ *
+ * A `png` field is lifted out into an MCP image block rather than printed as
+ * base64 (SRS-ABR-034). Everything used to go back as one text block, which
+ * meant an agent asking to see the chart received SVG source to read — it could
+ * reason about the markup but it could not look at the picture, and the two are
+ * not the same thing when the question is "does this chart read well".
+ *
+ * The `svg` field is dropped from the text alongside it: it is tens of
+ * kilobytes of markup that nothing downstream parses, and sending both the
+ * image and its source doubles the cost of every render for no gain. It stays
+ * available through the bridge for a caller that wants the markup itself.
+ */
 function mcpToolText(id, payload, isError = false) {
-  mcpResult(id, {
-    content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2) }],
-    isError,
+  const content = [];
+  let rest = payload;
+
+  if (payload && typeof payload === 'object' && typeof payload.png === 'string') {
+    content.push({ type: 'image', data: payload.png, mimeType: 'image/png' });
+    const { png, svg, ...others } = payload;
+    rest = { ...others, svgBytes: typeof svg === 'string' ? svg.length : 0 };
+  } else if (payload && typeof payload === 'object' && typeof payload.svg === 'string') {
+    // Rasterising was refused; say so where the agent is looking, so a missing
+    // picture cannot be mistaken for a chart that renders as nothing.
+    const { svg, ...others } = payload;
+    rest = { ...others, svgBytes: svg.length };
+  }
+
+  content.push({
+    type: 'text',
+    text: typeof rest === 'string' ? rest : JSON.stringify(rest, null, 2),
   });
+  mcpResult(id, { content, isError });
 }
 
 /**
