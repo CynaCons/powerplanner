@@ -9,34 +9,34 @@ Repository: `CynaCons/powerroadmap` — renamed from `CynaCons/powerplanner` on
 2026-10-28. Observations recorded before that date name the old repository and
 are left as they were observed; the old name still resolves.
 
-## Current state — observed 2026-10-28
+## Current state — observed 2026-10-29
 
 | Surface | State | Observed |
 |---|---|---|
-| GitHub release (latest) | `v2.21.0`, non-draft, not prerelease, published 2026-10-28T22:24:54Z from `main` | `gh release view v2.21.0 --json` |
-| Release assets | `PowerRoadmap.html`, `PowerGantt.html`, `PowerPlanner.html` — 388,308 bytes each, all `state=uploaded` | `gh release view --json assets` |
-| Asset integrity | all three downloaded and hashed: `97631064778e6c27713cc94e9663b90216ee2897836ac032a94e624a709b567b`, identical to each other and to the committed `dist-template/index.html` blob | `gh release download` + `sha256sum` |
-| Build & Release workflow | `completed/success` for tag `v2.21.0` | `gh run list` |
-| Web CI | `completed/success` on `main` | same |
-| GitHub Pages | `status: built`, from `main` `/`, HTTPS enforced | `gh api repos/CynaCons/powerroadmap/pages` |
-| Pages URL | https://cynacons.github.io/powerroadmap/ — HTTP 200 | `curl` |
+| GitHub release (latest) | `v2.28.0`, non-draft, not prerelease, published 2026-10-29T17:15:20Z from `main` | `gh release view v2.28.0 --json` |
+| Release assets | `PowerRoadmap.html` alone — 403,919 bytes, `state=uploaded`. One file, not three; see below. | `gh release view --json assets` |
+| Asset integrity | downloaded and hashed: `873682e964bdeb81c42e14ca83ca8712be68eaa218103c905ac89f8cf1c70fe6`, identical to the raw update route and to the committed `dist-template/index.html` | `gh release download` + `sha256sum` |
+| Published app runs | the downloaded asset was served and opened: 39 rows, 99 bars, status bar `v2.28.0`, zero console errors | browser |
+| Build & Release workflow | `completed/success` for tag `v2.28.0`, 53s | `gh run list` |
+| Web CI | `completed/success` on `main`, 50s | same |
+| GitHub Pages | HTTP 200 at https://cynacons.github.io/powerroadmap/ | `curl` |
 | Pages content | landing site from `site/`; no live app demo | `deploy-site.yml` |
-| `src/version.ts` | `2.21.0` | repo |
-| `package.json` | `2.21.0` — matches | repo |
-| `dist-template/index.html` | tracked; rebuilding at the tag reproduced the committed bytes exactly, so `git status` stayed clean; blob 388,308 bytes | repo |
+| `src/version.ts` | `2.28.0` | repo |
+| `package.json` | `2.28.0` — matches | repo |
+| `dist-template/index.html` | tracked; the CI rebuild at the tag reproduced the committed bytes exactly, so the blob digest and the on-disk digest agree and `git status` is clean | repo |
 | npm | not a surface — nothing published | DECISIONS.md D5 |
 | MCP Registry | not a surface — nothing published | DECISIONS.md D5 |
 
-### The update routes, re-measured at v2.21.0
+### The update routes, re-measured at v2.28.0
 
-All four fetched 2026-10-28 after the release, not inferred:
+All four fetched 2026-10-29 after the release, not inferred:
 
 | Route | Observed |
 |---|---|
-| `raw…/CynaCons/powerroadmap/main/package.json` | `2.21.0` |
-| `api.github.com/repos/CynaCons/powerroadmap/releases/latest` | `v2.21.0` |
-| `api.github.com/repos/CynaCons/powerplanner/releases/latest` — the **old** name, which every build before v2.20.0 asks for | `v2.21.0`, through the rename redirect |
-| `raw…/CynaCons/powerroadmap/v2.21.0/dist-template/index.html` | 388,308 bytes — the published asset's exact size |
+| `raw…/CynaCons/powerroadmap/main/package.json` | `2.28.0` |
+| `api.github.com/repos/CynaCons/powerroadmap/releases/latest` | `v2.28.0` |
+| `api.github.com/repos/CynaCons/powerplanner/releases/latest` — the **old** name, which every build before v2.20.0 asks for | `v2.28.0`, through the rename redirect |
+| `raw…/CynaCons/powerroadmap/v2.28.0/dist-template/index.html` | 403,919 bytes, digest `873682e9…` — identical to the published asset |
 
 The third row is the one that matters: builds in the wild compiled the old
 repository name in and cannot be corrected remotely. They still find this
@@ -58,23 +58,38 @@ A file restored by `git checkout --` is CRLF and does not. So the trap springs
 after a checkout, not after a build. A `.gitattributes` pinning the template to
 LF would remove the distinction; it is in the backlog.
 
-## Asset names, and why all three ship
+## Asset names — one file, from v2.22.0
 
-The app has been renamed twice in a day. The updater lives inside each saved
-file and only knows the asset name that existed when it shipped, so every
-release carries a byte-identical copy under all three names. Dropping one
-strands every build still using it, and those builds cannot be repaired
-remotely.
+Releases up to and including v2.21.0 carried the single-file app three times,
+as `PowerRoadmap.html`, `PowerGantt.html` and `PowerPlanner.html`, on the
+reasoning that an installed build looks for the asset name it shipped with and
+would be stranded without its own.
 
-| A build on | looks for | v2.21.0 ships it |
-|---|---|---|
-| 2.17.x | `PowerPlanner.html` | yes |
-| 2.18.x | `PowerGantt.html` | yes |
-| 2.19.0+ | `PowerRoadmap.html` | yes |
+That reasoning was wrong, and checking it is what retired the aliases. The
+updater does not read the release asset at all: `fetchBuild()` in
+`src/utils/updateChecker.ts` fetches
+`raw.githubusercontent.com/<repo>/<tag>/dist-template/index.html` and falls back
+to the asset only in case the CORS situation ever changes — which it has not,
+because release-asset downloads carry no `access-control-allow-origin` header
+and a page therefore cannot read one. Every build back to v2.17.0 takes the raw
+route. Dropping the aliases strands nothing.
 
-Verified against the live API on 2026-10-28, not inferred: all three assets of
-`v2.21.0` were downloaded and hashed, and all three are the same 388,308 bytes
-with the same digest.
+Owner report 2026-10-29, on opening the v2.21.0 release page: three HTML files
+that are the same file, and no way to tell which to download. From v2.22.0 the
+release publishes `PowerRoadmap.html` only.
+
+`RELEASE_ASSET_NAMES` still lists all three names, newest first, and should
+stay that way: the matcher runs in an old build reading a *new* release, and
+has to recognise at least one name it knows.
+
+What cannot be dropped is the **old repository name**. `api.github.com/repos/
+CynaCons/powerplanner/releases/latest` is still what every build before v2.20.0
+asks for, and it resolves only because GitHub redirects a renamed repository.
+That redirect is the single point of failure for those builds; re-measure it at
+every release. At v2.28.0 it returned `v2.28.0`.
+
+GitHub also attaches a source zip and tarball to every release automatically.
+They cannot be removed, and they are not ours.
 
 ## The rename — done 2026-10-28
 
@@ -199,6 +214,8 @@ parked, and `web-ci.yml` covers lint, unit, build and the single-file build.
 
 | Date | Surface | Version | Note |
 |---|---|---|---|
+| 2026-10-29 | GitHub release | v2.28.0 | Six iterations from the owner's live walkthrough. First release to publish one asset instead of three. e2e not run before the tag, by the owner's instruction. |
+| 2026-10-28 | GitHub release | v2.21.0 | Last release to carry the three byte-identical aliases. |
 | 2026-08-07 | GitHub release | v2.11.0 | Web agent bridge. No assets attached. |
 | 2026-05-27 | GitHub release | v2.3.0 | No assets attached. |
 | 2026-05-27 | GitHub release | v2.0.0 | No assets attached. |
