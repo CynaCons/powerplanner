@@ -935,13 +935,13 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 
 ### v2.22.0 — Design: selection, the toolbar and the axis (current) (ACTIVE)
 **Goal:** Show the owner how selection, progress, the toolbar and the axis should look.
-- [ ] Prototype a selected row, bar and milestone the eye catches [agent: claude]
-- [ ] Prototype a selected bar offering resize grips and anchors together [agent: claude]
-- [ ] Prototype dragging the fill edge to set progress [agent: claude]
-- [ ] Redesign the bottom command bar without the selection name [agent: claude]
-- [ ] Prototype grid delimiters and weekend shading at each scale [agent: claude]
-- [ ] Prototype the today marker clear of the calendar labels [agent: claude]
-- [ ] Prototype a foot band for deadline and below-row labels [agent: claude]
+- [x] Prototype a selected row, bar and milestone the eye catches [agent: claude]
+- [x] Prototype a selected bar offering resize grips and anchors together [agent: claude]
+- [x] Prototype dragging the fill edge to set progress [agent: claude]
+- [x] Redesign the bottom command bar without the selection name [agent: claude]
+- [x] Prototype grid delimiters and weekend shading at each scale [agent: claude]
+- [x] Prototype the today marker clear of the calendar labels [agent: claude]
+- [x] Prototype a foot band for deadline and below-row labels [agent: claude]
 - [ ] OWNER GATE: validate the visual designs before building them [agent: claude]
 
 ### v2.23.0 — Selection you can see, and a tool that lets go

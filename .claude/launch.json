@@ -24,6 +24,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["serve", "-s", "site", "-p", "5190", "--no-clipboard"],
       "port": 5190
+    },
+    {
+      "name": "mockup",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "docs/mockup", "-p", "5195", "--no-clipboard"],
+      "port": 5195
     }
   ]
 }
