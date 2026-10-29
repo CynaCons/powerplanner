@@ -52,7 +52,15 @@ const DRAG_THRESHOLD_PX = 3;
  * splitting the component would split that state in two.
  */
 export function footBandTop(chartHeight: number, bodyHeight: number, scrollY = 0): number {
-  return Math.min(Math.max(0, chartHeight), Math.max(0, bodyHeight - BAND_H)) + scrollY;
+  // The inputs are screened before they are clamped, because `Math.max(0, NaN)`
+  // is NaN and every element of the band derives from this one number: a single
+  // unmeasured input becomes five malformed SVG attributes — the band rect's y
+  // and height, the divider's y1/y2, the eyebrow's y, the chip's y and the
+  // rule's y1/y2 — repeated per marker, per frame, until the layout settles.
+  const rows = Number.isFinite(chartHeight) ? Math.max(0, chartHeight) : 0;
+  const visible = Number.isFinite(bodyHeight) ? Math.max(0, bodyHeight - BAND_H) : 0;
+  const offset = Number.isFinite(scrollY) ? scrollY : 0;
+  return Math.min(rows, visible) + offset;
 }
 
 /** A chip wide enough for its own name, and wide enough to hit. */

@@ -86,6 +86,25 @@ describe('the band stays on screen (SRS-ELEM-062)', () => {
     expect(footBandTop(1584, 726, 888)).toBe(1584);
   });
 
+  it('never returns a number SVG cannot use', () => {
+    // On first paint the chart has not been measured, and a NaN here is not one
+    // bad number but five bad attributes per marker per frame: the band rect's
+    // y and height, the divider's y1/y2, the eyebrow's y, the chip's y and the
+    // rule's y1/y2. `Math.max(0, NaN)` is NaN, so the clamps alone do not catch
+    // it — which is why the inputs are screened. Reported by a session running
+    // the dev server against a half-applied edit of this change, where
+    // `bodyHeight` arrived undefined and produced 77 console errors.
+    for (const bad of [NaN, undefined as unknown as number, Infinity, -Infinity]) {
+      expect(Number.isFinite(footBandTop(bad, 726))).toBe(true);
+      expect(Number.isFinite(footBandTop(1584, bad))).toBe(true);
+      expect(Number.isFinite(footBandTop(1584, 726, bad))).toBe(true);
+    }
+    // And a screened input must not be read as a huge one: a band pinned past
+    // the foot of the window is the defect this whole row exists to prevent.
+    expect(footBandTop(NaN, 726)).toBe(0);
+    expect(footBandTop(1584, NaN)).toBe(0);
+  });
+
   it('does not pin a band the plan has room for', () => {
     // The short-plan case must not drift: with the rows well inside the body
     // the band belongs under the last row and must not jump to the foot of the
