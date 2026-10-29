@@ -12,18 +12,36 @@ import { fileURLToPath } from 'node:url';
  * the whole turn, and that a concurrent user edit is reported rather than
  * silently overwritten (SRS-ABR-012/013/021/022).
  *
- * Only runs on the desktop project: the bridge is a desktop dev tool and the
- * mobile/tablet projects would spawn competing servers on the same port.
+ * Only runs on the desktop project: the bridge is a desktop dev tool. It used
+ * to say "and the mobile/tablet projects would spawn competing servers on the
+ * same port", which was true of the port and not of the projects — the copies
+ * that collided were whichever two workers ran at once. Each worker now binds
+ * its own port, so that half of the reason is gone.
  */
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const BRIDGE_PORT = 5219; // clear of the default so a dev bridge can stay running
+
+/**
+ * One loopback port per worker, clear of the 5199 default so a dev bridge can
+ * stay running alongside the suite.
+ *
+ * A single fixed port was enough while this file ran on its own, and it is not
+ * enough once the whole suite runs with several workers: Playwright is free to
+ * put this spec's three project copies in different workers at the same time,
+ * and the describe's `serial` mode orders tests WITHIN a worker only. Two
+ * workers then raced for one socket, and the loser's server came up without a
+ * listener — reported as a test failure in whichever project lost, which is why
+ * it looked like a tablet-only defect. `TEST_PARALLEL_INDEX` is Playwright's
+ * own worker index, so this cannot collide however many workers are used.
+ */
+const BRIDGE_PORT = 5219 + Number(process.env.TEST_PARALLEL_INDEX ?? 0);
 
 /** Minimal MCP stdio client — the same surface an agent host speaks. */
 class McpClient {
   private child: ChildProcessWithoutNullStreams;
   private nextId = 1;
   private buffer = '';
+  private stderr = '';
   private waiters = new Map<number, (value: unknown) => void>();
 
   constructor() {
@@ -36,6 +54,10 @@ class McpClient {
       },
     }) as ChildProcessWithoutNullStreams;
 
+    this.child.stderr.setEncoding('utf8');
+    this.child.stderr.on('data', (chunk: string) => {
+      this.stderr += chunk;
+    });
     this.child.stdout.setEncoding('utf8');
     this.child.stdout.on('data', (chunk: string) => {
       this.buffer += chunk;
@@ -52,7 +74,16 @@ class McpClient {
   }
 
   async ready(): Promise<void> {
-    await this.request('initialize', {});
+    // Raced against the child dying. A server that cannot bind its socket used
+    // to leave `initialize` unanswered, so the test hung to its own timeout and
+    // reported whatever assertion it happened to be on — a dead server looking
+    // like a defect in the feature under test. The reason is on stderr; say it.
+    const died = new Promise<never>((_, reject) => {
+      this.child.once('exit', (code) =>
+        reject(new Error(`bridge server exited with ${code} before answering: ${this.stderr.trim()}`)),
+      );
+    });
+    await Promise.race([this.request('initialize', {}), died]);
     // Give the WebSocket listener a moment to bind before the page connects.
     await new Promise((r) => setTimeout(r, 300));
   }

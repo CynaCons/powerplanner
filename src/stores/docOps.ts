@@ -32,6 +32,16 @@ import type {
 } from '../types/document';
 import { GRID_DELIMITERS, WEEKEND_DISPLAYS } from '../types/document';
 
+/**
+ * A caution for whoever adds the next operation: it must dirty the document.
+ *
+ * `shouldAutosave` is `dirty || !offerPending` (src/persistence/autosave.ts), so
+ * while a restore offer is unanswered a clean document is deliberately NOT
+ * written — newer work wins, and an operation that changed something without
+ * marking it dirty would be silently dropped for as long as that banner is up.
+ * Every op below goes through `applyBatch` → `mutate`, which marks it, so this
+ * is a rule to keep rather than a bug to fix.
+ */
 export type DocOp =
   | { op: 'set_title'; title: string }
   | { op: 'set_scale'; scale: TimeScale }

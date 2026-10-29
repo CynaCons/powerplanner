@@ -545,6 +545,24 @@ function cleanup() {
   }
 }
 
+/**
+ * Say why, and stop.
+ *
+ * Without this an EADDRINUSE is an unhandled 'error' event: the process dies on
+ * a stack trace, and anything waiting on `initialize` simply never hears back.
+ * A caller cannot tell that from a bridge that is merely slow, which is how a
+ * port collision between two test workers was read as a failure of the feature
+ * the test happened to be asserting.
+ */
+httpServer.on('error', (err) => {
+  const why =
+    err.code === 'EADDRINUSE'
+      ? `port ${PORT} is already in use — another bridge is running, or two of them started at once`
+      : err.message;
+  process.stderr.write(`[powerplanner-bridge] cannot listen: ${why}\n`);
+  process.exit(1);
+});
+
 // Loopback only, never a wildcard address (SRS-ABR-002).
 httpServer.listen(PORT, '127.0.0.1', () => {
   writeTokenFile();
