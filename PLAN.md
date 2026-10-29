@@ -1021,6 +1021,12 @@ Four questions the prototypes must put in front of the owner, because they are v
 - With the selection's name gone from the bottom bar, do its quick actions stay in the bar or move onto the selection itself?
 - Should deadline labels and labels pinned below the last row share one new band at the foot of the chart?
 
+### v2.29.0 — The suite catches up with the release (current) (ACTIVE)
+**Goal:** The e2e suite runs green against what was shipped as v2.28.0.
+- [ ] Run the full e2e suite against the shipped build [agent: claude]
+- [ ] Fix whatever the eleven unrun specs report [agent: claude]
+- [ ] Prove the two repaired axis-zoom gates actually fail when they should [agent: claude]
+
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition
 - Excel/CSV linking, resource swimlanes, baselines, AI assist, collaboration
