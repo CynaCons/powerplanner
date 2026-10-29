@@ -3,9 +3,10 @@ import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useEditStore } from '../stores/editStore';
 import { useViewStore } from '../stores/viewStore';
+import { useViewportStore } from '../stores/viewportStore';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { LabelPositionPicker } from './LabelPositionPicker';
-import { Pencil, Copy, Trash2, Plus, Diamond, Brackets as BracketIcon, Flag, GitBranch, SlidersHorizontal, ArrowUp, ArrowDown, FolderPlus, FolderInput } from 'lucide-react';
+import { Pencil, Copy, Trash2, Plus, Diamond, Brackets as BracketIcon, Flag, GitBranch, SlidersHorizontal, ArrowUp, ArrowDown, FolderPlus, FolderInput, Rows3 } from 'lucide-react';
 import { newId } from '../utils/ids';
 import { addDays, todayISO } from '../utils/dates';
 import type { DependencyType, LabelPlacement } from '../types/document';
@@ -63,6 +64,9 @@ export function ChartContextMenu() {
     openDetailsFor({ kind, id });
   };
   const beginEdit = useEditStore((s) => s.beginEdit);
+  // A row inserted off-screen is a row the planner cannot see they made
+  // (SRS-EDIT-028).
+  const reveal = useViewportStore((s) => s.reveal);
 
   if (!open || !target) return null;
 
@@ -70,14 +74,30 @@ export function ChartContextMenu() {
 
   if (target.kind === 'background') {
     const date = target.date ?? todayISO();
-    const rowId = target.rowId ?? doc.rows[0]?.id;
+    const clickedRow = target.rowId ?? doc.rows[0]?.id;
+
+    /**
+     * The row the insert lands on, created if there is none (SRS-EDIT-061).
+     *
+     * Both inserts used to read the clicked row and `return` when it was
+     * undefined, which is exactly the state an empty roadmap is in — so the
+     * first gesture a first-time user makes on an empty chart was a menu item
+     * that did nothing and said nothing.
+     */
+    const rowForInsert = (): string => {
+      if (clickedRow) return clickedRow;
+      const id = newId('row');
+      docActions.addRow({ id, label: 'Row 1', groupId: null });
+      return id;
+    };
+
     items.push({
       id: 'add-task',
       label: 'Add task here',
       icon: Plus,
       shortcut: 'T',
       onClick: () => {
-        if (!rowId) return;
+        const rowId = rowForInsert();
         const id = newId('task');
         docActions.addTask({ id, rowId, label: 'New task', start: date, end: addDays(date, 7), percentComplete: 0 });
         setSelection([{ kind: 'task', id }]);
@@ -89,10 +109,32 @@ export function ChartContextMenu() {
       icon: Diamond,
       shortcut: 'Y',
       onClick: () => {
-        if (!rowId) return;
+        const rowId = rowForInsert();
         const id = newId('ms');
         docActions.addMilestone({ id, rowId, label: 'New milestone', date });
         setSelection([{ kind: 'milestone', id }]);
+      },
+    });
+    /**
+     * A row, from the canvas (SRS-EDIT-060).
+     *
+     * Until now a row came from the command bar’s Insert group or from an
+     * existing row’s own menu — both of which need a row to exist and be found
+     * first — and from nowhere on the chart, which is where the planner is
+     * already pointing when they run out of rows. It lands under the row the
+     * click was on, so the menu uses the one piece of context it has.
+     */
+    items.push({
+      id: 'add-row-here',
+      label: clickedRow ? 'Add row below' : 'Add row',
+      icon: Rows3,
+      onClick: () => {
+        const id = newId('row');
+        const at = clickedRow ? doc.rows.findIndex((r) => r.id === clickedRow) : -1;
+        const under = doc.rows[at];
+        docActions.addRow({ id, label: `Row ${doc.rows.length + 1}`, groupId: under?.groupId ?? null }, at >= 0 ? at + 1 : undefined);
+        setSelection([{ kind: 'row', id }]);
+        reveal(id);
       },
     });
     items.push({ id: 's1', separator: true });
@@ -284,7 +326,20 @@ export function ChartContextMenu() {
   }
 
   if (target.kind === 'marker' && target.id) {
-    items.push({ id: 'edit', label: 'Edit label', icon: Pencil, onClick: () => setSelection([{ kind: 'marker', id: target.id! }]) });
+    /* It used to set the selection and nothing else — an item called "Edit
+       label" that opened no editor, which is why a marker could be created
+       and never renamed. SR-IXC-16: this verb starts an in-place rename, in
+       every context and for every element type. */
+    items.push({
+      id: 'edit',
+      label: 'Rename',
+      icon: Pencil,
+      shortcut: 'F2',
+      onClick: () => {
+        setSelection([{ kind: 'marker', id: target.id! }]);
+        beginEdit(target.id!);
+      },
+    });
     items.push({ id: 's1', separator: true });
     items.push({ id: 'del', label: 'Delete marker', icon: Trash2, danger: true, onClick: () => docActions.deleteMarker(target.id!) });
   }

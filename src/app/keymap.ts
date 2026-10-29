@@ -1,5 +1,6 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore, type Selectable, type SelectableKind } from '../stores/selectionStore';
+import { bracketSpanFor } from './bracketSpan';
 import { useViewStore } from '../stores/viewStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
@@ -8,6 +9,7 @@ import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 import { saveCurrent } from './documentActions';
 import { deleteSelection } from './documentActions';
+import { resolveInsertTarget } from './insertTarget';
 
 /**
  * Every keyboard binding the app has, declared once (SRS-EDIT-040/041).
@@ -141,7 +143,32 @@ function setScale(scale: 'day' | 'week' | 'month' | 'quarter' | 'year') {
 }
 
 function setTool(tool: 'select' | 'add-task' | 'add-milestone' | 'pan' | 'marquee') {
-  useToolStore.getState().setTool(tool, true);
+  // No explicit stickiness: the store knows that only pan is a mode
+  // (SRS-EDIT-026). Forcing it here is what kept `t` armed forever.
+  useToolStore.getState().setTool(tool);
+}
+
+/**
+ * Where a keyboard insert lands (SRS-EDIT-028).
+ *
+ * `N` and `M` both wrote to `doc.rows[0]`, which in every shipped template is
+ * a section header and is usually scrolled off the top, so the key appeared to
+ * do nothing at all.
+ */
+function insertRowId(): string | null {
+  const d = doc();
+  const target = resolveInsertTarget(d, useSelectionStore.getState().items);
+  if (!target) return null;
+  if (target.kind === 'row') return target.rowId;
+  const id = newId('row');
+  useDocumentStore.getState().addRow({ id, label: 'New row', groupId: target.parentId }, target.index);
+  return id;
+}
+
+/** Select what was just inserted and bring its row into view. */
+function landOn(rowId: string, item: Selectable) {
+  useSelectionStore.getState().setSelection([item]);
+  useViewportStore.getState().reveal(rowId);
 }
 
 export const KEYMAP: readonly Binding[] = [
@@ -149,35 +176,37 @@ export const KEYMAP: readonly Binding[] = [
   {
     id: 'insert-task',
     chord: 'n',
-    label: 'New task on the first row',
+    label: 'New task on the selected row',
     group: 'Insert',
     when: 'canvas',
     run: () => {
-      const { addTask } = useDocumentStore.getState();
-      const d = doc();
-      if (d.rows.length === 0) return;
+      const rowId = insertRowId();
+      if (!rowId) return;
       const today = todayISO();
-      addTask({
-        id: newId('task'),
-        rowId: d.rows[0].id,
+      const id = newId('task');
+      useDocumentStore.getState().addTask({
+        id,
+        rowId,
         label: 'New task',
         start: today,
         end: addDays(today, 7),
         percentComplete: 0,
       });
+      landOn(rowId, { kind: 'task', id });
     },
   },
   {
     id: 'insert-milestone',
     chord: 'm',
-    label: 'New milestone on the first row',
+    label: 'New milestone on the selected row',
     group: 'Insert',
     when: 'canvas',
     run: () => {
-      const { addMilestone } = useDocumentStore.getState();
-      const d = doc();
-      if (d.rows.length === 0) return;
-      addMilestone({ id: newId('ms'), rowId: d.rows[0].id, label: 'New milestone', date: todayISO() });
+      const rowId = insertRowId();
+      if (!rowId) return;
+      const id = newId('ms');
+      useDocumentStore.getState().addMilestone({ id, rowId, label: 'New milestone', date: todayISO() });
+      landOn(rowId, { kind: 'milestone', id });
     },
   },
   {
@@ -190,17 +219,12 @@ export const KEYMAP: readonly Binding[] = [
       const { addBracket } = useDocumentStore.getState();
       const d = doc();
       if (d.rows.length === 0) return;
-      const taskIds = useSelectionStore.getState().items.filter((s) => s.kind === 'task').map((s) => s.id);
-      const tasks = d.tasks.filter((t) => taskIds.includes(t.id));
-      if (tasks.length === 0) {
-        const t = todayISO();
-        addBracket({ id: newId('br'), label: 'Phase', start: t, end: addDays(t, 14), rowIds: [d.rows[0].id] });
-        return;
-      }
-      const start = tasks.reduce((a, t) => (t.start < a ? t.start : a), tasks[0].start);
-      const end = tasks.reduce((a, t) => (t.end > a ? t.end : a), tasks[0].end);
-      const rowIds = Array.from(new Set(tasks.map((t) => t.rowId)));
-      addBracket({ id: newId('br'), label: 'Phase', start, end, rowIds });
+      // One rule for the span, shared with the button and the palette: a
+      // selected row counts as much as a selected task, and with nothing
+      // selected the bracket covers the plan instead of landing on the first
+      // section header for a fortnight (SRS-ELEM-032).
+      const span = bracketSpanFor(d, useSelectionStore.getState().items);
+      addBracket({ id: newId('br'), label: 'Phase', ...span });
     },
   },
 
@@ -307,7 +331,7 @@ export const KEYMAP: readonly Binding[] = [
     label: 'Zoom in',
     group: 'Navigation',
     when: 'canvas',
-    run: () => useViewportStore.getState().zoom(1.25, 400),
+    run: () => useViewportStore.getState().zoom(1.25),
   },
   {
     id: 'zoom-out',
@@ -316,7 +340,7 @@ export const KEYMAP: readonly Binding[] = [
     label: 'Zoom out',
     group: 'Navigation',
     when: 'canvas',
-    run: () => useViewportStore.getState().zoom(0.8, 400),
+    run: () => useViewportStore.getState().zoom(0.8),
   },
   {
     id: 'fit',

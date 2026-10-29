@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Row } from '../types/document';
 import { useDocumentStore } from '../stores/documentStore';
-import { useSelectionStore } from '../stores/selectionStore';
 import { InlineLabel } from '../app/InlineLabel';
 
 interface Props {
@@ -25,7 +24,6 @@ interface Props {
  */
 export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
   const updateRow = useDocumentStore((s) => s.updateRow);
-  const isSelected = useSelectionStore((s) => s.isSelected);
   // Renaming belongs here, on the name itself, not in the bottom bar — the bar
   // is for quick actions (owner directive 2026-10-26).
   const [editing, setEditing] = useState<string | null>(null);
@@ -55,6 +53,11 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
         const isGroup = (childCount.get(row.id) ?? 0) > 0;
         const h = rowHeights[i];
         const spine = groupColor.get(row.id) ?? 'var(--color-text-soft)';
+        // The editor's field is 0.92 alpha, not opaque, so the name underneath
+        // ghosted through it and the user read two names at once — the one
+        // being typed and the one being replaced (SRS-EDIT-051). The spine and
+        // the collapse chevron stay: they are structure, not the value.
+        const renaming = editing === row.id;
 
         return (
           // The data attributes live on the GROUP, not on the backing rect:
@@ -76,7 +79,10 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
               y={0}
               width={width}
               height={h}
-              fill={isSelected(row.id) ? 'var(--color-accent-soft)' : 'transparent'}
+              // The band is drawn once, across the whole sheet, by `Rows`
+              // (SRS-EDIT-024). Tinting the gutter cell here as well would
+              // double the wash over exactly the part the band already covers.
+              fill="transparent"
             />
 
             {isGroup ? (
@@ -96,29 +102,33 @@ export function RowGutter({ rows, rowHeights, rowOffsets, width }: Props) {
                     fill="var(--color-text-dim)"
                   />
                 </g>
+                {!renaming && (
+                  <text
+                    x={38}
+                    y={h / 2 + 4}
+                    fill="var(--color-text)"
+                    fontSize={12}
+                    fontWeight={600}
+                    style={{ cursor: 'text' }}
+                  >
+                    {row.label}
+                  </text>
+                )}
+              </>
+            ) : (
+              !renaming && (
                 <text
-                  x={38}
+                  x={row.groupId ? 30 : 12}
                   y={h / 2 + 4}
-                  fill="var(--color-text)"
-                  fontSize={12}
-                  fontWeight={600}
+                  fill="var(--color-text-soft)"
+                  fontSize={11}
                   style={{ cursor: 'text' }}
                 >
                   {row.label}
                 </text>
-              </>
-            ) : (
-              <text
-                x={row.groupId ? 30 : 12}
-                y={h / 2 + 4}
-                fill="var(--color-text-soft)"
-                fontSize={11}
-                style={{ cursor: 'text' }}
-              >
-                {row.label}
-              </text>
+              )
             )}
-            {editing === row.id && (
+            {renaming && (
               <InlineLabel
                 text={row.label}
                 x={8}

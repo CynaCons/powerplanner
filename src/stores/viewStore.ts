@@ -39,11 +39,9 @@ interface ViewState {
   setDetailsOpen: (v: boolean) => void;
   showCriticalPath: boolean;
   showBaseline: boolean;
-  showMinimap: boolean;
   setShowCriticalPath: (v: boolean) => void;
   setShowBaseline: (v: boolean) => void;
-  setShowMinimap: (v: boolean) => void;
-  toggle: (key: 'showCriticalPath' | 'showBaseline' | 'showMinimap') => void;
+  toggle: (key: 'showCriticalPath' | 'showBaseline') => void;
 }
 
 /** True while anything owns the keyboard: a dialog, a sheet, the palette. */
@@ -68,9 +66,7 @@ export const useViewStore = create<ViewState>((set, get) => ({
   setDetailsOpen: (v) => set(v ? { detailsOpen: true } : { detailsOpen: false, detailsTarget: null }),
   showCriticalPath: false,
   showBaseline: false,
-  showMinimap: true,
   setShowCriticalPath: (v) => set({ showCriticalPath: v }),
   setShowBaseline: (v) => set({ showBaseline: v }),
-  setShowMinimap: (v) => set({ showMinimap: v }),
   toggle: (key) => set({ [key]: !get()[key] } as Partial<ViewState>),
 }));

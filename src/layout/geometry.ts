@@ -66,3 +66,108 @@ export function rowAtY(y: number, layout: LayoutResult): string | null {
   }
   return null;
 }
+
+/** The band a row occupies, or null when that row is collapsed out of view. */
+export function rowBandAt(layout: LayoutResult, rowId: string): { top: number; height: number } | null {
+  const i = layout.visibleRows.findIndex((r) => r.id === rowId);
+  if (i < 0) return null;
+  return { top: layout.rowOffsets[i], height: layout.rowHeights[i] };
+}
+
+/**
+ * Where an element previews when a drag carries it to another row
+ * (SRS-EDIT-072).
+ *
+ * The offset inside the row is carried across rather than recomputed, so a bar
+ * on the second stacking track of a crowded row stays on the second track
+ * while it is in flight — the engine only re-stacks on commit, and a preview
+ * that snapped every carried bar to the top track would redraw it twice.
+ *
+ * It is clamped because rows are not all the same height: a row with three
+ * stacking tracks is 108px and one with a single task is 36px, so an offset
+ * carried blind out of the tall row would preview the bar below the band it is
+ * about to join. `above` and `below` are how much room the glyph needs either
+ * side of the y it is drawn at — a bar is anchored at its band top, a
+ * milestone at its centre.
+ */
+export function carriedY(
+  layout: LayoutResult,
+  fromRowId: string,
+  toRowId: string,
+  y: number,
+  above = 0,
+  below = 0,
+): number {
+  const from = rowBandAt(layout, fromRowId);
+  const to = rowBandAt(layout, toRowId);
+  if (!from || !to) return y;
+  const lo = above;
+  const hi = Math.max(above, to.height - below);
+  return to.top + Math.min(Math.max(y - from.top, lo), hi);
+}
+
+/**
+ * How specific a chart element is as the subject of a press (SRS-EDIT-071).
+ *
+ * Painting order decided this before, and painting order is a visual decision:
+ * `Dependencies` renders after `TaskBars` and lays a transparent 10px-wide
+ * stroke along every connector as its hit target, so a connector crossing a
+ * bar end took the press that was aimed at the resize grip under it. A grip is
+ * 7px wide and a dependency's hit band is 10px of nothing, so the widest,
+ * vaguest target was winning the most precise gesture.
+ *
+ * Higher wins. The order is by how small and how deliberate the target is, not
+ * by where it sits in the tree.
+ */
+export function hitRank(kind: string | undefined, sub: string | undefined): number {
+  if (!kind) return 0;
+  if (kind === 'task' && (sub === 'start' || sub === 'end')) return 60;
+  if (kind === 'task' && sub === 'progress') return 50;
+  if (kind === 'connector') return 40;
+  if (kind === 'bracket' && (sub === 'start' || sub === 'end')) return 35;
+  if (kind === 'milestone' || kind === 'marker' || kind === 'label') return 30;
+  if (kind === 'task' || kind === 'bracket') return 20;
+  // A connector's hit target is the whole length of the line, so it only ever
+  // wins where nothing more specific is under the pointer.
+  if (kind === 'dependency') return 10;
+  if (kind === 'row') return 5;
+  return 1;
+}
+
+/**
+ * The element a press belongs to, out of everything stacked under the pointer.
+ *
+ * `fallback` is what `e.target.closest(...)` found. It is used when the stack
+ * is empty, which is the case in jsdom and in any environment where
+ * `elementsFromPoint` is not implemented: the ranking is an improvement on the
+ * event target, never a replacement for having one.
+ */
+export function resolveHit(stack: Element[], fallback: Element | null): HTMLElement | null {
+  let best: HTMLElement | null = null;
+  let bestRank = 0;
+  for (const el of stack) {
+    const owner = el.closest('[data-pp-kind]') as HTMLElement | null;
+    if (!owner) continue;
+    const rank = hitRank(owner.dataset.ppKind, owner.dataset.ppSub);
+    // Strictly greater, so a tie keeps the topmost — the stack is ordered front
+    // to back, and between two equals the one on top is the one being pointed at.
+    if (rank > bestRank) {
+      best = owner;
+      bestRank = rank;
+    }
+  }
+  return best ?? ((fallback?.closest('[data-pp-kind]') as HTMLElement | null) ?? null);
+}
+
+/**
+ * The percentage a progress drag is asking for (SRS-EDIT-074).
+ *
+ * Whole percent, because that is what the readout beside the handle says and
+ * the two must not disagree — a pill reading 42% over a bar holding 42.37 is
+ * the same class of lie as a preview that does not match the commit.
+ */
+export function pctFromX(pointerX: number, barX: number, barWidth: number): number {
+  if (barWidth <= 0) return 0;
+  const raw = ((pointerX - barX) / barWidth) * 100;
+  return Math.min(100, Math.max(0, Math.round(raw)));
+}

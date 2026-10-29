@@ -36,6 +36,8 @@
   --header-h: 48px;
   --status-h: 26px;
   --tool-palette-h: 56px;
+  /* The width before the chart has measured its own names; ChartArea
+     overwrites this with the real number on every layout pass (SRS-LAY-050). */
   --row-gutter-w: 200px;
   --row-h: 36px;
   --axis-h: 56px;
@@ -539,12 +541,34 @@ kbd {
   text-overflow: ellipsis;
 }
 
-.cmdbar__hint {
-  font-size: 11px;
-  color: var(--color-text-dim);
-  white-space: nowrap;
+/* The armed insert tool, named while it is armed (SRS-EDIT-027).
+
+   It sits at the head of the bar, where the selection's name used to be, so
+   the one thing the bar says about state is the thing that can surprise you. */
+.cmdbar__armed {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
+
+.cmdbar__armed-esc {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  opacity: 0.65;
+}
+
 
 /* Status bar.
 
@@ -572,6 +596,21 @@ kbd {
 .app-status > :first-child {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The bound file. Quiet while everything is written; the accent and the
+   leading dot are the only thing in the footer that reports a state the
+   planner may need to act on (SRS-PERS-029). */
+.app-status-file {
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-soft);
+}
+
+.app-status-file.is-unsaved {
+  color: var(--color-today);
+  font-weight: 600;
 }
 
 .app-status-right {
@@ -774,19 +813,16 @@ kbd {
 .task-bar-body { transition: filter 120ms ease; }
 .task-bar-body:hover { filter: brightness(1.12); }
 
-/* Responsive */
-@media (max-width: 720px) { }
-}
-@media (max-width: 520px) { }
-  .app-shell {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      'header'
-      'chart'
-      'palette'
-      'status';
-  }
-}
+/* Responsive — deliberately nothing here.
+   There were two breakpoints whose bodies had been emptied but whose closing
+   braces were left behind, so the rule they once held sat at the top level and
+   applied at every width, and the build warned twice about the orphans. That
+   rule named a fourth grid area, 'palette', which nothing has carried since the
+   command palette became an overlay: the shell handed that dead area the
+   --status-h track and pushed .app-status into an implicit row below it, so the
+   status bar rendered 16px tall under a 26px blank band. Removed outright
+   rather than re-nested — .app-shell above already says one column and the
+   three areas that exist, which is what every width wants. */
 
 @media print {
   .app-header, .app-status, .cmdbar, .notice-stack { display: none !important; }
@@ -1057,3 +1093,93 @@ kbd {
 .dialog__textarea { min-height: 68px; resize: vertical; }
 .dialog__input:focus,
 .dialog__textarea:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; }
+
+/* The inline name editor (SRS-EDIT-050).
+
+   The component used to set `color: 'white'` inline over a field that is
+   `rgba(255,255,255,0.92)` in the default, light and print themes, so the name
+   being typed was invisible until Enter. Colour belongs here, beside the theme
+   tokens it has to keep contrast against, and the component now passes nothing
+   that could override it. `caret-color` is explicit for the same reason: a
+   white caret in a white field is an editor with no cursor.
+
+   `::selection` is spelled out rather than left to the browser, because the
+   initial select() highlight was the one state that accidentally looked right
+   and it hid the defect for a whole session. */
+.inline-editor {
+  padding: 0 6px;
+  font: inherit;
+  font-size: var(--text-micro);
+  color: var(--color-text);
+  caret-color: var(--color-text);
+  background: var(--color-inline-editor-bg);
+  border: 1px solid var(--color-inline-editor-border);
+  border-radius: 3px;
+  outline: none;
+}
+.inline-editor::selection {
+  color: var(--color-text);
+  background: var(--color-accent-soft);
+}
+
+/* Calendar painted through the plot, and the two pills (SRS-TAX-053/054/056/058).
+   Colours come from tokens that already flip per theme, so there is one rule
+   each rather than one per theme. */
+.grid-weekend {
+  /* The old mask was --color-weekend (2.5% black) at 0.4 opacity, which lands
+     at one percent against the sheet: present in the DOM, absent to the eye. */
+  fill: var(--color-text-dim);
+  fill-opacity: 0.12;
+}
+.grid-delimiter {
+  stroke: var(--color-border-soft);
+  stroke-width: 1;
+}
+.grid-delimiter--period {
+  /* A month or quarter boundary is structure and carries more weight than the
+     day ticks inside it. */
+  stroke: var(--color-border);
+}
+.axis-today-rule {
+  stroke: var(--color-today);
+  stroke-width: 1;
+}
+.axis-today-pill { fill: var(--color-today); }
+.axis-today-pill-text { fill: #fff; }
+.axis-drag-pill { fill: var(--color-text); }
+/* Inverted against the pill rather than hard white: --color-text is near-white
+   in the dark theme, where white on white is no readout at all. */
+.axis-drag-pill-text { fill: var(--color-bg); }
+
+/* Grips, anchors and the progress handle on a selected or hovered bar
+   (SRS-EDIT-070, SRS-EDIT-074; design demo §02 and §03).
+
+   Hollow, not solid: the anchors used to be filled discs sitting on the bar's
+   end caps, which is exactly where a resize grip has to go, so a selected bar
+   had no resizable ends at all. Drawn as outlines on a lead they read as ports
+   rather than as part of the bar, and a grip inside the same frame stays
+   legible next to one. */
+.bar-grip {
+  fill: var(--color-bg-elev);
+  stroke: var(--color-accent);
+  stroke-width: 1.5;
+}
+.bar-anchor {
+  fill: var(--color-bg-elev);
+  stroke: var(--color-accent);
+  stroke-width: 1.5;
+}
+.bar-anchor-lead {
+  stroke: var(--color-accent);
+  stroke-width: 1;
+  stroke-opacity: 0.45;
+}
+/* The handle takes its stroke from the bar's own colour, inline, so it reads
+   as that bar's fill edge rather than as chrome belonging to the selection. */
+.bar-progress-handle {
+  fill: var(--color-bg-elev);
+  stroke-width: 2;
+}
+/* Same ink as the drag date pill: one readout idiom for the whole surface. */
+.bar-progress-pill { fill: var(--color-text); }
+.bar-progress-pill-text { fill: var(--color-bg); }

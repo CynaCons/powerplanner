@@ -4,6 +4,7 @@ import { useViewportStore } from '../stores/viewportStore';
 import { useEditStore } from '../stores/editStore';
 import { useToolStore, type Tool } from '../stores/toolStore';
 import { useSelectionStore } from '../stores/selectionStore';
+import { bracketSpanFor } from './bracketSpan';
 import { useViewStore } from '../stores/viewStore';
 import { shortcutFor } from './keymap';
 import { exportJson, exportYaml, exportSvg, exportPng, type ExportResult } from '../persistence/fileIo';
@@ -46,7 +47,7 @@ import {
   Trash2,
   Zap,
   GitCompare,
-  Map as MapIcon, FilePlus2,
+  FilePlus2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -311,7 +312,8 @@ function useCommands(close: () => void): Command[] {
   }
 
   function setTool(t: Tool) {
-    useToolStore.getState().setTool(t, true);
+    // See SRS-EDIT-026: the store decides stickiness, not the call site.
+    useToolStore.getState().setTool(t);
   }
 
   function setTheme(t: ThemeName) {
@@ -346,16 +348,9 @@ function useCommands(close: () => void): Command[] {
     keywords: 'phase group add',
     run: run(() => {
       const d = useDocumentStore.getState();
-      const sIds = useSelectionStore.getState().items.filter((x) => x.kind === 'task').map((x) => x.id);
-      const tasks = d.doc.tasks.filter((t) => sIds.includes(t.id));
-      if (tasks.length === 0) {
-        const t = todayISO();
-        d.addBracket({ id: newId('br'), label: 'Phase', start: t, end: addDays(t, 14), rowIds: d.doc.rows[0] ? [d.doc.rows[0].id] : [] });
-      } else {
-        const start = tasks.reduce((a, t) => (t.start < a ? t.start : a), tasks[0].start);
-        const end = tasks.reduce((a, t) => (t.end > a ? t.end : a), tasks[0].end);
-        d.addBracket({ id: newId('br'), label: 'Phase', start, end, rowIds: Array.from(new Set(tasks.map((t) => t.rowId))) });
-      }
+      // The same span rule the button and the keyboard use (SRS-ELEM-032).
+      const span = bracketSpanFor(d.doc, useSelectionStore.getState().items);
+      d.addBracket({ id: newId('br'), label: 'Phase', ...span });
     }),
   });
   cmds.push({ id: 'create-deadline', label: 'New deadline marker', group: 'Create', icon: Flag, keywords: 'add line', run: run(() => useDocumentStore.getState().addMarker({ id: newId('mk'), type: 'deadline', label: 'Deadline', date: todayISO() })) });
@@ -379,8 +374,8 @@ function useCommands(close: () => void): Command[] {
   const vw = useViewStore.getState();
   cmds.push({ id: 'view-fit', label: 'Fit chart to data', group: 'View', icon: Maximize2, shortcut: shortcutFor('fit'), run: run(fitAll) });
   cmds.push({ id: 'view-snap', label: edit.snapEnabled ? 'Turn snap off' : 'Turn snap on', group: 'View', icon: Magnet, shortcut: shortcutFor('snap'), keywords: 'snap toggle', run: run(() => useEditStore.getState().setSnap(!useEditStore.getState().snapEnabled)) });
-  cmds.push({ id: 'view-zoom-in', label: 'Zoom in', group: 'View', shortcut: shortcutFor('zoom-in'), run: run(() => view.zoom(1.25, 400)) });
-  cmds.push({ id: 'view-zoom-out', label: 'Zoom out', group: 'View', shortcut: shortcutFor('zoom-out'), run: run(() => view.zoom(0.8, 400)) });
+  cmds.push({ id: 'view-zoom-in', label: 'Zoom in', group: 'View', shortcut: shortcutFor('zoom-in'), run: run(() => view.zoom(1.25)) });
+  cmds.push({ id: 'view-zoom-out', label: 'Zoom out', group: 'View', shortcut: shortcutFor('zoom-out'), run: run(() => view.zoom(0.8)) });
   cmds.push({
     id: 'view-critical',
     label: vw.showCriticalPath ? 'Hide critical path' : 'Show critical path',
@@ -396,13 +391,6 @@ function useCommands(close: () => void): Command[] {
     icon: GitCompare,
     keywords: 'snapshot drift compare',
     run: run(() => useViewStore.getState().toggle('showBaseline')),
-  });
-  cmds.push({
-    id: 'view-minimap',
-    label: vw.showMinimap ? 'Hide minimap' : 'Show minimap',
-    group: 'View',
-    icon: MapIcon,
-    run: run(() => useViewStore.getState().toggle('showMinimap')),
   });
 
   // THEME

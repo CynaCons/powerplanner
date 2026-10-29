@@ -6,6 +6,19 @@ export const ROW_HEIGHT = 36;
 export const BAR_HEIGHT = 22;
 export const MILESTONE_SIZE = 14;
 
+/**
+ * Horizontal clearance a connector keeps at each end before it turns
+ * (SRS-ELEM-043). Ten pixels is enough to read as a lead-out at the day scale
+ * and still short enough that it never reaches the neighbouring bar.
+ */
+export const DEP_STUB = 10;
+/**
+ * How far below a bar's centre the crossing leg runs when predecessor and
+ * successor share one row band, where the midpoint between the two centres
+ * would lie on the bars themselves.
+ */
+export const DEP_LANE = BAR_HEIGHT / 2 + 6;
+
 /** Inclusive painted span in days (matches native SpanWidthDays / width formula). */
 export function spanWidthDays(start: string, end: string): number {
   return Math.max(2, diffDays(start, end) + 1);
@@ -56,6 +69,16 @@ export interface LaidOutDependency {
   fromY: number;
   toX: number;
   toY: number;
+  /**
+   * Which way the last segment travels into the successor: +1 rightwards,
+   * -1 leftwards (SRS-ELEM-042).
+   *
+   * Every surface that draws a head needs this. The web renderer leans on
+   * `marker orient="auto"`, which reads the direction off the path and so was
+   * at the mercy of a leg that ran backwards; the exported figure has no
+   * marker and orients its polygon from this sign (SRS-ELEM-044).
+   */
+  entryDir: 1 | -1;
 }
 
 export interface LayoutResult {
@@ -237,13 +260,65 @@ export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap }: Layou
     const from = taskById.get(dep.from);
     const to = taskById.get(dep.to);
     if (!from || !to) return [];
-    const fromX = dep.type === 'finish-to-start' || dep.type === 'finish-to-finish' ? from.x + from.width : from.x;
+    // Which cap each end of the link hangs off (SRS-ELEM-041), and therefore
+    // which way the connector must travel there (SRS-ELEM-042). A leg leaving
+    // a `finish` cap heads right and a leg arriving at a `start` cap arrives
+    // heading right; the other two caps are their mirrors. These signs are the
+    // whole fix: the turn used to be placed at the midpoint of the two
+    // endpoints, which says nothing about which side of the successor it lands
+    // on, so when a bar finished on the day the next one started — the painted
+    // span runs through the end day, putting the predecessor's cap a day to the
+    // right of the successor's — the last leg ran backwards and the arrowhead
+    // rotated to match it.
+    const leavesFinish = dep.type === 'finish-to-start' || dep.type === 'finish-to-finish';
+    const entersStart = dep.type === 'finish-to-start' || dep.type === 'start-to-start';
+    const exitDir: 1 | -1 = leavesFinish ? 1 : -1;
+    const entryDir: 1 | -1 = entersStart ? 1 : -1;
+
+    const fromX = leavesFinish ? from.x + from.width : from.x;
     const fromY = from.y + from.height / 2;
-    const toX = dep.type === 'finish-to-start' || dep.type === 'start-to-start' ? to.x : to.x + to.width;
+    const toX = entersStart ? to.x : to.x + to.width;
     const toY = to.y + to.height / 2;
-    const midX = (fromX + toX) / 2;
-    const path = `M ${fromX} ${fromY} L ${midX} ${fromY} L ${midX} ${toY} L ${toX} ${toY}`;
-    return [{ dependency: dep, path, fromX, fromY, toX, toY }];
+
+    // The two points the elbow is allowed to turn at: one stub out of the
+    // predecessor, one stub short of the successor on the side the arrowhead
+    // has to come from.
+    const outX = fromX + exitDir * DEP_STUB;
+    const inX = toX - entryDir * DEP_STUB;
+
+    // A single riser serves when one x satisfies both ends at once: at or
+    // beyond `outX` in the exit direction, at or short of `inX` in the entry
+    // direction. Links whose two ends face the same way (FS, SF) only have
+    // such an x when the bars are far enough apart; links whose ends face
+    // opposite ways (SS, FF) always do, and the riser goes to whichever
+    // endpoint is furthest out, which is the shape those links are drawn with
+    // everywhere.
+    const sameWay = exitDir === entryDir;
+    const roomForRiser = sameWay ? (entryDir > 0 ? outX <= inX : inX <= outX) : true;
+
+    let path: string;
+    if (roomForRiser) {
+      const riserX = sameWay
+        ? (outX + inX) / 2
+        : entryDir > 0
+          ? Math.min(outX, inX)
+          : Math.max(outX, inX);
+      path = `M ${fromX} ${fromY} L ${riserX} ${fromY} L ${riserX} ${toY} L ${toX} ${toY}`;
+    } else {
+      // Doubling back: the successor starts before (or where) the predecessor
+      // ends, so the connector cannot reach the far side of the successor on
+      // one riser without the last leg reversing. It goes out on its stub,
+      // crosses in the band between the two rows, and comes back in on the
+      // successor's stub — five segments, both stubs intact, and the crossing
+      // leg in the gutter between the bars rather than along them. Bars that
+      // merely happen to lie on that leg are crossed: the owner declined
+      // obstacle routing (SRS-ELEM-043).
+      const laneY = Math.abs(toY - fromY) > 1 ? (fromY + toY) / 2 : fromY + DEP_LANE;
+      path =
+        `M ${fromX} ${fromY} L ${outX} ${fromY} L ${outX} ${laneY} ` +
+        `L ${inX} ${laneY} L ${inX} ${toY} L ${toX} ${toY}`;
+    }
+    return [{ dependency: dep, path, fromX, fromY, toX, toY, entryDir }];
   });
 
   return { tasks, milestones, brackets, dependencies, summaries, rowHeights, chartHeight, rowOffsets, visibleRows };

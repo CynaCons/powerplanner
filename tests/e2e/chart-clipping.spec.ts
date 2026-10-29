@@ -136,10 +136,31 @@ test.describe('chart clipping (SRS-TAX-040)', () => {
     expect(await barsInPlot(page, axisH)).toBeGreaterThan(0);
   });
 
-  test('the TODAY pill is painted in the header band', async ({ page }) => {
+  /**
+   * Rewritten for SRS-TAX-053. The pill used to be REQUIRED in the band — the
+   * clipping bug meant it was never painted at all, so its pixels there were
+   * the proof the clip had been fixed. The owner then reported the cost of
+   * that position on 2026-10-29: the pill buries whichever calendar label it
+   * lands on, and in his capture it ate "Nov". The pill now rides the top of
+   * the plot and only a hairline crosses the bands. The clip fact this test
+   * exists for is unchanged — the marker must still be PAINTED — so it is now
+   * read as a rule in the band and a pill below it.
+   */
+  test('the today marker crosses the band as a rule, with its pill below', async ({ page }) => {
     await ready(page);
     const axisH = await axisHeight(page);
-    // The pill is 44x14; anything above a few dozen pixels means it is drawn.
-    expect(await todayPixelsInHeader(page, axisH)).toBeGreaterThan(200);
+    // A 1px rule down a 44-64px band, not a 46x16 pill: present, and thin.
+    const inBand = await todayPixelsInHeader(page, axisH);
+    expect(inBand).toBeGreaterThan(10);
+    expect(inBand).toBeLessThan(200);
+
+    const below = await page.evaluate((h) => {
+      const svg = document.querySelector('.chart-area > svg') as SVGSVGElement;
+      const pill = svg.querySelector('.axis-today-pill');
+      if (!pill) return null;
+      return pill.getBoundingClientRect().top - svg.getBoundingClientRect().top - h;
+    }, axisH);
+    expect(below).not.toBeNull();
+    expect(below!).toBeGreaterThanOrEqual(0);
   });
 });

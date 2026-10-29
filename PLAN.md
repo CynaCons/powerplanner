@@ -933,7 +933,7 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Close the loop: lint, unit, e2e, smoke and look at it [agent: claude]
 - [x] Commit, release and publish the showcase [agent: claude]
 
-### v2.22.0 — Design: selection, the toolbar and the axis (current) (ACTIVE)
+### v2.22.0 — Design: selection, the toolbar and the axis (COMPLETE)
 **Goal:** Show the owner how selection, progress, the toolbar and the axis should look.
 - [x] Prototype a selected row, bar and milestone the eye catches [agent: claude]
 - [x] Prototype a selected bar offering resize grips and anchors together [agent: claude]
@@ -942,74 +942,75 @@ The whole mechanism rests on one fact, learned the hard way in PowerScroll and r
 - [x] Prototype grid delimiters and weekend shading at each scale [agent: claude]
 - [x] Prototype the today marker clear of the calendar labels [agent: claude]
 - [x] Prototype a foot band for deadline and below-row labels [agent: claude]
-- [ ] OWNER GATE: validate the visual designs before building them [agent: claude]
+- [x] OWNER GATE: validate the visual designs before building them [agent: owner]
 
-### v2.23.0 — Selection you can see, and a tool that lets go
+### v2.23.0 — Selection you can see, and a tool that lets go (COMPLETE)
 **Goal:** Clicking something shows it, Escape clears it, and one insert is one insert.
-- [ ] Repaint the chart the moment the selection changes [agent: claude]
-- [ ] Band the whole selected row across the chart [agent: claude]
-- [ ] Give a selected bar and milestone feedback the eye catches [agent: claude]
-- [ ] Clear the selection from a click on empty space [agent: claude]
-- [ ] Stop naming the selection in the bottom toolbar [agent: claude]
-- [ ] Return to the select tool after one insert [agent: claude]
-- [ ] Show which tool is armed in the command bar [agent: claude]
-- [ ] Insert onto the selected row, not the first row [agent: claude]
-- [ ] Keep the insert actions reachable while something is selected [agent: claude]
-- [ ] Scroll a newly inserted item into view and select it [agent: claude]
-- [ ] Test what the chart paints after a plain click [agent: claude]
+- [x] Repaint the chart the moment the selection changes [agent: claude]
+- [x] Band the whole selected row across the chart [agent: claude]
+- [x] Give a selected bar and milestone feedback the eye catches [agent: claude]
+- [x] Clear the selection from a click on empty space [agent: claude]
+- [x] Stop naming the selection in the bottom toolbar [agent: claude]
+- [x] Return to the select tool after one insert [agent: claude]
+- [x] Show which tool is armed in the command bar [agent: claude]
+- [x] Insert onto the selected row, not the first row [agent: claude]
+- [x] Keep the insert actions reachable while something is selected [agent: claude]
+- [x] Scroll a newly inserted item into view and select it [agent: claude]
+- [x] Test what the chart paints after a plain click [agent: claude]
 
-### v2.24.0 — Text you can see, and labels that stay put
+### v2.24.0 — Text you can see, and labels that stay put (COMPLETE)
 **Goal:** Typing a name shows the name, and a label stays where it is put.
-- [ ] Give the inline rename editor readable text in every theme [agent: claude]
-- [ ] Hide a row's old name while its editor is open [agent: claude]
-- [ ] Rename a milestone by double-clicking its label [agent: claude]
-- [ ] Stop a click that never moved from pinning a label [agent: claude]
-- [ ] Select a milestone when its own label is clicked [agent: claude]
-- [ ] Draw a below-label inside its own row, not the next one [agent: claude]
-- [ ] Keep a label placed below visible on the last row [agent: claude]
-- [ ] Gate inline rename on the typed text being visible [agent: claude]
+- [x] Give the inline rename editor readable text in every theme [agent: claude]
+- [x] Hide a row's old name while its editor is open [agent: claude]
+- [x] Rename a milestone by double-clicking its label [agent: claude]
+- [x] Stop a click that never moved from pinning a label [agent: claude]
+- [x] Select a milestone when its own label is clicked [agent: claude]
+- [x] Draw a below-label inside its own row, not the next one [agent: claude]
+- [x] Keep a label placed below visible on the last row [agent: claude]
+- [x] Gate inline rename on the typed text being visible [agent: claude]
 
-### v2.25.0 — A time axis a planner can read
+### v2.25.0 — A time axis a planner can read (COMPLETE)
 **Goal:** The axis shows its boundaries, and the wheel zooms the chart.
-- [ ] Write SRS rows for wheel zoom, delimiters and weekend display [agent: claude]
-- [ ] Make ctrl-wheel zoom the chart instead of the browser page [agent: claude]
-- [ ] Anchor every zoom path on the pointer [agent: claude]
-- [ ] Lift the today marker clear of the calendar labels it covers [agent: claude]
-- [ ] Draw vertical delimiters at a granularity the planner chooses [agent: claude]
-- [ ] Make weekend shading visible, and settable per roadmap [agent: claude]
-- [ ] Show the committed date while a milestone or bar is dragged [agent: claude]
+- [x] Write SRS rows for wheel zoom, delimiters and weekend display [agent: claude]
+- [x] Make ctrl-wheel zoom the chart instead of the browser page [agent: claude]
+- [x] Anchor every zoom path on the pointer [agent: claude]
+- [x] Lift the today marker clear of the calendar labels it covers [agent: claude]
+- [x] Draw vertical delimiters at a granularity the planner chooses [agent: claude]
+- [x] Make weekend shading visible, and settable per roadmap [agent: claude]
+- [x] Show the committed date while a milestone or bar is dragged [agent: claude]
+- [x] Draw the same grid in an exported chart as in the app [agent: claude]
 
-### v2.26.0 — Moving, resizing and progress
+### v2.26.0 — Moving, resizing and progress (COMPLETE)
 **Goal:** A bar can be resized, carried to another row, and filled by dragging.
-- [ ] Build the selected-bar design the owner validated [agent: claude]
-- [ ] Stop anchors and dependency lines covering a bar's resize grips [agent: claude]
-- [ ] Let a drag carry a task or milestone to another row [agent: claude]
-- [ ] Show a milestone under the cursor while it is dragged [agent: claude]
-- [ ] Set a task's progress by dragging the fill edge [agent: claude]
-- [ ] Show a preview while a bar is dragged or resized [agent: claude]
+- [x] Build the selected-bar design the owner validated [agent: claude]
+- [x] Stop anchors and dependency lines covering a bar's resize grips [agent: claude]
+- [x] Let a drag carry a task or milestone to another row [agent: claude]
+- [x] Show a milestone under the cursor while it is dragged [agent: claude]
+- [x] Set a task's progress by dragging the fill edge [agent: claude]
+- [x] Show a preview while a bar is dragged or resized [agent: claude]
 
-### v2.27.0 — Dependencies that point the right way
+### v2.27.0 — Dependencies that point the right way (COMPLETE)
 **Goal:** Every connector points at its successor and can be deleted from the bar.
-- [ ] Write SRS rows for connector direction, routing and actions [agent: claude]
-- [ ] Point every dependency arrowhead into its successor [agent: claude]
-- [ ] Give every connector a stub so it clears its bars [agent: claude]
-- [ ] Give a selected dependency its actions in the command bar [agent: claude]
-- [ ] Draw dependency arrowheads in the exported chart too [agent: claude]
-- [ ] Cover every link type and a backward connector in the tests [agent: claude]
+- [x] Write SRS rows for connector direction, routing and actions [agent: claude]
+- [x] Point every dependency arrowhead into its successor [agent: claude]
+- [x] Give every connector a stub so it clears its bars [agent: claude]
+- [x] Give a selected dependency its actions in the command bar [agent: claude]
+- [x] Draw dependency arrowheads in the exported chart too [agent: claude]
+- [x] Cover every link type and a backward connector in the tests [agent: claude]
 
-### v2.28.0 — Markers, brackets and the shell
+### v2.28.0 — Markers, brackets and the shell (COMPLETE)
 **Goal:** Every mark can be edited, and the window says which file it holds.
-- [ ] Make a deadline marker selectable, movable and renameable [agent: claude]
-- [ ] Move deadline marker labels to the foot of the chart [agent: claude]
-- [ ] Draw the bracket rail and its label inside the chart [agent: claude]
-- [ ] Bracket the selection instead of always the first row [agent: claude]
-- [ ] Remove the minimap from the foot of the chart [agent: claude]
-- [ ] Size the left panel to its text until the planner resizes it [agent: claude]
-- [ ] Show which file the plan holds, and whether it is saved [agent: claude]
-- [ ] Offer a new row from the chart's right-click menu [agent: claude]
-- [ ] Remove the quick-actions hint from the command bar [agent: claude]
-- [ ] Name the stacked and overlapping setting so it explains itself [agent: claude]
-- [ ] Publish only the PowerRoadmap file in a release [agent: claude]
+- [x] Make a deadline marker selectable, movable and renameable [agent: claude]
+- [x] Move deadline marker labels to the foot of the chart [agent: claude]
+- [x] Draw the bracket rail and its label inside the chart [agent: claude]
+- [x] Bracket the selection instead of always the first row [agent: claude]
+- [x] Remove the minimap from the foot of the chart [agent: claude]
+- [x] Size the left panel to its text until the planner resizes it [agent: claude]
+- [x] Show which file the plan holds, and whether it is saved [agent: claude]
+- [x] Offer a new row from the chart's right-click menu [agent: claude]
+- [x] Remove the quick-actions hint from the command bar [agent: claude]
+- [x] Name the stacked and overlapping setting so it explains itself [agent: claude]
+- [x] Publish only the PowerRoadmap file in a release [agent: claude]
 
 From the owner's live session on 2026-10-29. Four decisions already taken by the owner: the minimap goes, progress is set by dragging the fill edge, connectors get a correct elbow with clearance rather than routing around bars, and grid delimiters and weekend shading are a per-roadmap setting rather than automatic.
 

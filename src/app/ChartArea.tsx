@@ -4,13 +4,13 @@ import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { layoutDocument } from '../layout/engine';
 import { buildAxis, dateToX, xToDate } from '../layout/timeAxis';
-import { todayISO, isWeekend, addDays } from '../utils/dates';
-import { TimeAxis } from '../renderer/TimeAxis';
+import { todayISO } from '../utils/dates';
+import { gridDelimiterOf, weekendDisplayOf } from '../types/document';
+import { TimeAxis, DragDatePill, delimiterXs, nonWorkingBands } from '../renderer/TimeAxis';
 import { Rows } from '../renderer/Rows';
 import { Summaries } from '../renderer/Summaries';
 import { TaskBars } from '../renderer/TaskBars';
 import { Baseline } from '../renderer/Baseline';
-import { Minimap } from '../renderer/Minimap';
 import { Milestones } from '../renderer/Milestones';
 import { Brackets } from '../renderer/Brackets';
 import { Dependencies } from '../renderer/Dependencies';
@@ -21,12 +21,20 @@ import type { ChartGeometry } from '../layout/geometry';
 import { chordKeys } from './keymap';
 import { ConnectorOverlay } from './ConnectorOverlay';
 import { useToolStore, cursorForTool } from '../stores/toolStore';
+import {
+  gutterWidthFor,
+  GUTTER_W_MIN as ROW_GUTTER_W_MIN,
+  GUTTER_W_MAX as ROW_GUTTER_W_MAX,
+} from '../layout/gutterWidth';
 
-const ROW_GUTTER_W_BASE = 200;
-const ROW_GUTTER_W_MIN = 120;
-const ROW_GUTTER_W_MAX = 520;
 /** The row list is draggable-wide; a long package name needs more than 200px. */
 const GUTTER_KEY = 'powerplanner:gutter-width:v1';
+/**
+ * Room kept below the last row for labels placed under their bar
+ * (SRS-LAY-052). Taking it out of the last row's own band is what made the
+ * bottom label vanish; the band is additional height, inside the clip.
+ */
+const FOOT_BAND_H = 30;
 
 export function ChartArea() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -50,20 +58,28 @@ export function ChartArea() {
     return () => ro.disconnect();
   }, []);
 
-  const [gutterW, setGutterW] = useState<number>(() => {
+  // `null` means "nobody has chosen a width": the panel then follows its own
+  // names (SRS-LAY-050). A stored preference, or one drag of the divider, ends
+  // that for good — an auto width that kept overriding the planner's would be
+  // the panel arguing back.
+  const [gutterW, setGutterW] = useState<number | null>(() => {
     try {
       const stored = Number(localStorage.getItem(GUTTER_KEY));
       if (Number.isFinite(stored) && stored >= ROW_GUTTER_W_MIN) {
         return Math.min(ROW_GUTTER_W_MAX, stored);
       }
     } catch { /* a blocked localStorage costs the preference, not the app */ }
-    return ROW_GUTTER_W_BASE;
+    return null;
   });
   const [draggingGutter, setDraggingGutter] = useState(false);
 
+  const autoGutterW = useMemo(() => gutterWidthFor(doc.rows), [doc.rows]);
+
   // A narrow window gets the minimum regardless of preference: the chart has
   // to keep enough room to be a chart.
-  const ROW_GUTTER_W = size.width < 600 ? ROW_GUTTER_W_MIN : Math.min(gutterW, Math.max(ROW_GUTTER_W_MIN, size.width - 320));
+  const ROW_GUTTER_W = size.width < 600
+    ? ROW_GUTTER_W_MIN
+    : Math.min(gutterW ?? autoGutterW, Math.max(ROW_GUTTER_W_MIN, size.width - 320));
 
   useEffect(() => {
     if (!draggingGutter) return;
@@ -75,7 +91,11 @@ export function ChartArea() {
     };
     const up = () => {
       setDraggingGutter(false);
-      try { localStorage.setItem(GUTTER_KEY, String(gutterW)); } catch { /* non-fatal */ }
+      // A press that never moved leaves `gutterW` null; storing "null" would
+      // read back as NaN and the auto width would be lost for good.
+      if (gutterW !== null) {
+        try { localStorage.setItem(GUTTER_KEY, String(gutterW)); } catch { /* non-fatal */ }
+      }
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -85,6 +105,15 @@ export function ChartArea() {
     };
   }, [draggingGutter, gutterW]);
   const chartWidth = Math.max(100, size.width - ROW_GUTTER_W);
+
+  // `--row-gutter-w` was a static 200px in global.css that nothing updated. It
+  // happened to equal the old constant, so it read as true; now that the width
+  // is measured it would lie, and the axis-zoom spec converts a pointer offset
+  // into a date with it. Publish the real number instead of deleting a token
+  // something already reads (SRS-LAY-050).
+  useEffect(() => {
+    document.documentElement.style.setProperty('--row-gutter-w', `${ROW_GUTTER_W}px`);
+  }, [ROW_GUTTER_W]);
 
   // Auto-fit on first load if document has tasks
   const didInitialFit = useRef(false);
@@ -120,9 +149,12 @@ export function ChartArea() {
    *  transforms, the rule and the pointer arithmetic, so they cannot disagree. */
   const AXIS_TOTAL_H = axis.major.height + axis.minor.height + (axis.micro?.height ?? 0);
 
-  /** Where the chart sheet ends: after the last row, or at the viewport edge
-   *  when the plan is taller than the window. */
-  const sheetBottom = Math.min(size.height, AXIS_TOTAL_H + layout.chartHeight);
+  /** Where the chart sheet ends: after the last row and its foot band, or at
+   *  the viewport edge when the plan is taller than the window. */
+  const sheetBottom = Math.min(size.height, AXIS_TOTAL_H + layout.chartHeight + FOOT_BAND_H);
+  /** The plot's own height, foot band included — what the clips and the scroll
+   *  clamp both have to agree on, or the band is drawn and then cut away. */
+  const plotHeight = layout.chartHeight + FOOT_BAND_H;
 
   // The wheel scrolls the body. A plan that already fits has nothing to
   // scroll, so maxScroll is 0 and the view stays put. The command bar floats
@@ -130,27 +162,72 @@ export function ChartArea() {
   // otherwise the last row can never be read.
   const CHROME_H = 52;
   const bodyHeight = Math.max(0, size.height - AXIS_TOTAL_H - CHROME_H);
-  const maxScroll = Math.max(0, layout.chartHeight - bodyHeight);
+  const maxScroll = Math.max(0, plotHeight - bodyHeight);
   const scrollY = useViewportStore((s) => s.scrollY);
+
+  /**
+   * Bring a just-inserted row into view (SRS-EDIT-028).
+   *
+   * The chart scrolls through `scrollY` rather than a scrollable element, so
+   * there is no `scrollIntoView` to lean on; the row's own offset in the
+   * layout is the only place the answer lives.
+   */
+  const revealRowId = useViewportStore((s) => s.revealRowId);
+  const clearReveal = useViewportStore((s) => s.clearReveal);
+  const scrollBy = useViewportStore((s) => s.scrollBy);
+  useEffect(() => {
+    if (!revealRowId) return;
+    const i = layout.visibleRows.findIndex((r) => r.id === revealRowId);
+    if (i < 0) {
+      clearReveal();
+      return;
+    }
+    const top = layout.rowOffsets[i];
+    const h = layout.rowHeights[i] ?? 0;
+    let dy = 0;
+    if (top < scrollY) dy = top - scrollY;
+    else if (top + h > scrollY + bodyHeight) dy = top + h - (scrollY + bodyHeight);
+    if (dy !== 0) scrollBy(dy, maxScroll);
+    clearReveal();
+  }, [revealRowId, layout, scrollY, bodyHeight, maxScroll, scrollBy, clearReveal]);
 
   const today = todayISO();
   const todayX = dateToX(today, viewStart, pxPerDay);
   const showToday = todayX >= 0 && todayX <= chartWidth;
 
-  // Weekend stripes (for day scale)
-  const weekendStripes = useMemo(() => {
-    if (doc.calendar.scale !== 'day' && doc.calendar.scale !== 'week') return [];
-    const stripes: { x: number; w: number }[] = [];
-    const days = Math.ceil(chartWidth / pxPerDay) + 1;
-    for (let i = 0; i < days; i++) {
-      const iso = addDays(viewStart, i);
-      if (isWeekend(iso, doc.calendar.workingDays)) {
-        const x = i * pxPerDay;
-        stripes.push({ x, w: pxPerDay });
-      }
-    }
-    return stripes;
-  }, [viewStart, pxPerDay, chartWidth, doc.calendar.scale, doc.calendar.workingDays]);
+  /**
+   * The non-working-day mask (SRS-TAX-056).
+   *
+   * It used to be gated to the day and week scales, so at month or coarser it
+   * was simply absent — and where it did paint it was 2.5% black at 0.4
+   * opacity, about one percent against the sheet. Both together meant the
+   * `workingDays` control in the gear panel had no visible effect at all.
+   * Every scale now, at a contrast you can see, and `off` is a choice the
+   * roadmap can state rather than something the zoom decides.
+   */
+  const weekendDisplay = weekendDisplayOf(doc.calendar);
+  const weekendBands = useMemo(
+    () =>
+      weekendDisplay === 'off'
+        ? []
+        : nonWorkingBands(viewStart, pxPerDay, chartWidth, doc.calendar.workingDays),
+    [weekendDisplay, viewStart, pxPerDay, chartWidth, doc.calendar.workingDays],
+  );
+
+  /**
+   * The vertical delimiters (SRS-TAX-054).
+   *
+   * The plot drew no vertical rule at all except the today line, which is why
+   * a dragged milestone felt like it was floating: there was nothing under it
+   * to land on. The granularity is the roadmap's own setting and is read
+   * straight through — not inferred from `calendar.scale` — because the owner's
+   * decision was that month boundaries must be askable for while reading days.
+   */
+  const gridDelimiter = gridDelimiterOf(doc.calendar);
+  const delimiters = useMemo(
+    () => delimiterXs(gridDelimiter, viewStart, pxPerDay, chartWidth, doc.calendar.fiscalYearStart),
+    [gridDelimiter, viewStart, pxPerDay, chartWidth, doc.calendar.fiscalYearStart],
+  );
 
   /**
    * The geometry every gesture inverts, assigned on every render so a window
@@ -160,10 +237,20 @@ export function ChartArea() {
   const geomRef = useRef<ChartGeometry>({ gutter: ROW_GUTTER_W, axisH: AXIS_TOTAL_H, scrollY, chartWidth, maxScroll, layout });
   geomRef.current = { gutter: ROW_GUTTER_W, axisH: AXIS_TOTAL_H, scrollY, chartWidth, maxScroll, layout };
 
-  const { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, dragCursor, depDrag, lassoDrag } = useChartInteractions({
+  const { handleSvgMouseDown, handleContextMenu, dragPreview, dragPill, dragCursor, depDrag, lassoDrag } = useChartInteractions({
     svgRef,
     geomRef,
   });
+
+  /**
+   * The plot width the store anchors a pointer-less zoom against
+   * (SRS-TAX-051). The chart is the only thing that knows it, and a zoom
+   * raised from a button or a key has no other way to find the middle.
+   */
+  const setChartWidth = useViewportStore((s) => s.setChartWidth);
+  useEffect(() => {
+    setChartWidth(chartWidth);
+  }, [chartWidth, setChartWidth]);
   const activeTool = useToolStore((s) => s.activeTool);
 
   const isEmpty = doc.tasks.length === 0 && doc.milestones.length === 0 && doc.brackets.length === 0;
@@ -186,7 +273,9 @@ export function ChartArea() {
         height={size.height}
         onMouseDown={handleSvgMouseDown}
         onContextMenu={handleContextMenu}
-        onWheel={handleWheel}
+        /* No `onWheel`: the interaction hook registers a non-passive native
+           listener instead, because React's is passive and its
+           `preventDefault()` does nothing (SRS-TAX-050). */
         style={{ display: 'block', cursor: dragCursor ?? cursorForTool(activeTool), userSelect: 'none' }}
       >
         {/* Background */}
@@ -259,15 +348,27 @@ export function ChartArea() {
 
         {/* Everything right of the gutter, clipped to the plot area */}
         <g clipPath="url(#chart-plot-clip)">
-          {/* Weekend stripes */}
-          <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`}>
-            {weekendStripes.map((s, i) => (
-              <rect key={i} x={s.x} y={0} width={s.w} height={layout.chartHeight} fill="var(--color-weekend)" opacity={0.4} />
+          {/* The calendar painted down through the plot: the mask first, then
+              the delimiters over it, then everything the plan is made of. */}
+          <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`} pointerEvents="none">
+            {weekendBands.map((b, i) => (
+              <rect key={`wk-${i}`} className="grid-weekend" x={b.x} y={0} width={b.w} height={layout.chartHeight} />
+            ))}
+            {delimiters.map((x, i) => (
+              <line
+                key={`gd-${i}`}
+                className={gridDelimiter === 'day' ? 'grid-delimiter' : 'grid-delimiter grid-delimiter--period'}
+                x1={x}
+                y1={0}
+                x2={x}
+                y2={layout.chartHeight}
+              />
             ))}
           </g>
 
           <g transform={`translate(${ROW_GUTTER_W} ${AXIS_TOTAL_H - scrollY})`}>
-            {/* Today line. The pill belongs to the header, not to the body. */}
+            {/* Today's rule in the body. Its pill rides the top of the plot and
+                is pinned, so neither one touches the calendar (SRS-TAX-053). */}
           {showToday && (
             <line
               x1={todayX}
@@ -286,7 +387,7 @@ export function ChartArea() {
           <TaskBars layout={layout} dragPreview={dragPreview} />
           <Milestones layout={layout} dragPreview={dragPreview} />
           <Dependencies layout={layout} />
-          <Markers doc={doc} viewStart={viewStart} pxPerDay={pxPerDay} chartHeight={layout.chartHeight} />
+          <Markers doc={doc} viewStart={viewStart} pxPerDay={pxPerDay} chartHeight={plotHeight} />
           {depDrag && depDrag.depStartX != null && depDrag.depCurrentX != null && (
             <ConnectorOverlay
               fromX={depDrag.depStartX}
@@ -309,6 +410,33 @@ export function ChartArea() {
             />
           )}
         </g>
+
+          {/*
+            The today pill, below the bands and pinned against the scroll
+            (SRS-TAX-053). It was painted INTO the finest calendar band at
+            every scale, so it buried whichever label it landed on — the
+            owner's capture has it eating "Nov" and leaving "ov". The calendar
+            bands belong to the calendar; the pill rides the top of the plot
+            and only a hairline crosses them. It sits inside the plot clip so
+            it cannot stray over the gutter, and outside the scrolled group so
+            it stays put.
+          */}
+          {showToday && (
+            <g transform={`translate(${ROW_GUTTER_W + todayX} ${AXIS_TOTAL_H + 5})`} pointerEvents="none">
+              <rect className="axis-today-pill" x={-23} y={0} width={46} height={16} rx={8} />
+              <text
+                className="axis-today-pill-text"
+                x={0}
+                y={11.5}
+                textAnchor="middle"
+                fontSize={9}
+                fontWeight={700}
+                letterSpacing={0.6}
+              >
+                TODAY
+              </text>
+            </g>
+          )}
         </g>
 
         {/*
@@ -321,15 +449,17 @@ export function ChartArea() {
           <g transform={`translate(${ROW_GUTTER_W} 0)`}>
             <TimeAxis axis={axis} />
           </g>
-          {/* The TODAY pill sits in the header, so it neither scrolls away nor
-              falls outside the body clip at negative local y. */}
+          {/* Today crosses the bands as a 1px rule and nothing else, so the
+              calendar labels survive it at every scale (SRS-TAX-053). */}
           {showToday && (
-            <g transform={`translate(${ROW_GUTTER_W + todayX - 22} ${AXIS_TOTAL_H - 16})`} pointerEvents="none">
-              <rect x={0} y={0} width={44} height={14} rx={3} fill="var(--color-today)" />
-              <text x={22} y={11} textAnchor="middle" fontSize={9} fontWeight={600} fill="white" letterSpacing={0.3}>
-                TODAY
-              </text>
-            </g>
+            <line
+              className="axis-today-rule"
+              x1={ROW_GUTTER_W + todayX}
+              y1={0}
+              x2={ROW_GUTTER_W + todayX}
+              y2={AXIS_TOTAL_H}
+              pointerEvents="none"
+            />
           )}
         </g>
 
@@ -346,8 +476,14 @@ export function ChartArea() {
           style={{ cursor: 'col-resize' }}
           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); setDraggingGutter(true); }}
         />
+
+        {/* The live date readout, last and unclipped (SRS-TAX-058). A drag runs
+            past the edges of the plot and a pill inside the plot clip would be
+            cut off at exactly the moment the planner needs to read it. */}
+        {dragPill && (
+          <DragDatePill pill={dragPill} minX={ROW_GUTTER_W} maxX={ROW_GUTTER_W + chartWidth} />
+        )}
       </svg>
-      <Minimap chartWidth={chartWidth} rowGutterWidth={ROW_GUTTER_W} />
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 import { ColorPalette } from './ColorPalette';
 import { deleteSelection } from './documentActions';
-import type { Task, Milestone, Bracket } from '../types/document';
+import type { Task, Milestone, Bracket, Dependency, DependencyType } from '../types/document';
 
 /**
  * Quick actions for what is selected (PLAN.md v2.20.0).
@@ -17,9 +17,13 @@ import type { Task, Milestone, Bracket } from '../types/document';
  * field, a date picker or a dropdown in it moved to the details dialog, which
  * opens from this bar's one door, from the right-click menu, and from Enter.
  *
- * Nudges sit beside a drag rather than replacing it — dates and percent are
- * still changed by dragging the chart, which is the direct manipulation the
- * interaction conventions in AGENTS.md require; these are the precise path.
+ * What is NOT here is the four stepper buttons (SRS-EDIT-075). SR-IXC-01
+ * forbids "stepper buttons, +/- incrementers, or similar discrete controls for
+ * continuous values" in those words, and a date and a percentage are both
+ * continuous: the date verb is dragging the bar (SR-IXC-02) and the progress
+ * verb is dragging its fill edge (SR-IXC-06). Precise numeric entry is the
+ * details dialog's job, which is the secondary editor SR-IXC-02 reserves for
+ * it — not a pair of presses that can only move in tens.
  */
 export function SelectionGroup() {
   const items = useSelectionStore((s) => s.items);
@@ -51,6 +55,10 @@ export function SelectionGroup() {
     const b = doc.brackets.find((x) => x.id === sel.id);
     return b ? <BracketFields bracket={b} /> : null;
   }
+  if (sel.kind === 'dependency') {
+    const d = doc.dependencies.find((x) => x.id === sel.id);
+    return d ? <DependencyFields dependency={d} /> : null;
+  }
   return null;
 }
 
@@ -63,24 +71,14 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-/**
- * What is selected, named but not editable here.
+/*
+ * The name used to be restated here (SRS-EDIT-029).
  *
- * The bar is for quick, context-dependent actions; renaming belongs on the
- * name itself, in the row gutter (owner directive 2026-10-26). Everything
- * else lives on the right-click menu.
+ * It was the only indication of what was selected, because the chart never
+ * repainted to show it (SRS-EDIT-023). With the chart answering the click,
+ * repeating the name is duplication that cost the width the bar's actual
+ * controls needed, and the owner asked for it to go.
  */
-function SelectionName({ value }: { value: string }) {
-  return <span className="cmdbar__selname" title={`${value} — rename it in the row list`}>{value}</span>;
-}
-
-function Nudge({ label, title, onClick }: { label: string; title: string; onClick: () => void }) {
-  return (
-    <button className="cmdbar__btn" title={title} aria-label={title} onClick={onClick}>
-      {label}
-    </button>
-  );
-}
 
 function DeleteButton({ what, onClick }: { what: string; onClick: () => void }) {
   return (
@@ -135,21 +133,10 @@ function TaskFields({ task }: { task: Task }) {
   const updateTask = useDocumentStore((s) => s.updateTask);
   const deleteTask = useDocumentStore((s) => s.deleteTask);
   const clear = useSelectionStore((s) => s.clear);
-  const pct = task.percentComplete ?? 0;
-
-  const shift = (days: number) =>
-    updateTask(task.id, { start: addDays(task.start, days), end: addDays(task.end, days) });
-  const bump = (by: number) =>
-    updateTask(task.id, { percentComplete: Math.max(0, Math.min(100, pct + by)) });
 
   return (
     <Group label="Task">
-      <SelectionName value={task.label} />
       <ColorPalette value={task.color ?? '#1F4E79'} onChange={(color) => updateTask(task.id, { color })} />
-      <Nudge label="−1d" title="Move a day earlier" onClick={() => shift(-1)} />
-      <Nudge label="+1d" title="Move a day later" onClick={() => shift(1)} />
-      <Nudge label="−10%" title="Ten percent less complete" onClick={() => bump(-10)} />
-      <Nudge label="+10%" title="Ten percent more complete" onClick={() => bump(10)} />
       <WrapInBracket taskIds={[task.id]} />
       <DetailsButton what="Task" target={{ kind: 'task', id: task.id }} />
       <DeleteButton what="task" onClick={() => { deleteTask(task.id); clear(); }} />
@@ -158,15 +145,11 @@ function TaskFields({ task }: { task: Task }) {
 }
 
 function MilestoneFields({ milestone }: { milestone: Milestone }) {
-  const update = useDocumentStore((s) => s.updateMilestone);
   const remove = useDocumentStore((s) => s.deleteMilestone);
   const clear = useSelectionStore((s) => s.clear);
 
   return (
     <Group label="Milestone">
-      <SelectionName value={milestone.label} />
-      <Nudge label="−1d" title="Move a day earlier" onClick={() => update(milestone.id, { date: addDays(milestone.date, -1) })} />
-      <Nudge label="+1d" title="Move a day later" onClick={() => update(milestone.id, { date: addDays(milestone.date, 1) })} />
       <DetailsButton what="Milestone" target={{ kind: 'milestone', id: milestone.id }} />
       <DeleteButton what="milestone" onClick={() => { remove(milestone.id); clear(); }} />
     </Group>
@@ -179,9 +162,59 @@ function BracketFields({ bracket }: { bracket: Bracket }) {
 
   return (
     <Group label="Bracket">
-      <SelectionName value={bracket.label} />
       <DetailsButton what="Bracket" target={{ kind: 'bracket', id: bracket.id }} />
       <DeleteButton what="bracket" onClick={() => { remove(bracket.id); clear(); }} />
+    </Group>
+  );
+}
+
+/**
+ * The four link types, short enough to sit in a bar.
+ *
+ * The right-click menu spells them out ("Finish → Start"); here the pair of
+ * caps is the label, because the bar is a row of presses and the title says
+ * the rest.
+ */
+const DEP_TYPES: { value: DependencyType; short: string; title: string }[] = [
+  { value: 'finish-to-start', short: 'FS', title: 'Finish → Start' },
+  { value: 'start-to-start', short: 'SS', title: 'Start → Start' },
+  { value: 'finish-to-finish', short: 'FF', title: 'Finish → Finish' },
+  { value: 'start-to-finish', short: 'SF', title: 'Start → Finish' },
+];
+
+/**
+ * A selected connector's actions (SRS-ELEM-045).
+ *
+ * This group did not exist: the bar returned nothing for a dependency, so
+ * clicking a connector selected it — the chart drew it accented — and offered
+ * no way to do anything with it. Delete and the link type lived only on the
+ * right-click menu. Both reduce to one press and change one thing, which is
+ * what this bar is for (D10), so they are here as well; the menu keeps them
+ * too, since that is where the owner found them.
+ */
+function DependencyFields({ dependency }: { dependency: Dependency }) {
+  const update = useDocumentStore((s) => s.updateDependency);
+  const remove = useDocumentStore((s) => s.deleteDependency);
+  const clear = useSelectionStore((s) => s.clear);
+
+  return (
+    <Group label="Dependency">
+      <span className="cmdbar__field-label">Link</span>
+      <div className="cmdbar__scale" role="radiogroup" aria-label="Link type">
+        {DEP_TYPES.map((dt) => (
+          <button
+            key={dt.value}
+            role="radio"
+            aria-checked={dependency.type === dt.value}
+            className={dependency.type === dt.value ? 'is-active' : ''}
+            title={dt.title}
+            onClick={() => update(dependency.id, { type: dt.value })}
+          >
+            {dt.short}
+          </button>
+        ))}
+      </div>
+      <DeleteButton what="dependency" onClick={() => { remove(dependency.id); clear(); }} />
     </Group>
   );
 }
@@ -218,7 +251,6 @@ function RowFields({ rowId }: { rowId: string }) {
 
   return (
     <Group label="Row">
-      <SelectionName value={row.label} />
       <button className="cmdbar__btn" title="Add a task on this row" aria-label="Add task here" onClick={addTaskHere}>
         <Plus size={14} strokeWidth={1.75} /><span>Task</span>
       </button>

@@ -1,5 +1,5 @@
-import { useRef, useState, useCallback } from 'react';
-import type { RefObject, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import type { RefObject, MouseEvent as ReactMouseEvent } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
@@ -7,10 +7,18 @@ import { useEditStore } from '../stores/editStore';
 import { useToolStore } from '../stores/toolStore';
 import { useContextMenuStore } from '../stores/contextMenuStore';
 import { xToDate } from '../layout/timeAxis';
+import { formatForScale, type DragPill } from '../renderer/TimeAxis';
 import { addDays, diffDays } from '../utils/dates';
 import { snapDelta } from '../utils/snap';
 import { newId } from '../utils/ids';
-import { clientToChart, chartToClient, rowAtY, type ChartGeometry } from '../layout/geometry';
+import {
+  clientToChart,
+  chartToClient,
+  rowAtY,
+  resolveHit,
+  pctFromX,
+  type ChartGeometry,
+} from '../layout/geometry';
 
 interface InteractionOptions {
   svgRef: RefObject<SVGSVGElement | null>;
@@ -26,6 +34,7 @@ export type DragKind =
   | 'task-move'
   | 'task-resize-start'
   | 'task-resize-end'
+  | 'task-progress'
   | 'milestone-move'
   | 'bracket-move'
   | 'bracket-resize-start'
@@ -47,6 +56,16 @@ export interface DragState {
   deltaDays: number;
   /** What the preview drew, and therefore what the release must commit. */
   previewDelta?: number;
+  /** The row the element was on when it was picked up (SRS-EDIT-072). */
+  originalRowId?: string;
+  /** The row under the pointer, and so the row a release will commit it to. */
+  targetRowId?: string;
+  /** task-progress: the bar's span in content x, which fixes what 0% and 100%
+   *  mean for this gesture, plus the value the press started from. */
+  progressBarX?: number;
+  progressBarWidth?: number;
+  originalPct?: number;
+  progressPct?: number;
   depSourceTaskId?: string;
   depSourceEdge?: 'start' | 'end';
   depCurrentX?: number;
@@ -82,6 +101,7 @@ export function cursorForDrag(kind: DragKind | undefined): string {
       return 'grabbing';
     case 'task-resize-start':
     case 'task-resize-end':
+    case 'task-progress':
     case 'bracket-resize-start':
     case 'bracket-resize-end':
       return 'ew-resize';
@@ -96,17 +116,49 @@ export function cursorForDrag(kind: DragKind | undefined): string {
   }
 }
 
+/**
+ * What a drag is about to commit for one element.
+ *
+ * `rowId` is only set once the pointer has left the row the element came from,
+ * so a renderer can treat its presence as "this is being carried" rather than
+ * having to compare it with the document (SRS-EDIT-072).
+ */
+export interface TaskPreview {
+  start: string;
+  end: string;
+  rowId?: string;
+}
+
+export interface MilestonePreview {
+  date: string;
+  rowId?: string;
+}
+
 export interface DragPreviewMap {
-  tasks: Map<string, { start: string; end: string }>;
-  milestones: Map<string, string>;
+  tasks: Map<string, TaskPreview>;
+  milestones: Map<string, MilestonePreview>;
   brackets: Map<string, { start: string; end: string }>;
   /** A label being dragged, so it follows the cursor before it is committed. */
   labels: Map<string, { dx: number; dy: number }>;
+  /** Whole percent, while the fill edge is being dragged (SRS-EDIT-074). */
+  progress: Map<string, number>;
+}
+
+/** An empty preview. Every branch builds one, and a missing map is a crash. */
+function emptyPreview(): DragPreviewMap {
+  return {
+    tasks: new Map(),
+    milestones: new Map(),
+    brackets: new Map(),
+    labels: new Map(),
+    progress: new Map(),
+  };
 }
 
 export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
   const dragRef = useRef<DragState | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
+  const [dragPill, setDragPill] = useState<DragPill | null>(null);
   const [dragCursor, setDragCursor] = useState<string | null>(null);
   const [, forceRender] = useState(0);
   const triggerRender = useCallback(() => forceRender((n) => n + 1), []);
@@ -122,7 +174,7 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
   );
 
   const handleWheel = useCallback(
-    (e: ReactWheelEvent<SVGSVGElement>) => {
+    (e: globalThis.WheelEvent) => {
       // The wheel scrolls, as it does everywhere else. Zooming is Ctrl/Cmd +
       // wheel, anchored exactly at the pointer; Shift + wheel pans in time.
       // (Owner directive 2026-10-26.)
@@ -147,6 +199,24 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
     [getSvgPoint, geomRef],
   );
 
+  /**
+   * The wheel listener is registered by hand, non-passive (SRS-TAX-050).
+   *
+   * React attaches `wheel` at the root container with `passive: true`, which
+   * makes `preventDefault()` a silent no-op. Through an `onWheel` prop the
+   * branches above ran and the browser ALSO did its default at the same
+   * instant — so Ctrl + wheel zoomed the chart and page-zoomed the window
+   * together, and what the owner saw was the app's chrome growing. Shift +
+   * wheel only looked right because its default, horizontal scroll, had
+   * nothing to scroll.
+   */
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    svg.addEventListener('wheel', handleWheel, { passive: false });
+    return () => svg.removeEventListener('wheel', handleWheel);
+  }, [svgRef, handleWheel]);
+
   const handleSvgMouseDown = useCallback(
     (e: ReactMouseEvent<SVGSVGElement>) => {
       if (e.button !== 0) return;
@@ -170,7 +240,15 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
         }
       }
       const target = e.target as Element;
-      const datasetEl = target.closest('[data-pp-kind]') as HTMLElement | null;
+      // Not `target.closest(...)` on its own: the event target is whatever was
+      // painted last, and a dependency's 10px transparent hit stroke is painted
+      // after the bars it crosses, so it took every press aimed at a grip
+      // underneath it (SRS-EDIT-071). The whole stack is ranked instead.
+      const stack =
+        typeof document.elementsFromPoint === 'function'
+          ? document.elementsFromPoint(e.clientX, e.clientY)
+          : [];
+      const datasetEl = resolveHit(stack, target);
       const view = useViewportStore.getState();
       const doc = useDocumentStore.getState().doc;
 
@@ -331,36 +409,35 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       if (kind === 'task') {
         const task = doc.tasks.find((t) => t.id === id);
         if (!task) return;
-        if (sub === 'start') {
+        const common = {
+          targetId: id,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          originalStart: task.start,
+          originalEnd: task.end,
+          originalRowId: task.rowId,
+          deltaDays: 0,
+        };
+        if (sub === 'progress') {
+          // The bar's own span, taken from the layout rather than recomputed
+          // from dates: it is what the handle was drawn against, so 0% and
+          // 100% mean the same pixels to the gesture and to the eye.
+          const laid = geomRef.current.layout.tasks.find((lt) => lt.task.id === id);
+          if (!laid) return;
           dragRef.current = {
-            kind: 'task-resize-start',
-            targetId: id,
-            startClientX: e.clientX,
-            startClientY: e.clientY,
-            originalStart: task.start,
-            originalEnd: task.end,
-            deltaDays: 0,
+            ...common,
+            kind: 'task-progress',
+            progressBarX: laid.x,
+            progressBarWidth: laid.width,
+            originalPct: task.percentComplete ?? 0,
+            progressPct: task.percentComplete ?? 0,
           };
+        } else if (sub === 'start') {
+          dragRef.current = { ...common, kind: 'task-resize-start' };
         } else if (sub === 'end') {
-          dragRef.current = {
-            kind: 'task-resize-end',
-            targetId: id,
-            startClientX: e.clientX,
-            startClientY: e.clientY,
-            originalStart: task.start,
-            originalEnd: task.end,
-            deltaDays: 0,
-          };
+          dragRef.current = { ...common, kind: 'task-resize-end' };
         } else {
-          dragRef.current = {
-            kind: 'task-move',
-            targetId: id,
-            startClientX: e.clientX,
-            startClientY: e.clientY,
-            originalStart: task.start,
-            originalEnd: task.end,
-            deltaDays: 0,
-          };
+          dragRef.current = { ...common, kind: 'task-move' };
         }
         attachWindowListeners(handleWindowMove, handleWindowUp);
         return;
@@ -375,6 +452,7 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
           startClientX: e.clientX,
           startClientY: e.clientY,
           originalDate: m.date,
+          originalRowId: m.rowId,
           deltaDays: 0,
         };
         attachWindowListeners(handleWindowMove, handleWindowUp);
@@ -442,13 +520,27 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       state.labelDx = (state.labelStartDx ?? 0) + dx;
       state.labelDy = (state.labelStartDy ?? 0) + (e.clientY - state.startClientY);
       if (state.targetId) {
-        setDragPreview({
-          tasks: new Map(),
-          milestones: new Map(),
-          brackets: new Map(),
-          labels: new Map([[state.targetId, { dx: state.labelDx, dy: state.labelDy }]]),
-        });
+        const preview = emptyPreview();
+        preview.labels.set(state.targetId, { dx: state.labelDx, dy: state.labelDy });
+        setDragPreview(preview);
       }
+      return;
+    }
+
+    // Progress, read off the pointer's position along the bar rather than off
+    // how far it has travelled: the handle is the fill edge, so wherever the
+    // pointer is in the span IS the value (SRS-EDIT-074, SR-IXC-06).
+    if (state.kind === 'task-progress') {
+      const svg = svgRef.current;
+      if (!svg || !state.targetId) return;
+      const p = clientToChart(geomRef.current, svg.getBoundingClientRect(), e.clientX, e.clientY);
+      const pct = pctFromX(p.x, state.progressBarX ?? 0, state.progressBarWidth ?? 0);
+      state.progressPct = pct;
+      const preview = emptyPreview();
+      preview.progress.set(state.targetId, pct);
+      setDragPreview(preview);
+      // No date pill: this gesture does not move a date, and a stale date
+      // hanging over the bar would assert one it is not changing (SR-IXC-10).
       return;
     }
 
@@ -471,12 +563,25 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       ? snapDelta(dDays, useDocumentStore.getState().doc.calendar.scale)
       : dDays;
     state.previewDelta = snapped;
-    const next: DragPreviewMap = { tasks: new Map(), milestones: new Map(), brackets: new Map(), labels: new Map() };
+    const next = emptyPreview();
+
+    // Which row the pointer is over, for the two gestures that can change one
+    // (SRS-EDIT-072). Only a row that is not the one the element came from is
+    // recorded, so `targetRowId` reads as "being carried" everywhere else.
+    if (state.kind === 'task-move' || state.kind === 'milestone-move') {
+      const svg = svgRef.current;
+      if (svg) {
+        const p = clientToChart(geomRef.current, svg.getBoundingClientRect(), e.clientX, e.clientY);
+        const over = rowAtY(p.y, geomRef.current.layout);
+        state.targetRowId = over && over !== state.originalRowId ? over : undefined;
+      }
+    }
 
     if (state.kind === 'task-move' && state.originalStart && state.originalEnd && state.targetId) {
       next.tasks.set(state.targetId, {
         start: addDays(state.originalStart, snapped),
         end: addDays(state.originalEnd, snapped),
+        rowId: state.targetRowId,
       });
     } else if (state.kind === 'task-resize-start' && state.originalStart && state.originalEnd && state.targetId) {
       const newStart = addDays(state.originalStart, snapped);
@@ -487,7 +592,10 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       const limited = diffDays(state.originalStart, newEnd) >= 0 ? newEnd : state.originalStart;
       next.tasks.set(state.targetId, { start: state.originalStart, end: limited });
     } else if (state.kind === 'milestone-move' && state.originalDate && state.targetId) {
-      next.milestones.set(state.targetId, addDays(state.originalDate, snapped));
+      next.milestones.set(state.targetId, {
+        date: addDays(state.originalDate, snapped),
+        rowId: state.targetRowId,
+      });
     } else if (state.kind === 'bracket-move' && state.originalStart && state.originalEnd && state.targetId) {
       next.brackets.set(state.targetId, {
         start: addDays(state.originalStart, snapped),
@@ -499,6 +607,21 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       next.brackets.set(state.targetId, { start: state.originalStart, end: addDays(state.originalEnd, snapped) });
     }
     setDragPreview(next);
+
+    // The live date readout (SRS-TAX-058, SR-IXC-03/04). It is read off the
+    // preview, not off the pointer, so the pill names the snapped date that the
+    // release will actually commit rather than the day the cursor is over.
+    const scale = useDocumentStore.getState().doc.calendar.scale;
+    const range = state.targetId ? (next.tasks.get(state.targetId) ?? next.brackets.get(state.targetId)) : undefined;
+    const point = state.targetId ? next.milestones.get(state.targetId) : undefined;
+    const text =
+      range ? `${formatForScale(range.start, scale)} → ${formatForScale(range.end, scale)}`
+      : point ? formatForScale(point.date, scale)
+      : null;
+    if (text) {
+      const rect = svgRef.current?.getBoundingClientRect();
+      setDragPill({ x: e.clientX - (rect?.left ?? 0), y: e.clientY - (rect?.top ?? 0), text });
+    }
   }, [svgRef, geomRef, triggerRender]);
 
   const handleWindowUp = useCallback(() => {
@@ -506,6 +629,10 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
     detachWindowListeners(handleWindowMove, handleWindowUp);
     dragRef.current = null;
     setDragCursor(null);
+    // Cleared on every exit path, including the ones that return early below:
+    // a readout that outlives the gesture is a date the chart is asserting
+    // about nothing (SR-IXC-10).
+    setDragPill(null);
     if (!state) {
       setDragPreview(null);
       return;
@@ -540,9 +667,24 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       return;
     }
 
+    if (state.kind === 'task-progress') {
+      const pct = state.progressPct ?? state.originalPct ?? 0;
+      // A press that never moved the handle is a click on the bar, not an edit
+      // of its progress — writing the same value back would spend an undo frame
+      // on nothing, as a zero-day date drag used to.
+      if (state.targetId && pct !== state.originalPct) {
+        docStore.updateTask(state.targetId, { percentComplete: pct });
+      }
+      setDragPreview(null);
+      return;
+    }
+
     // The same value the preview drew with. Recomputing it here is how the
     // two drifted apart in the first place.
     const snappedDelta = state.previewDelta ?? state.deltaDays;
+    // A drag can be worth committing on the vertical axis alone (SRS-EDIT-072),
+    // so the row is part of what counts as "something changed".
+    const carriedTo = state.targetRowId && state.targetRowId !== state.originalRowId ? state.targetRowId : undefined;
 
     if (state.kind === 'lasso') {
       const x0 = Math.min(state.lassoStartX!, state.lassoCurrentX!);
@@ -595,7 +737,7 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
     // wrote the same dates back and left an undo step behind, so a user who
     // clicked four bars had to press Ctrl+Z four times to get back to the edit
     // they actually wanted to undo.
-    if (snappedDelta === 0) {
+    if (snappedDelta === 0 && !carriedTo) {
       setDragPreview(null);
       return;
     }
@@ -604,6 +746,7 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       docStore.updateTask(state.targetId, {
         start: addDays(state.originalStart, snappedDelta),
         end: addDays(state.originalEnd, snappedDelta),
+        ...(carriedTo ? { rowId: carriedTo } : {}),
       });
     } else if (state.kind === 'task-resize-start' && state.targetId && state.originalStart && state.originalEnd) {
       const newStart = addDays(state.originalStart, snappedDelta);
@@ -614,7 +757,10 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       const limited = diffDays(state.originalStart, newEnd) >= 0 ? newEnd : state.originalStart;
       docStore.updateTask(state.targetId, { end: limited });
     } else if (state.kind === 'milestone-move' && state.targetId && state.originalDate) {
-      docStore.updateMilestone(state.targetId, { date: addDays(state.originalDate, snappedDelta) });
+      docStore.updateMilestone(state.targetId, {
+        date: addDays(state.originalDate, snappedDelta),
+        ...(carriedTo ? { rowId: carriedTo } : {}),
+      });
     } else if (state.kind === 'bracket-move' && state.targetId && state.originalStart && state.originalEnd) {
       docStore.updateBracket(state.targetId, {
         start: addDays(state.originalStart, snappedDelta),
@@ -677,7 +823,9 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
     [svgRef, geomRef],
   );
 
-  return { handleSvgMouseDown, handleWheel, handleContextMenu, dragPreview, dragCursor, xToDate, depDrag, lassoDrag };
+  // No `handleWheel`: the hook registers it itself, because it has to be
+  // non-passive and a React prop cannot be (SRS-TAX-050).
+  return { handleSvgMouseDown, handleContextMenu, dragPreview, dragPill, dragCursor, xToDate, depDrag, lassoDrag };
 }
 
 let attached = false;

@@ -36,22 +36,20 @@ jobs:
 
       - name: Copy release artifact
         run: |
+          # One name only. The release used to carry PowerGantt.html and
+          # PowerPlanner.html as byte-identical aliases for the names the app
+          # has had, in case an older build looked for its own name when it
+          # updated. It does not: every build back to v2.17.0 fetches the new
+          # bytes from raw.githubusercontent at the tag, not from the release
+          # asset, so dropping the aliases strands nothing and the release page
+          # stops offering three files that are the same file.
           cp dist-template/index.html PowerRoadmap.html
-          # Byte-identical compatibility aliases, one per name the app has had.
-          # Each older build looks for the name that existed when it shipped,
-          # and the updater inside it cannot be changed retroactively:
-          #   <= 2.17.x  PowerPlanner.html
-          #      2.18.x  PowerGantt.html
-          cp dist-template/index.html PowerGantt.html
-          cp dist-template/index.html PowerPlanner.html
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             PowerRoadmap.html
-            PowerGantt.html
-            PowerPlanner.html
           generate_release_notes: true
           body: |
             ## PowerRoadmap ${{ github.ref_name }}

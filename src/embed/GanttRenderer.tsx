@@ -11,19 +11,30 @@
  */
 
 import type { CSSProperties } from 'react';
-import type { GanttDocument } from '../types/document';
+import type { GanttDocument, GridDelimiter } from '../types/document';
 import { layoutDocument } from '../layout/engine';
 import { buildAxis, dateToX } from '../layout/timeAxis';
 import { computeCriticalPath } from '../layout/criticalPath';
-import { diffDays, addDays, todayISO, isWeekend } from '../utils/dates';
+import { diffDays, addDays, todayISO } from '../utils/dates';
+import { delimiterXs, nonWorkingBands } from '../layout/grid';
+import { gridDelimiterOf, weekendDisplayOf } from '../types/document';
 
 export interface GanttRendererOptions {
   /** Show the red glow on critical-path tasks (default false). */
   showCriticalPath?: boolean;
   /** Show the today line. Default true. */
   showToday?: boolean;
-  /** Show weekend stripes (day/week scales only). Default true. */
+  /**
+   * Force weekend shading on or off. Omitted, the document's own
+   * `calendar.weekendDisplay` decides, so an export matches what the planner
+   * was looking at (SRS-TAX-059).
+   */
   showWeekends?: boolean;
+  /**
+   * Force a delimiter granularity. Omitted, the document's own
+   * `calendar.gridDelimiter` decides (SRS-TAX-059).
+   */
+  gridDelimiter?: GridDelimiter | 'none';
   /** Pixel width of the row gutter on the left. Default scales with width. */
   rowGutterWidth?: number;
   /** Override the document theme — defaults to whatever `data-theme` the host sets. */
@@ -48,7 +59,8 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
   const {
     showCriticalPath = false,
     showToday = true,
-    showWeekends = true,
+    showWeekends,
+    gridDelimiter,
     rowGutterWidth,
     themeOverride,
     style,
@@ -91,17 +103,22 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
   const criticalIds = showCriticalPath ? computeCriticalPath(document).criticalTaskIds : null;
   const effectiveTheme = themeOverride ?? document.style.theme ?? 'light';
 
-  // Weekend stripes
-  const weekendStripes: { x: number; w: number }[] = [];
-  if (showWeekends && (document.calendar.scale === 'day' || document.calendar.scale === 'week')) {
-    const days = Math.ceil(chartW / pxPerDay) + 1;
-    for (let i = 0; i < days; i++) {
-      const iso = addDays(viewStart, i);
-      if (isWeekend(iso, document.calendar.workingDays)) {
-        weekendStripes.push({ x: i * pxPerDay, w: pxPerDay });
-      }
-    }
-  }
+  // The grid, from the same two functions the app draws (SRS-TAX-059). The old
+  // code here walked the window itself and emitted one rect per day, gated on
+  // the scale name rather than on px/day: an export therefore showed seamed
+  // stripes at a different contrast from the app, and never any delimiters.
+  const weekendsOn = showWeekends ?? weekendDisplayOf(document.calendar) === 'shaded';
+  const weekendBands = weekendsOn
+    ? nonWorkingBands(viewStart, pxPerDay, chartW, document.calendar.workingDays)
+    : [];
+  const delimiter = gridDelimiter ?? gridDelimiterOf(document.calendar);
+  const delimiters = delimiterXs(
+    delimiter,
+    viewStart,
+    pxPerDay,
+    chartW,
+    document.calendar.fiscalYearStart,
+  );
 
   const today = todayISO();
   const todayX = dateToX(today, viewStart, pxPerDay);
@@ -205,9 +222,21 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
           rows of every embed and committed visual-spec figure. */}
       <g clipPath={`url(#pp-clip-${document.title.replace(/\W/g, '')})`}>
       <g transform={`translate(${gutterW} ${AXIS_H})`}>
-        {/* Weekend stripes */}
-        {weekendStripes.map((s, i) => (
-          <rect key={`w-${i}`} x={s.x} y={0} width={s.w} height={layout.chartHeight} fill="var(--pp-weekend, rgba(0,0,0,0.025))" />
+        {/* The calendar painted down through the plot: the mask, then the
+            delimiters over it — the same order as the app. */}
+        {weekendBands.map((b, i) => (
+          <rect key={`w-${i}`} x={b.x} y={0} width={b.w} height={layout.chartHeight} fill="var(--pp-weekend, rgba(0,0,0,0.08))" />
+        ))}
+        {delimiters.map((x, i) => (
+          <line
+            key={`gd-${i}`}
+            x1={x}
+            y1={0}
+            x2={x}
+            y2={layout.chartHeight}
+            stroke={delimiter === 'day' ? 'var(--pp-grid, rgba(0,0,0,0.07))' : 'var(--pp-grid-period, rgba(0,0,0,0.14))'}
+            strokeWidth={1}
+          />
         ))}
 
         {/* Today line */}
@@ -322,17 +351,33 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
         })}
 
         {/* Dependencies */}
-        {layout.dependencies.map((ld) => (
-          <path
-            key={ld.dependency.id}
-            d={ld.path}
-            fill="none"
-            stroke="var(--pp-text-soft, #5b6068)"
-            strokeWidth={1}
-            opacity={0.7}
-            pointerEvents="none"
-          />
-        ))}
+        {layout.dependencies.map((ld) => {
+          // The head is an explicit polygon, not an `orient="auto"` marker as
+          // the editor uses: this SVG is serialized and handed to hosts that
+          // flatten or drop `<defs>`, and the one thing a reader needs from a
+          // connector — which end is the successor — must not depend on that
+          // surviving (SRS-ELEM-044). The engine says which way the last leg
+          // travels, so the tip sits on the bar's cap and the tail trails back
+          // along the leg.
+          const tailX = ld.toX - ld.entryDir * 7;
+          return (
+            <g key={ld.dependency.id} pointerEvents="none">
+              <path
+                d={ld.path}
+                fill="none"
+                stroke="var(--pp-text-soft, #5b6068)"
+                strokeWidth={1}
+                strokeLinejoin="round"
+                opacity={0.7}
+              />
+              <polygon
+                points={`${ld.toX},${ld.toY} ${tailX},${ld.toY - 3.2} ${tailX},${ld.toY + 3.2}`}
+                fill="var(--pp-text-soft, #5b6068)"
+                opacity={0.7}
+              />
+            </g>
+          );
+        })}
       </g>
       </g>
 
@@ -347,7 +392,9 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
           --pp-text-soft: #5b6068;
           --pp-text-dim: #8b8f97;
           --pp-border-hair: rgba(0, 0, 0, 0.06);
-          --pp-weekend: rgba(0, 0, 0, 0.025);
+          --pp-weekend: rgba(0, 0, 0, 0.08);
+          --pp-grid: rgba(0, 0, 0, 0.07);
+          --pp-grid-period: rgba(0, 0, 0, 0.14);
           --pp-accent: #4f46e5;
           --pp-today: #f87171;
           --pp-deadline: #fbbf24;
@@ -360,7 +407,9 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
           --pp-text-soft: #a1a5ad;
           --pp-text-dim: #6b7079;
           --pp-border-hair: rgba(255, 255, 255, 0.06);
-          --pp-weekend: rgba(255, 255, 255, 0.025);
+          --pp-weekend: rgba(255, 255, 255, 0.08);
+          --pp-grid: rgba(255, 255, 255, 0.07);
+          --pp-grid-period: rgba(255, 255, 255, 0.14);
           --pp-accent: #818cf8;
           --pp-today: #f87171;
           --pp-deadline: #fbbf24;
@@ -373,7 +422,9 @@ export function GanttRenderer({ document, width, height, options = {} }: GanttRe
           --pp-text-soft: #333333;
           --pp-text-dim: #777777;
           --pp-border-hair: #cccccc;
-          --pp-weekend: #f3f3f3;
+          --pp-weekend: #eeeeee;
+          --pp-grid: #dddddd;
+          --pp-grid-period: #bbbbbb;
           --pp-accent: #000000;
           --pp-today: #d00000;
           --pp-deadline: #aa6000;

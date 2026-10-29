@@ -5,7 +5,10 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'dist-template', 'node_modules'] },
+  // `.claude` holds the per-agent git worktrees, each a full copy of the tree.
+  // Linting them reported warnings against files nobody is editing and made the
+  // "pre-existing warnings" baseline drift with every agent run.
+  { ignores: ['dist', 'dist-template', 'node_modules', '.claude'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

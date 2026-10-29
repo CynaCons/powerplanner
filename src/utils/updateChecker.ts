@@ -38,9 +38,14 @@ import {
 export const GITHUB_REPO = 'CynaCons/powerroadmap';
 /**
  * Every name the app has had, newest first: PowerPlanner until 2026-10-26,
- * PowerGantt for one release, PowerRoadmap since. The release ships a
- * byte-identical alias under each, because the updater lives inside every
- * saved file and an old build only knows the name it shipped with.
+ * PowerGantt for one release, PowerRoadmap since.
+ *
+ * Releases up to v2.21.0 shipped a byte-identical alias under each of these.
+ * From v2.22.0 only `PowerRoadmap.html` is published: a page cannot read a
+ * release asset anyway (CORS), so `fetchBuild` takes the raw.githubusercontent
+ * route and the asset is only a fallback kept in case that changes. The older
+ * names stay in this list because the matcher is newest-first and an old build
+ * reading a new release must still recognise one name it knows.
  */
 export const RELEASE_ASSET_NAMES = [
   'PowerRoadmap.html',

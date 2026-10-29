@@ -7,7 +7,8 @@ test.describe('PowerRoadmap smoke', () => {
     await expect(page.locator('.app-header').getByText('PowerRoadmap')).toBeVisible();
     // The inspector column is gone; editing lives in the command bar (C3).
     await expect(page.locator('.inspector')).toHaveCount(0);
-    // Chart SVG renders (first svg = main chart, second = minimap)
+    // Chart SVG renders. There is one now: the minimap that used to follow it
+    // was removed in v2.28.0 (SRS-ELEM-060).
     await expect(page.locator('.chart-area > svg').first()).toBeVisible();
     // Sample tasks rendered
     await expect(page.locator('text=Stakeholder requirements').first()).toBeVisible();

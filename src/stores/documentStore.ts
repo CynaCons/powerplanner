@@ -84,7 +84,8 @@ interface DocumentState {
   updateMarker: (id: string, patch: Partial<Marker>) => void;
   deleteMarker: (id: string) => void;
 
-  addRow: (r: Row) => void;
+  /** Append a row, or place it at `index` so a section's new child lands under it. */
+  addRow: (r: Row, index?: number) => void;
   updateRow: (id: string, patch: Partial<Row>, key?: string) => void;
   deleteRow: (id: string) => void;
   /** Move a row (with its packages, if it is a section) to a new position. */
@@ -262,7 +263,12 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     mutate(set, (d) => ({ ...d, markers: d.markers.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
   deleteMarker: (id) => mutate(set, (d) => ({ ...d, markers: d.markers.filter((m) => m.id !== id) })),
 
-  addRow: (r) => mutate(set, (d) => ({ ...d, rows: [...d.rows, r] })),
+  addRow: (r, index) =>
+    mutate(set, (d) => {
+      const rows = [...d.rows];
+      rows.splice(index ?? rows.length, 0, r);
+      return { ...d, rows };
+    }),
   updateRow: (id, patch, key) =>
     mutate(set, (d) => ({ ...d, rows: d.rows.map((r) => (r.id === id ? { ...r, ...patch } : r)) }), 'user', key),
   deleteRow: (id) =>

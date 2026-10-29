@@ -1,4 +1,5 @@
-import type { GanttDocument } from '../types/document';
+import type { GanttDocument, GridDelimiter, WeekendDisplay } from '../types/document';
+import { GRID_DELIMITERS, WEEKEND_DISPLAYS } from '../types/document';
 
 export const SCHEMA_VERSION = 1 as const;
 
@@ -51,6 +52,16 @@ export function validateDocument(input: unknown): GanttDocument {
   const holidays = calendar.holidays;
   if (!Array.isArray(holidays) || !holidays.every(isISODate)) {
     throw new SchemaError('holidays must be an array of YYYY-MM-DD');
+  }
+  // Both optional, because every roadmap written before 2026-10-29 lacks them
+  // and must still open; the reader supplies the default (SRS-TAX-057).
+  const gridDelimiter = calendar.gridDelimiter;
+  if (gridDelimiter !== undefined && !GRID_DELIMITERS.includes(gridDelimiter as GridDelimiter)) {
+    throw new SchemaError(`Invalid gridDelimiter: ${String(gridDelimiter)}`);
+  }
+  const weekendDisplay = calendar.weekendDisplay;
+  if (weekendDisplay !== undefined && !WEEKEND_DISPLAYS.includes(weekendDisplay as WeekendDisplay)) {
+    throw new SchemaError(`Invalid weekendDisplay: ${String(weekendDisplay)}`);
   }
 
   const rows = (input as { rows?: unknown }).rows;

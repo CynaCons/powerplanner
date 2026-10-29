@@ -4,6 +4,9 @@ import {
   ZoomIn, ZoomOut, Maximize2, Settings2, Rows3, Flag, Brackets as BracketIcon,
 } from 'lucide-react';
 import { useToolStore, type Tool } from '../stores/toolStore';
+import { resolveInsertTarget } from './insertTarget';
+import type { Selectable } from '../stores/selectionStore';
+import { bracketSpanFor } from './bracketSpan';
 import { useViewportStore } from '../stores/viewportStore';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
@@ -11,6 +14,7 @@ import { newId } from '../utils/ids';
 import { SelectionGroup } from './SelectionGroup';
 import { todayISO, addDays } from '../utils/dates';
 import type { TimeScale, ThemeName } from '../types/document';
+import { gridDelimiterOf, weekendDisplayOf, type GridDelimiter, type WeekendDisplay } from '../types/document';
 
 /**
  * The contextual command bar (PLAN.md Phase 16 / v2.13.1).
@@ -36,6 +40,14 @@ const TOOLS: Array<{ id: Tool; label: string; icon: typeof MousePointer2; shortc
   { id: 'pan', label: 'Pan', icon: Hand, shortcut: 'H' },
 ];
 
+/** What the bar calls each armed tool. Select is the resting state and says nothing. */
+const ARMED_LABEL: Partial<Record<Tool, string>> = {
+  'add-task': 'Placing a task',
+  'add-milestone': 'Placing a milestone',
+  marquee: 'Marquee select',
+  pan: 'Panning',
+};
+
 const SCALES: TimeScale[] = ['day', 'week', 'month', 'quarter', 'year'];
 const SCALE_LABEL: Record<TimeScale, string> = { day: 'D', week: 'W', month: 'M', quarter: 'Q', year: 'Y' };
 const THEMES: { id: ThemeName; label: string }[] = [
@@ -59,6 +71,8 @@ export function CommandBar() {
   const selection = useSelectionStore((s) => s.items);
   const clearSelection = useSelectionStore((s) => s.clear);
 
+  const setSelection = useSelectionStore((s) => s.setSelection);
+  const reveal = useViewportStore((s) => s.reveal);
   const addTask = useDocumentStore((s) => s.addTask);
   const addMilestone = useDocumentStore((s) => s.addMilestone);
   const addRow = useDocumentStore((s) => s.addRow);
@@ -86,18 +100,46 @@ export function CommandBar() {
   // user's attention rather than trapping them in a mode.
   if (docContext && selection.length > 0) setDocContext(false);
 
-  const idle = selection.length === 0 && !docContext;
+
+  /**
+   * The row an insert lands on (SRS-EDIT-028), creating one where the planner
+   * has a section selected — a heading is not a place work goes.
+   */
+  const insertRowId = (): string | null => {
+    const target = resolveInsertTarget(doc, selection);
+    if (!target) return null;
+    if (target.kind === 'row') return target.rowId;
+    const id = newId('row');
+    addRow({ id, label: 'New row', groupId: target.parentId }, target.index);
+    return id;
+  };
+
+  /** Insert, select it, and make sure the planner can see it. */
+  const landOn = (rowId: string, item: Selectable) => {
+    setSelection([item]);
+    reveal(rowId);
+  };
 
   return (
     <div className="cmdbar" role="toolbar" aria-label="Command bar">
+      {/*
+        What is armed, said out loud (SRS-EDIT-027).
+
+        The only cue used to be a crosshair, and the tool row is replaced by the
+        selection group the moment the inserted item is selected — so the mode
+        was invisible at exactly the moment it was doing damage.
+      */}
+      {ARMED_LABEL[activeTool] && (
+        <span className="cmdbar__armed" data-pp-armed={activeTool} role="status">
+          {ARMED_LABEL[activeTool]}
+          <span className="cmdbar__armed-esc">Esc</span>
+        </span>
+      )}
       {docContext ? (
         <DocumentGroup />
       ) : selection.length > 0 ? (
         <SelectionGroup />
       ) : (
-        <>
-          {/* Tools only when idle (user choice). Pan therefore needs a
-              deselect first, which was accepted as a trade for a shorter bar. */}
           <Group>
             {TOOLS.map((t) => {
               const Icon = t.icon;
@@ -105,7 +147,9 @@ export function CommandBar() {
                 <BarButton
                   key={t.id}
                   active={activeTool === t.id}
-                  onClick={() => setTool(t.id, true)}
+                  // No explicit stickiness: the store decides, so a marquee
+                  // cannot become a mode while pan still can (SRS-EDIT-026).
+                  onClick={() => setTool(t.id)}
                   title={`${t.label} (${t.shortcut})`}
                 >
                   <Icon size={15} strokeWidth={1.75} />
@@ -113,6 +157,12 @@ export function CommandBar() {
               );
             })}
           </Group>
+      )}
+
+      {/* Insert stays reachable with something selected (SRS-EDIT-028): the
+          planner inserts next to what they are looking at, and having to
+          deselect first is what sent every insert to row zero. */}
+      {!docContext && (
           <Group label="Insert">
             <BarButton onClick={() => addRow({ id: newId('row'), label: `Row ${doc.rows.length + 1}`, groupId: null })} title="Add row">
               <Rows3 size={14} strokeWidth={1.75} /><span>Row</span>
@@ -120,8 +170,12 @@ export function CommandBar() {
             <BarButton
               disabled={doc.rows.length === 0}
               onClick={() => {
+                const rowId = insertRowId();
+                if (!rowId) return;
                 const today = todayISO();
-                addTask({ id: newId('task'), rowId: doc.rows[0].id, label: 'New task', start: today, end: addDays(today, 7), percentComplete: 0 });
+                const id = newId('task');
+                addTask({ id, rowId, label: 'New task', start: today, end: addDays(today, 7), percentComplete: 0 });
+                landOn(rowId, { kind: 'task', id });
               }}
               title="Add task (T)"
             >
@@ -129,7 +183,13 @@ export function CommandBar() {
             </BarButton>
             <BarButton
               disabled={doc.rows.length === 0}
-              onClick={() => addMilestone({ id: newId('ms'), rowId: doc.rows[0].id, label: 'New milestone', date: todayISO() })}
+              onClick={() => {
+                const rowId = insertRowId();
+                if (!rowId) return;
+                const id = newId('ms');
+                addMilestone({ id, rowId, label: 'New milestone', date: todayISO() });
+                landOn(rowId, { kind: 'milestone', id });
+              }}
               title="Add milestone (Y)"
             >
               <Diamond size={14} strokeWidth={1.75} /><span>Milestone</span>
@@ -142,15 +202,14 @@ export function CommandBar() {
             </BarButton>
             <BarButton
               onClick={() => {
-                const today = todayISO();
-                addBracket({ id: newId('br'), label: 'Phase', start: today, end: addDays(today, 14), rowIds: doc.rows.length ? [doc.rows[0].id] : [] });
+                const span = bracketSpanFor(doc, selection);
+                addBracket({ id: newId('br'), label: 'Phase', ...span });
               }}
-              title="Add bracket"
+              title="Add bracket over the selection"
             >
               <BracketIcon size={14} strokeWidth={1.75} /><span>Bracket</span>
             </BarButton>
           </Group>
-        </>
       )}
 
       {/* Global group — pinned. Never moves as the selection changes. */}
@@ -169,13 +228,13 @@ export function CommandBar() {
             </button>
           ))}
         </div>
-        <BarButton onClick={() => zoom(0.8, 400)} title="Zoom out (−)" ariaLabel="Zoom out">
+        <BarButton onClick={() => zoom(0.8)} title="Zoom out (−)" ariaLabel="Zoom out">
           <ZoomOut size={15} strokeWidth={1.75} />
         </BarButton>
         <span className="cmdbar__zoom" title="Pixels per day">
           {pxPerDay >= 1 ? `${pxPerDay.toFixed(1)}px/d` : `${(1 / pxPerDay).toFixed(0)}d/px`}
         </span>
-        <BarButton onClick={() => zoom(1.25, 400)} title="Zoom in (+)" ariaLabel="Zoom in">
+        <BarButton onClick={() => zoom(1.25)} title="Zoom in (+)" ariaLabel="Zoom in">
           <ZoomIn size={15} strokeWidth={1.75} />
         </BarButton>
         <BarButton onClick={onFit} title="Fit to data (Home)" ariaLabel="Fit">
@@ -191,12 +250,10 @@ export function CommandBar() {
         </BarButton>
       </div>
 
-      {idle && (
-        <span className="cmdbar__hint">Select for quick actions · right-click for the rest</span>
-      )}
     </div>
   );
 }
+
 
 /* ------------------------------------------------------------------ */
 
@@ -207,6 +264,20 @@ function DocumentGroup() {
   const setFiscalYearStart = useDocumentStore((s) => s.setFiscalYearStart);
   const allowOverlap = useDocumentStore((s) => s.doc.style.allowOverlap ?? false);
   const setAllowOverlap = useDocumentStore((s) => s.setAllowOverlap);
+  const calendar = useDocumentStore((s) => s.doc.calendar);
+  const replaceDocument = useDocumentStore((s) => s.replaceDocument);
+  const gridDelimiter = gridDelimiterOf(calendar);
+  const weekendDisplay = weekendDisplayOf(calendar);
+
+  /**
+   * Written through `replaceDocument`, which is the undoable whole-document
+   * path, so switching delimiters is one Ctrl+Z like any other edit and the
+   * autosave sees it. These two have no dedicated store action yet.
+   */
+  const patchCalendar = (patch: Partial<typeof calendar>) => {
+    const doc = useDocumentStore.getState().doc;
+    replaceDocument({ ...doc, calendar: { ...doc.calendar, ...patch } });
+  };
 
   return (
     <Group label="Document">
@@ -235,8 +306,8 @@ function DocumentGroup() {
           <option key={label} value={i + 1}>{label}</option>
         ))}
       </select>
-      <span className="cmdbar__field-label">Bars</span>
-      <div className="cmdbar__scale" role="radiogroup" aria-label="Overlapping bars">
+      <span className="cmdbar__field-label">Bars on the same dates</span>
+      <div className="cmdbar__scale" role="radiogroup" aria-label="Bars on the same dates">
         {OVERLAP.map((o) => (
           <button
             key={String(o.value)}
@@ -250,21 +321,76 @@ function DocumentGroup() {
           </button>
         ))}
       </div>
+      <span className="cmdbar__field-label">Delimiters</span>
+      <div className="cmdbar__scale" role="radiogroup" aria-label="Grid delimiters">
+        {DELIMITER_CHOICES.map((c) => (
+          <button
+            key={c.value}
+            role="radio"
+            aria-checked={gridDelimiter === c.value}
+            className={gridDelimiter === c.value ? 'is-active' : ''}
+            title={c.title}
+            onClick={() => patchCalendar({ gridDelimiter: c.value })}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <span className="cmdbar__field-label">Weekends</span>
+      <div className="cmdbar__scale" role="radiogroup" aria-label="Weekend display">
+        {WEEKEND_CHOICES.map((c) => (
+          <button
+            key={c.value}
+            role="radio"
+            aria-checked={weekendDisplay === c.value}
+            className={weekendDisplay === c.value ? 'is-active' : ''}
+            title={c.title}
+            onClick={() => patchCalendar({ weekendDisplay: c.value })}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
       <WorkingDays />
     </Group>
   );
 }
 
 /**
- * Stacked or overlapping, the think-cell choice (SRS-LAY-024).
+ * The delimiter granularity (SRS-TAX-054). Five, not the three the design demo
+ * shows, because the scale selector already offers quarter and day and a
+ * planner who reads at one of those should be able to rule at it too.
+ */
+const DELIMITER_CHOICES: ReadonlyArray<{ value: GridDelimiter; label: string; title: string }> = [
+  { value: 'none', label: 'None', title: 'No vertical rules in the plot' },
+  { value: 'day', label: 'Day', title: 'A rule on every day boundary' },
+  { value: 'week', label: 'Week', title: 'A rule on every week boundary' },
+  { value: 'month', label: 'Month', title: 'A rule on the first of each month' },
+  { value: 'quarter', label: 'Qtr', title: 'A rule on each fiscal quarter boundary' },
+];
+
+const WEEKEND_CHOICES: ReadonlyArray<{ value: WeekendDisplay; label: string; title: string }> = [
+  { value: 'off', label: 'Off', title: 'Non-working days look like any other day' },
+  { value: 'shaded', label: 'Shaded', title: 'Non-working days are shaded behind the bars' },
+];
+
+/**
+ * Stacked or overlapping, the think-cell choice (SRS-LAY-024, SRS-LAY-025).
  *
  * The engine has packed bars into lanes since it was written and has taken an
  * `allowOverlap` argument for just as long, which nothing ever passed. This
  * is the control that reaches it.
+ *
+ * It used to read "Stack | Overlap", which names the implementation rather
+ * than the outcome, with the explanation hidden in a tooltip on a 20px
+ * button — "I can change whether the bars are stacked or overlapped. I don’t
+ * really understand that." The label now states what happens to the bars and
+ * the field label states when it happens, so the choice reads without
+ * hovering anything.
  */
-const OVERLAP = [
-  { value: false, label: 'Stack', title: 'Bars that cover the same dates take their own lane' },
-  { value: true, label: 'Overlap', title: 'Bars that cover the same dates share one band' },
+export const OVERLAP = [
+  { value: false, label: 'Own line', title: 'Two bars that cover the same dates each get their own line' },
+  { value: true, label: 'Same line', title: 'Two bars that cover the same dates draw on top of each other' },
 ] as const;
 
 const DOW = [
@@ -281,6 +407,12 @@ const DOW = [
  * Working days drive the weekend shading, so until now a plan could be shaded
  * wrong with no way to correct it from the UI — the agent bridge could set it
  * and a person could not (SRS-ABR-019, owner directive 2026-10-23).
+ *
+ * The shading is the only thing in the web app this set feeds, and it was
+ * invisible at every scale, so the control read as inert: toggling a day
+ * changed nothing anyone could see. It is paired with Weekends above now —
+ * this picks WHICH days are off, that one decides whether the plot says so
+ * (SRS-TAX-056).
  */
 function WorkingDays() {
   const workingDays = useDocumentStore((s) => s.doc.calendar.workingDays);
