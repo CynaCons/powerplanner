@@ -57,7 +57,14 @@ test.describe('progress by dragging the fill edge', () => {
     // SR-IXC-06: a percentage beside the handle, while the drag is in flight.
     const readout = page.locator(`[data-pp-progress="${id}"]`);
     await expect(readout).toBeVisible();
-    expect(await readout.textContent()).toMatch(/^\d{1,3}%$/);
+    // The value the drag pulled to, not merely "some percentage": the old
+    // `/^\d{1,3}%$/` was satisfied by the value the bar already held, so it
+    // could not tell a working handle from one that never moved. A couple of
+    // points of slack for sub-pixel box geometry; pctFromX rounds to whole
+    // percent, so this is as tight as the readout can be read.
+    const pulled = Number((await readout.textContent())!.replace('%', ''));
+    expect(pulled).toBeGreaterThanOrEqual(73);
+    expect(pulled).toBeLessThanOrEqual(77);
 
     await page.mouse.up();
     // And nothing survives the gesture (SR-IXC-10).
@@ -78,17 +85,26 @@ test.describe('progress by dragging the fill edge', () => {
     await page.mouse.move(targetX, hbox.y + hbox.height / 2, { steps: 8 });
     await page.mouse.up();
 
-    const fill = (await page.locator('.bar-progress-fill').first().boundingBox())!;
-    // Within a couple of pixels of 60% of the bar: the gesture, the preview and
-    // the commit are one value (SRS-EDIT-002).
-    expect(Math.abs(fill.x + fill.width - targetX)).toBeLessThan(4);
+    // Scoped to the bar that was dragged. `.first()` resolved to whichever
+    // task comes first in the document — the sample's, at 100% and never
+    // touched — so this measured the distance from THAT bar's fill edge to a
+    // point 60% along a different bar, which is where the reported 566px came
+    // from.
+    const fill = (await page.locator(`.bar-progress-fill[data-pp-fill="${id}"]`).boundingBox())!;
+    // The gesture, the preview and the commit are one value (SRS-EDIT-002).
+    // The tolerance is tied to the percent quantum: pctFromX rounds to whole
+    // percent, so one percent of this bar is the floor on how close it can land.
+    expect(Math.abs(fill.x + fill.width - targetX)).toBeLessThan(box.width / 100 + 2);
   });
 
   test('a date drag is not a progress drag', async ({ page }) => {
     await ready(page);
     const { box, id } = await widestBar(page);
     await page.locator(`.task-bar-body[data-pp-id="${id}"]`).click();
-    const fillBefore = (await page.locator('.bar-progress-fill').first().boundingBox())!;
+    // Same scoping, same reason: compared against `.first()` this test was
+    // measuring a bar nobody had touched, so its assertion was 0 < 4 by
+    // construction — green while checking nothing.
+    const fillBefore = (await page.locator(`.bar-progress-fill[data-pp-fill="${id}"]`).boundingBox())!;
 
     // Press the body well away from the handle and move it.
     await page.mouse.move(box.x + 4, box.y + box.height / 2);
@@ -96,7 +112,7 @@ test.describe('progress by dragging the fill edge', () => {
     await page.mouse.move(box.x + 44, box.y + box.height / 2, { steps: 6 });
     await page.mouse.up();
 
-    const fillAfter = (await page.locator('.bar-progress-fill').first().boundingBox())!;
+    const fillAfter = (await page.locator(`.bar-progress-fill[data-pp-fill="${id}"]`).boundingBox())!;
     // The fill travelled with the bar; its proportion of the bar did not change.
     expect(Math.abs(fillAfter.width - fillBefore.width)).toBeLessThan(4);
   });

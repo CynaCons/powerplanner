@@ -12,7 +12,7 @@ import { DetailsDialog } from './DetailsDialog';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
-import { loadAutosave, saveAutosave, clearAutosave } from '../persistence/autosave';
+import { loadAutosave, saveAutosave, clearAutosave, shouldAutosave } from '../persistence/autosave';
 import { notify } from '../stores/noticeStore';
 import type { GanttDocument } from '../types/document';
 
@@ -51,18 +51,22 @@ export function App({ compact = false }: AppProps) {
   // Autosave debounced
   useEffect(() => {
     const t = setTimeout(() => {
+      const { revision, savedRevision } = useDocumentStore.getState();
+      const untouched = revision === savedRevision;
+      // The snapshot the restore banner is still offering is not ours to
+      // overwrite (SRS-PERS-030).
+      if (!shouldAutosave({ offerPending: pendingRestore !== null, dirty: !untouched })) return;
       if (saveAutosave(doc)) return;
       // Only once there is work to lose. The portable build is opened from
       // disk, where some browsers refuse local storage outright, and warning
       // about a backup of an untouched sample is a false alarm on every open.
-      const { revision, savedRevision } = useDocumentStore.getState();
-      if (revision === savedRevision) return;
+      if (untouched) return;
       // The notice store collapses a repeat into a count, so a blocked or full
       // local storage says this once rather than every 800ms.
       notify('This browser will not keep a local backup of your changes — save to a file.', 'fail');
     }, 800);
     return () => clearTimeout(t);
-  }, [doc]);
+  }, [doc, pendingRestore]);
 
   // Closing the tab on work that is in no file is the one unrecoverable
   // action left, and nothing stood in front of it (SRS-PERS-025).

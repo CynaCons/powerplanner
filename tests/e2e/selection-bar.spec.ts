@@ -16,11 +16,15 @@ test.describe('selection editing: quick actions in the bar, fields in the dialog
     await page.locator('[data-pp-kind="task"]').first().click();
   });
 
-  test('the bar names the selection but does not rename it', async ({ page }) => {
-    // Renaming belongs on the name, in the row list — the bar is for quick
-    // actions (owner directive 2026-10-26).
-    await expect(page.locator('.cmdbar .cmdbar__selname')).toBeVisible();
+  test('the bar does not rename the selection', async ({ page }) => {
+    // The name itself is gone from the bar (SRS-EDIT-029), and that absence is
+    // gated by selection-paint.spec.ts, which asserts the inverse of what this
+    // test used to. What is still live here is that no name FIELD has crept
+    // back in its place — and the field to watch for is labelled 'Name', as
+    // DetailsDialog calls it, not 'Label', so the original locator would have
+    // missed the very thing it was written to catch.
     await expect(page.locator('.cmdbar').getByLabel('Label')).toHaveCount(0);
+    await expect(page.locator('.cmdbar').getByLabel('Name')).toHaveCount(0);
   });
 
   test('a row is renamed by double-clicking its name in the row list', async ({ page }) => {
@@ -31,14 +35,28 @@ test.describe('selection editing: quick actions in the bar, fields in the dialog
     await expect(editor).toBeVisible();
   });
 
-  test('dates and percent have precise nudges', async ({ page }) => {
+  test('precise dates and percent live in the dialog, not in the bar', async ({ page }) => {
     const bar = page.locator('.cmdbar');
-    await expect(bar.getByLabel('Move a day later')).toBeVisible();
-    await expect(bar.getByLabel('Ten percent more complete')).toBeVisible();
-    await bar.getByLabel('Ten percent more complete').click();
-    // The dialog reports the value, so read it back there.
+    // SRS-EDIT-075 / SR-IXC-01: no stepper for a continuous value. The bar
+    // carried four — −1d, +1d, −10%, +10% — and the verbs are now dragging the
+    // bar and dragging its fill edge.
+    await expect(bar.getByLabel('Move a day later')).toHaveCount(0);
+    await expect(bar.getByLabel('Ten percent more complete')).toHaveCount(0);
+
     await bar.getByLabel('Task details').click();
-    await expect(page.locator('[role="dialog"]')).toContainText('%');
+    const pop = page.locator('[role="dialog"]');
+    // Two date fields, for the precise entry SR-IXC-02 reserves a secondary
+    // editor for.
+    await expect(pop.locator('input[type="date"]')).toHaveCount(2);
+
+    // The sample's first task is at 100%, so Home drives the slider to a value
+    // it did not already hold. The old assertion was `toContainText('%')`,
+    // which the dialog's own "Complete — {pct}%" label satisfies whatever the
+    // value is: green while checking nothing.
+    const pct = pop.locator('input[type="range"]');
+    await pct.focus();
+    await pct.press('Home');
+    await expect(pop.getByText('Complete — 0%')).toHaveCount(1);
   });
 
   test('the bar holds no text field, date picker or dropdown', async ({ page }) => {
@@ -97,9 +115,29 @@ test.describe('selection editing: quick actions in the bar, fields in the dialog
   });
 
   test('a task is renamed in the dialog, and the rest of the app follows', async ({ page }) => {
+    // The requirement is not retired — only its observable moved. The bar used
+    // to restate the name and no longer may (SRS-EDIT-029), so the chart's own
+    // label is where the propagation can be seen, which is also the surface
+    // the planner is looking at.
+    //
+    // Asserted on the NEW name only. The row gutter draws `row.label` into the
+    // same svg, and for task-stkreq that row label is the identical string —
+    // so a filter on the old name matches two nodes, and the row's never
+    // follows a task rename. Pinned to task-stkreq because it is alone on its
+    // row, so `fitLabel` returns the full text rather than hiding it.
+    // `toHaveCount`, never `toBeVisible`: the task layer is clipped.
+    const chartText = page.locator('.chart-area svg text');
+    await expect(chartText.filter({ hasText: 'Renamed in the dialog' })).toHaveCount(0);
+
+    await page.locator('.task-bar-body[data-pp-id="task-stkreq"]').click();
     await page.locator('.cmdbar').getByLabel('Task details').click();
     await page.locator('[role="dialog"] input').first().fill('Renamed in the dialog');
-    await expect(page.locator('.cmdbar .cmdbar__selname')).toHaveText('Renamed in the dialog');
+    await page.locator('[role="dialog"] button[aria-label="Close"]').click();
+
+    // 0 before and exactly 1 after is the whole anti-vacuity burden: the first
+    // proves the locator was not already satisfied, the second that the label
+    // node exists and repainted.
+    await expect(chartText.filter({ hasText: 'Renamed in the dialog' })).toHaveCount(1);
   });
 
   test('Enter opens the details dialog for whatever is selected', async ({ page }) => {

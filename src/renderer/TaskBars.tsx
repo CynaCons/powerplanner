@@ -149,6 +149,11 @@ export function TaskBars({ layout, dragPreview }: Props) {
           gripW > 0
             ? Math.min(Math.max(x + fillWidth, x + gripW), x + width - gripW)
             : x + fillWidth;
+        // The handle's hit target joins the same body budget the grips observe
+        // (SRS-EDIT-078). It was a hard 10px, which on a one-week bar at the
+        // opening zoom — 15px — covered every pixel of body the grips had left,
+        // so the double-click that renames a task had nowhere to land.
+        const progW = Math.max(4, Math.min(10, width - 2 * gripW));
 
         return (
           <g key={t.id}>
@@ -209,6 +214,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
             {pct > 0 && (
               <rect
                 className="bar-progress-fill"
+                data-pp-fill={t.id}
                 x={x}
                 y={barTop}
                 width={fillWidth}
@@ -251,12 +257,13 @@ export function TaskBars({ layout, dragPreview }: Props) {
                   data-pp-kind="task"
                   data-pp-id={t.id}
                   data-pp-sub="progress"
-                  x={handleX - 5}
+                  x={handleX - progW / 2}
                   y={y}
-                  width={10}
+                  width={progW}
                   height={h}
                   fill="transparent"
                   style={{ cursor: 'ew-resize' }}
+                  onDoubleClick={() => beginEdit(t.id)}
                 />
               </>
             )}
@@ -304,6 +311,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
                   height={h}
                   fill="transparent"
                   style={{ cursor: 'ew-resize' }}
+                  onDoubleClick={() => beginEdit(t.id)}
                 />
                 <rect
                   data-pp-kind="task"
@@ -315,6 +323,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
                   height={h}
                   fill="transparent"
                   style={{ cursor: 'ew-resize' }}
+                  onDoubleClick={() => beginEdit(t.id)}
                 />
                 {active && (
                   <>

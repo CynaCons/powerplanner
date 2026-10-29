@@ -713,8 +713,14 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       // Check if drop target is a task
       const rect = svgRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
       const drop = chartToClient(geomRef.current, rect, state.depCurrentX!, state.depCurrentY!);
+      // Ranked, for the same reason the press is: a bar dropped on at a point
+      // some other connector crosses used to resolve to that connector and the
+      // link was silently not created (SRS-EDIT-077).
       const dropEl = document.elementFromPoint(drop.x, drop.y);
-      const targetEl = dropEl?.closest('[data-pp-kind="task"]') as HTMLElement | null;
+      const dropStack =
+        typeof document.elementsFromPoint === 'function' ? document.elementsFromPoint(drop.x, drop.y) : [];
+      const hit = resolveHit(dropStack, dropEl);
+      const targetEl = hit?.dataset.ppKind === 'task' ? hit : null;
       if (targetEl && targetEl.dataset.ppId && targetEl.dataset.ppId !== state.depSourceTaskId) {
         const fromId = state.depSourceTaskId;
         const toId = targetEl.dataset.ppId;
@@ -786,7 +792,15 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
     (e: ReactMouseEvent<SVGSVGElement>) => {
       e.preventDefault();
       const target = e.target as Element;
-      const datasetEl = target.closest('[data-pp-kind]') as HTMLElement | null;
+      // The same ranking the press uses, not `closest` on the event target:
+      // right-click has to mean the same thing as left-press by construction
+      // rather than by luck of paint order, because this menu carries Delete
+      // (SRS-EDIT-071, SRS-EDIT-077).
+      const stack =
+        typeof document.elementsFromPoint === 'function'
+          ? document.elementsFromPoint(e.clientX, e.clientY)
+          : [];
+      const datasetEl = resolveHit(stack, target);
       const ctx = useContextMenuStore.getState();
       const sel = useSelectionStore.getState();
 

@@ -13,7 +13,7 @@ import { TaskBars } from '../renderer/TaskBars';
 import { Baseline } from '../renderer/Baseline';
 import { Milestones } from '../renderer/Milestones';
 import { Brackets } from '../renderer/Brackets';
-import { Dependencies } from '../renderer/Dependencies';
+import { Dependencies, DependencyHits } from '../renderer/Dependencies';
 import { Markers } from '../renderer/Markers';
 import { RowGutter } from '../renderer/RowGutter';
 import { useChartInteractions } from './useChartInteractions';
@@ -381,13 +381,28 @@ export function ChartArea() {
             />
           )}
 
+          {/* The connectors' press targets go UNDER everything that outranks
+              them in `hitRank`, so paint order, the CSS cursor, :hover and
+              `resolveHit` all agree (SRS-EDIT-077). Their ink is painted after
+              the bars, below. */}
+          <DependencyHits layout={layout} />
           <Brackets layout={layout} />
           <Summaries layout={layout} />
           <Baseline layout={layout} />
           <TaskBars layout={layout} dragPreview={dragPreview} />
           <Milestones layout={layout} dragPreview={dragPreview} />
           <Dependencies layout={layout} />
-          <Markers doc={doc} viewStart={viewStart} pxPerDay={pxPerDay} chartHeight={plotHeight} />
+          {/* The chips ride the foot of the VISIBLE plot, so they are reachable
+              on a plan taller than the window (SRS-ELEM-062); the rules still
+              scroll with their rows. */}
+          <Markers
+            doc={doc}
+            viewStart={viewStart}
+            pxPerDay={pxPerDay}
+            chartHeight={layout.chartHeight}
+            bodyHeight={bodyHeight}
+            scrollY={scrollY}
+          />
           {depDrag && depDrag.depStartX != null && depDrag.depCurrentX != null && (
             <ConnectorOverlay
               fromX={depDrag.depStartX}

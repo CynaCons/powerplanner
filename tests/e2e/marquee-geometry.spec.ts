@@ -45,9 +45,16 @@ async function emptyPoints(page: Page, dx = 0, dy = 0, want = 1) {
         (b) => b.right >= rect.x && b.left <= rect.x + rect.w && b.bottom >= rect.y && b.top <= rect.y + rect.h,
       ).length;
     };
+    // Past the row panel, read from the token ChartArea publishes rather than
+    // from a magic number. The panel sizes itself to its own names now
+    // (SRS-LAY-050) — on this document it is 234px, and the old hard-coded 230
+    // put every candidate point inside it, where a press is ignored outright
+    // (`!datasetEl && x < gutter`), so no marquee ever opened.
+    const gutter =
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-gutter-w')) || 200;
     const out: { x: number; y: number }[] = [];
     for (let y = 100; y < r.height - 90; y += 6) {
-      for (let x = 230; x < r.width - 60; x += 8) {
+      for (let x = gutter + 24; x < r.width - 60; x += 8) {
         const cx = r.left + x;
         const cy = r.top + y;
         const el = document.elementFromPoint(cx, cy);

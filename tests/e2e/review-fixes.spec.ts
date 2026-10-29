@@ -49,10 +49,13 @@ test.describe('the details dialog edits what you picked', () => {
   });
 
   test('the dialog names the thing it is editing', async ({ page }) => {
-    await page.locator('[data-pp-kind="task"]').first().click();
-    const name = await page.locator('.cmdbar .cmdbar__selname').innerText();
+    // The expected name came from the command bar, which no longer restates it
+    // (SRS-EDIT-029). Asserted against the heading in full instead, which is
+    // stronger than the substring it replaces: the defect was Row details
+    // opening Task details, so the KIND matters as much as the subject.
+    await page.locator('.task-bar-body[data-pp-id="task-stkreq"]').click();
     await page.locator('.cmdbar').getByLabel('Task details').click();
-    await expect(page.locator('[role="dialog"] h2')).toContainText(name);
+    await expect(page.locator('[role="dialog"] h2')).toHaveText('Task — Stakeholder requirements');
   });
 });
 
@@ -79,23 +82,60 @@ test.describe('a modal owns the keyboard while it is open', () => {
 });
 
 test.describe('short bars stay operable', () => {
-  // NOT a regression gate: this passes against the pre-fix code too. The
-  // review predicted that two fixed 5px grips would cover a ~10px bar end to
-  // end and swallow the double-click; measured, the inserted task is wide
-  // enough that it does not. The handle clamp stays as a defensive bound and
-  // this stands as an invariant test, not proof of a fix.
+  // This IS a regression gate now, and the comment it replaces admitted it was
+  // not: v2.26.0 gave every bar a 10px progress handle that never joined the
+  // 8px body budget the resize grips observe, so on the 15.17px bar the
+  // command bar inserts at the opening zoom it covered every pixel of body the
+  // grips had left — and it carried no rename handler, so the double-click the
+  // UI teaches died on it (SRS-EDIT-078).
   test('a one-week task can be double-clicked to rename it', async ({ page }) => {
     await page.goto('/');
     await page.locator('.chart-area svg').first().waitFor({ state: 'visible' });
 
-    // Insert one at the shipped zoom — about 10px wide, which the two fixed
-    // 5px resize grips used to cover end to end.
     await page.locator('.cmdbar').getByTitle('Add task (T)').click();
     const bar = page.locator('.task-bar-body').last();
+    // `page.mouse` has no auto-scroll, unlike `locator.click()`. At phone
+    // width the app shell is 702px wide inside a 390px viewport, so an
+    // inserted task lands past the right edge and a raw press hits nothing.
+    await bar.scrollIntoViewIfNeeded();
     const box = (await bar.boundingBox())!;
     expect(box.width).toBeLessThan(30);
 
-    await bar.dblclick();
+    // Real input at the point a hand goes, not a locator-targeted click: on a
+    // bar this narrow the handle genuinely covers the centre, so Playwright's
+    // actionability check would refuse to address the body rect there. That
+    // refusal is not the requirement — a planner double-clicks a place, and
+    // whatever is under the pointer has to carry the verb (SRS-EDIT-078).
+    await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(page.locator('.chart-area input, .chart-area textarea').first()).toBeVisible();
+  });
+
+  test('the progress handle does not swallow the rename', async ({ page, viewport }) => {
+    // Desktop only, because the bar has to be wide enough to CARRY a handle
+    // for this to mean anything: `gripW = min(GRIP_W, floor(width - 8))`, so
+    // on the narrower tablet and phone plots the inserted task falls under 8px
+    // and correctly gets no grips and no handle at all (SRS-EDIT-070). Scoped
+    // rather than guarded — an `if (handle exists)` here would be the vacuous
+    // shape this suite has already shipped twice.
+    test.skip((viewport?.width ?? 1280) < 1000, 'the bar must be wide enough to carry a handle');
+    await page.goto('/');
+    await page.locator('.chart-area svg').first().waitFor({ state: 'visible' });
+
+    await page.locator('.cmdbar').getByTitle('Add task (T)').click();
+    const bar = page.locator('.task-bar-body').last();
+    const id = (await bar.getAttribute('data-pp-id'))!;
+
+    // The handle must be there — an inserted task arrives selected, which is
+    // what summons it. Without this, deleting the handle on short bars would
+    // turn the test green while taking the progress verb away, and with the
+    // steppers gone (SRS-EDIT-075) that would leave progress with no gesture.
+    const handle = page.locator(`[data-pp-kind="task"][data-pp-id="${id}"][data-pp-sub="progress"]`);
+    await expect(handle).toHaveCount(1);
+
+    // And a double-click ON the handle renames, which forbids the other cheap
+    // fix — nudging the handle just off the geometric centre so a centre-click
+    // gets through while a planner aiming at the handle still cannot rename.
+    await handle.dblclick();
     await expect(page.locator('.chart-area input, .chart-area textarea').first()).toBeVisible();
   });
 });
@@ -105,10 +145,11 @@ test.describe('the command palette follows the same rules as the File menu', () 
     await page.goto('/');
     await page.locator('.chart-area svg').first().waitFor({ state: 'visible' });
 
-    // Make it dirty, and count what is there.
-    await page.locator('[data-pp-kind="task"]').first().click();
-    await page.locator('.cmdbar').getByLabel('Ten percent more complete').click();
+    // Make it dirty, and count what is there. The +10% stepper this used to
+    // press is gone (SRS-EDIT-075); inserting a row is a one-press edit that
+    // needs no selection and dirties the document just as well.
     const before = await page.locator('[data-pp-kind="task"]').count();
+    await page.locator('.cmdbar').getByTitle('Add row').click();
 
     // Playwright auto-dismisses dialogs, so a confirm here reads as "No".
     let asked = false;

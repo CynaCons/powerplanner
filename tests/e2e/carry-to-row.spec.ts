@@ -67,6 +67,8 @@ test.describe('carrying an element to another row', () => {
     await ready(page);
     const ms = page.locator('[data-pp-kind="milestone"]').first();
     const box = (await ms.boundingBox())!;
+    const row = await ms.getAttribute('data-pp-row');
+    expect(row, 'the milestone names its row').toBeTruthy();
 
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
@@ -78,8 +80,14 @@ test.describe('carrying an element to another row', () => {
     expect(mid.y).toBeGreaterThan(box.y + 20);
 
     await page.mouse.up();
-    const after = (await ms.boundingBox())!;
-    expect(after.y).toBeGreaterThan(box.y + 20);
+    // The ROW, not the y. The sample's first milestone sits on a lane-stacked
+    // 72px row precisely because it collides with that row's bar; carrying it
+    // off collapses that row to 36px and lifts everything below it by one row,
+    // so the milestone lands within a couple of pixels of where it started
+    // while genuinely being on another row. Asserting the y made this test
+    // red against a feature that works.
+    await expect(ms).not.toHaveAttribute('data-pp-row', row!);
+    expect(await ms.getAttribute('data-pp-row')).toBeTruthy();
   });
 
   test('a press that never moves changes nothing', async ({ page }) => {

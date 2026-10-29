@@ -86,6 +86,12 @@ export function Milestones({ layout, dragPreview }: Props) {
             <polygon
               data-pp-kind="milestone"
               data-pp-id={m.id}
+              // The row it is on, as a task bar has carried all along. A
+              // milestone's row is not readable from its y: when it leaves a
+              // lane-stacked row that row collapses from 72px to 36 and
+              // everything below moves up by exactly one row, so a carry to
+              // the next row down can land at the y it started from.
+              data-pp-row={m.rowId}
               points={`${x},${y - SIZE} ${x + SIZE},${y} ${x},${y + SIZE} ${x - SIZE},${y}`}
               fill={color}
               stroke={selected ? 'var(--color-accent)' : 'rgba(0,0,0,0.3)'}

@@ -13,7 +13,12 @@ interface Props {
   doc: GanttDocument;
   viewStart: string;
   pxPerDay: number;
+  /** The rows' own height, which is where the rules stop. */
   chartHeight: number;
+  /** How much of the plot the window can show, chrome excluded. */
+  bodyHeight: number;
+  /** The plot's scroll offset, which the chips have to cancel out. */
+  scrollY: number;
 }
 
 /** The foot band, and the chip that sits in it (SRS-ELEM-053). */
@@ -26,16 +31,28 @@ const CHIP_CHAR_PX = 6.2;
 const DRAG_THRESHOLD_PX = 3;
 
 /**
- * Where the band starts.
+ * Where the band starts, in the scrolled group's own coordinates
+ * (SRS-ELEM-062).
  *
- * It lives INSIDE the `chartHeight` it is handed, not below it: `chart-plot-clip`
- * ends where the plot ends, so a band drawn past that is cut away exactly as the
- * below-row label in SRS-EDIT-056 was. ChartArea reserves the space by passing
- * `layout.chartHeight + FOOT_BAND_H` here, with the same 30px, so the band sits
- * under the last row rather than over it.
+ * Under the last row while the whole plan fits the window; pinned to the foot
+ * of the visible plot once it does not. The first version only ever did the
+ * former, which read correctly in a 108px test fixture and was indefensible on
+ * a real plan: the sample is 1584px of rows in a 778px plot, so the band was
+ * drawn at y=1632 inside a clip that ends at 826 and was cut away entirely. A
+ * planner who added a deadline marker saw no chip and no MARKERS eyebrow at
+ * all, and the only way to reach the name was to wheel 888px to the foot of a
+ * 39-row plan — where the band then landed in the very strip the minimap was
+ * deleted for occupying (SRS-ELEM-060). "I cannot edit the text" was still
+ * true.
+ *
+ * The `+ scrollY` cancels the parent group's `translate(… -scrollY)`, which is
+ * the same trick the today pill uses to ride the top of the plot
+ * (SRS-TAX-053) — there by sitting outside the scrolled group, here by
+ * undoing it, because the chips share a drag gesture with the rules and
+ * splitting the component would split that state in two.
  */
-export function footBandTop(chartHeight: number): number {
-  return Math.max(0, chartHeight - BAND_H);
+export function footBandTop(chartHeight: number, bodyHeight: number, scrollY = 0): number {
+  return Math.min(Math.max(0, chartHeight), Math.max(0, bodyHeight - BAND_H)) + scrollY;
 }
 
 /** A chip wide enough for its own name, and wide enough to hit. */
@@ -70,7 +87,7 @@ interface MarkerDrag {
   dx: number;
 }
 
-export function Markers({ doc, viewStart, pxPerDay, chartHeight }: Props) {
+export function Markers({ doc, viewStart, pxPerDay, chartHeight, bodyHeight, scrollY }: Props) {
   const updateMarker = useDocumentStore((s) => s.updateMarker);
   const setSelection = useSelectionStore((s) => s.setSelection);
   const addToSelection = useSelectionStore((s) => s.add);
@@ -82,7 +99,10 @@ export function Markers({ doc, viewStart, pxPerDay, chartHeight }: Props) {
   const [drag, setDrag] = useState<MarkerDrag | null>(null);
 
   const scale = doc.calendar.scale;
-  const bandTop = footBandTop(chartHeight);
+  const bandTop = footBandTop(chartHeight, bodyHeight, scrollY);
+  // The rules stop at the band wherever the band is, so the dashed line always
+  // meets its own chip and never runs on past it.
+  const ruleBottom = Math.max(0, bandTop);
 
   /**
    * What the drag arithmetic needs, assigned on every render so the
@@ -156,11 +176,13 @@ export function Markers({ doc, viewStart, pxPerDay, chartHeight }: Props) {
         `chart-plot-clip` is what ends it at the right edge.
       */}
       {hasMarkers && (
-        <g pointerEvents="none">
-          {/* Not quite opaque: until ChartArea reserves the band its own 30px
-              below the last row, the band is taken FROM the last row, and a bar
-              on that row would otherwise look deleted rather than covered. */}
-          <rect x={0} y={bandTop} width={20000} height={BAND_H} fill="var(--color-bg-subtle)" fillOpacity={0.92} />
+        <g>
+          {/* Opaque, and it takes its own presses. Pinned, the band genuinely
+              covers whichever rows are at the foot of the window, so a planner
+              must not read a bar through it and a click on it must not select
+              a row that is not on screen. Where the plan fits the window the
+              band is still below the last row and covers nothing. */}
+          <rect x={0} y={bandTop} width={20000} height={BAND_H} fill="var(--color-bg-subtle)" />
           <line x1={0} y1={bandTop} x2={20000} y2={bandTop} stroke="var(--color-border-soft)" strokeWidth={1} />
           {/* The label the minimap never had: anything parked at the foot of
               the chart has to say what it is (SRS-ELEM-060). */}
@@ -196,7 +218,7 @@ export function Markers({ doc, viewStart, pxPerDay, chartHeight }: Props) {
               x1={x}
               y1={0}
               x2={x}
-              y2={bandTop}
+              y2={ruleBottom}
               stroke={color}
               strokeWidth={selected || dragging ? 2 : 1.2}
               strokeDasharray={m.type === 'deadline' ? '6 4' : '2 2'}
@@ -211,10 +233,11 @@ export function Markers({ doc, viewStart, pxPerDay, chartHeight }: Props) {
               x={x - 5}
               y={0}
               width={10}
-              height={Math.max(0, bandTop)}
+              height={ruleBottom}
               fill="transparent"
               style={{ cursor: 'ew-resize' }}
               onMouseDown={(e) => onMarkerDown(e, m.id, m.date)}
+              onDoubleClick={(e) => { e.stopPropagation(); beginEdit(m.id); }}
             />
 
             {/* The chip in the foot band: the marker's name where the owner

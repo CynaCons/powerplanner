@@ -283,12 +283,20 @@ export const KEYMAP: readonly Binding[] = [
   {
     id: 'rename',
     chord: 'f2',
-    label: 'Rename the selected task',
+    label: 'Rename the selection',
     group: 'Editing',
     when: 'canvas',
     run: () => {
       const sel = useSelectionStore.getState();
-      if (sel.items.length !== 1 || sel.items[0].kind !== 'task') return;
+      if (sel.items.length !== 1) return;
+      // Task and marker, because those are the two renderers that read
+      // `editingTaskId` and can therefore put a field on screen (TaskBars,
+      // Markers). The marker's own context menu has always advertised F2 next
+      // to Rename and this refused it (SR-IXC-16). A milestone keeps its
+      // editing flag locally on purpose and a row's name lives in the gutter,
+      // so neither would render anything if this opened an editor for them.
+      const kind = sel.items[0].kind;
+      if (kind !== 'task' && kind !== 'marker') return;
       useEditStore.getState().beginEdit(sel.items[0].id);
     },
   },

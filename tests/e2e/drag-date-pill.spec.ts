@@ -65,6 +65,29 @@ test.describe('drag date pill', () => {
   test('the pill says the date the release commits, not the pointer date', async ({ page }) => {
     await ready(page);
     const ms = page.locator('[data-pp-kind="milestone"]').first();
+
+    /**
+     * The committed date, read from the details dialog.
+     *
+     * NOT from the command bar: it carried the date only as the ±1d steppers
+     * SR-IXC-01 forbids and SRS-EDIT-075 removed, so since v2.26.0 the bar
+     * holds no date at all and the old assertion was matching a day number
+     * against "…ScaleDWMQY1.9px/d". The dialog is where precise dates live
+     * now, which is what SR-IXC-02 reserves a secondary editor for.
+     */
+    const committedDate = async () => {
+      await ms.click();
+      await page.locator('.cmdbar').getByLabel('Milestone details').click();
+      const field = page.locator('[role="dialog"] input[type="date"]').first();
+      await expect(field).toBeVisible();
+      const value = await field.inputValue();
+      await page.keyboard.press('Escape');
+      return value;
+    };
+
+    const before = await committedDate();
+    expect(before).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
     const box = (await ms.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
@@ -72,12 +95,14 @@ test.describe('drag date pill', () => {
     const promised = await pillText(page);
     await page.mouse.up();
 
-    // Reselect and read what was written. The pill's date must be in it.
-    await ms.click();
-    const committed = await page.locator('.cmdbar, .statusbar').first().textContent();
+    const after = await committedDate();
+    // The drag moved it at all — without this, a gesture that did nothing
+    // would pass, since the pill would then promise the date already there.
+    expect(after).not.toBe(before);
+    // And it moved it to the day the pill promised, which is the requirement.
     const day = (promised ?? '').match(/\d{1,2}/)?.[0];
     expect(day).toBeTruthy();
-    expect(committed).toContain(day!);
+    expect(Number(after.slice(8, 10))).toBe(Number(day));
   });
 
   test('the pill is never cut off at the edge of the plot', async ({ page }) => {

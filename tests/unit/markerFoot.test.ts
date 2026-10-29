@@ -32,6 +32,12 @@ declare global {
 }
 
 const CHART_HEIGHT = 108; // three 36px rows
+/** A window with room to spare, so the band sits below the last row. */
+const BODY_HEIGHT = 400;
+/** The shape that shipped broken: far more rows than the window can show. */
+const TALL_CHART = 1584;
+const SMALL_BODY = 726;
+const BAND_H = 30;
 
 function doc(): GanttDocument {
   return {
@@ -55,7 +61,7 @@ function doc(): GanttDocument {
 let root: Root;
 let host: HTMLDivElement;
 
-function mount(d: GanttDocument) {
+function mount(d: GanttDocument, chartHeight = CHART_HEIGHT, bodyHeight = BODY_HEIGHT, scrollY = 0) {
   act(() => {
     useDocumentStore.getState().setDocument(d);
   });
@@ -64,7 +70,14 @@ function mount(d: GanttDocument) {
       createElement(
         'svg',
         null,
-        createElement(Markers, { doc: useDocumentStore.getState().doc, viewStart: '2026-06-01', pxPerDay: 10, chartHeight: CHART_HEIGHT }),
+        createElement(Markers, {
+          doc: useDocumentStore.getState().doc,
+          viewStart: '2026-06-01',
+          pxPerDay: 10,
+          chartHeight,
+          bodyHeight,
+          scrollY,
+        }),
       ),
     );
   });
@@ -73,6 +86,13 @@ function mount(d: GanttDocument) {
 /** Re-render with whatever the store now holds, as ChartArea would. */
 function repaint() {
   mount(useDocumentStore.getState().doc);
+}
+
+/** Every y the component draws, so a band can be checked for where it landed. */
+function drawnYs(): number[] {
+  return Array.from(host.querySelectorAll('rect, text, line')).map((el) =>
+    Number(el.getAttribute('y') ?? el.getAttribute('y1') ?? 0),
+  );
 }
 
 function hit(): SVGRectElement {
@@ -104,18 +124,54 @@ afterEach(() => {
 });
 
 describe('the foot band (SRS-ELEM-053, SRS-ELEM-054)', () => {
-  it('keeps the band and every chip inside the plot clip', () => {
-    const top = footBandTop(CHART_HEIGHT);
-    expect(top).toBeGreaterThan(0);
-    expect(top).toBeLessThan(CHART_HEIGHT);
+  it('sits below the last row while the plan fits the window', () => {
+    // The reserved band of SRS-LAY-052: the rows end at 108, the band runs
+    // 108..138, and ChartArea's FOOT_BAND_H is what keeps it inside the clip.
+    expect(footBandTop(CHART_HEIGHT, BODY_HEIGHT)).toBe(CHART_HEIGHT);
 
-    // Nothing the component draws may sit at a negative y or past the sheet,
-    // which is what removed the old bracket rail and the below-row label.
-    for (const el of host.querySelectorAll('rect, text, line')) {
-      const y = Number(el.getAttribute('y') ?? el.getAttribute('y1') ?? 0);
+    // Nothing may sit at a negative y or past the reserved band, which is what
+    // removed the old bracket rail and the below-row label.
+    for (const y of drawnYs()) {
       expect(y).toBeGreaterThanOrEqual(0);
-      expect(y).toBeLessThanOrEqual(CHART_HEIGHT);
+      expect(y).toBeLessThanOrEqual(CHART_HEIGHT + BAND_H);
     }
+  });
+
+  it('rides the foot of the window once the plan is taller than it', () => {
+    // The regression this test could not see: with 1584px of rows in a 726px
+    // body the band was drawn at 1554 — outside the plot clip, so a planner
+    // who added a marker saw no chip and no eyebrow at all, and the name was
+    // only reachable by wheeling to the foot of a 39-row plan.
+    expect(footBandTop(TALL_CHART, SMALL_BODY)).toBe(SMALL_BODY - BAND_H);
+    expect(footBandTop(TALL_CHART, SMALL_BODY)).toBeLessThan(TALL_CHART);
+
+    mount(doc(), TALL_CHART, SMALL_BODY);
+    const chip = host.querySelector('rect[data-pp-kind="marker"][rx="4"]')!;
+    const chipY = Number(chip.getAttribute('y'));
+    expect(chipY).toBeGreaterThanOrEqual(SMALL_BODY - BAND_H);
+    expect(chipY).toBeLessThanOrEqual(SMALL_BODY);
+  });
+
+  it('holds its place as the plot scrolls under it', () => {
+    // The chips cancel the parent group's -scrollY, so the band's SCREEN
+    // position is the same at every offset. Asserted as the difference, which
+    // cannot be satisfied by a band that simply ignores the scroll and is also
+    // the one thing a pinned band must do.
+    const atTop = footBandTop(TALL_CHART, SMALL_BODY, 0);
+    const scrolled = footBandTop(TALL_CHART, SMALL_BODY, 400);
+    expect(scrolled - atTop).toBe(400);
+
+    mount(doc(), TALL_CHART, SMALL_BODY, 400);
+    const chipY = Number(host.querySelector('rect[data-pp-kind="marker"][rx="4"]')!.getAttribute('y'));
+    // Local y moves with the scroll; screen y (local minus scrollY) does not.
+    expect(chipY - 400).toBeGreaterThanOrEqual(SMALL_BODY - BAND_H);
+    expect(chipY - 400).toBeLessThanOrEqual(SMALL_BODY);
+  });
+
+  it('stops each rule at the band, so a line always meets its own chip', () => {
+    mount(doc(), TALL_CHART, SMALL_BODY);
+    const rule = host.querySelector('line:not([x1="0"])')!;
+    expect(Number(rule.getAttribute('y2'))).toBe(footBandTop(TALL_CHART, SMALL_BODY));
   });
 
   it('names itself, as nothing at the foot of the chart did before', () => {

@@ -87,22 +87,66 @@ async function barsInPlot(page: Page, axisH: number) {
   }, axisH);
 }
 
-/** Pixels of the TODAY accent inside the header band. Clipping is a paint
- *  fact, and paint is the only honest way to read it. */
-async function todayPixelsInHeader(page: Page, axisH: number) {
+/** Half-width of the column window sampled around the rule, in CSS pixels. */
+const HALF_WINDOW_PX = 3;
+
+/** Today-red INK at the rule's own x inside the header band, in whole-pixel
+ *  equivalents, and how many of the band's scanlines carry any of it.
+ *
+ *  Clipping is a paint fact and paint is still the only honest way to read it,
+ *  but this needs two corrections from the version it replaces.
+ *
+ *  It is read as COVERAGE, not as a colour match. The old probe counted pixels
+ *  within 24 per channel of the literal token — an instrument built for the
+ *  46x16 solid pill this test used to measure. A 1px stroke whose centre is
+ *  not on a pixel centre spreads its one pixel of ink over two columns and
+ *  neither reaches the ~88% coverage that threshold needs; `todayX` is
+ *  `diffDays * pxPerDay` and the on-load fit makes `pxPerDay` fractional, so
+ *  that is the ordinary case and the count came back 0 against a rule that was
+ *  drawn perfectly correctly.
+ *
+ *  And it is read AT THE RULE, whose x comes from the DOM, rather than swept
+ *  across the whole band. Measured on this band, a red-minus-green sweep finds
+ *  warm pixels in 470 of 1440 columns: the calendar's own month and quarter
+ *  labels are antialiased per subpixel, which splits the channels at every
+ *  glyph edge. No colour test separates those from a red rule reliably — but
+ *  the requirement was never about colour anywhere in the band. It is that the
+ *  marker crosses THIS band at THIS x, as a rule and not as a pill, so that is
+ *  what is measured. */
+async function todayInkInHeader(page: Page, axisH: number) {
   const box = (await page.locator('.chart-area > svg').first().boundingBox())!;
+  const probe = await page.evaluate(() => {
+    const svg = document.querySelector('.chart-area > svg') as SVGSVGElement;
+    const rule = svg.querySelector('.axis-today-rule');
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--color-today').trim();
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(raw);
+    const warmth = m ? parseInt(m[1], 16) - parseInt(m[2], 16) : 0;
+    if (!rule) return { warmth, x: null as number | null };
+    const r = rule.getBoundingClientRect();
+    return { warmth, x: r.left + r.width / 2 - svg.getBoundingClientRect().left };
+  });
+  if (probe.x === null) return { ...probe, ink: 0, rows: 0 };
+
   const buf = await page.screenshot({
     clip: { x: box.x, y: box.y, width: box.width, height: axisH },
   });
   const png = PNG.sync.read(buf);
   const scale = png.width / box.width;
-  let hits = 0;
-  for (let i = 0; i < png.data.length; i += 4) {
-    const [r, g, b] = [png.data[i], png.data[i + 1], png.data[i + 2]];
-    // --color-today, light theme: #B3382C.
-    if (Math.abs(r - 0xb3) < 24 && Math.abs(g - 0x38) < 24 && Math.abs(b - 0x2c) < 24) hits++;
+  let ink = 0;
+  const rows = new Set<number>();
+  const lo = Math.round((probe.x - HALF_WINDOW_PX) * scale);
+  const hi = Math.round((probe.x + HALF_WINDOW_PX) * scale);
+  for (let y = 0; y < png.height; y++) {
+    for (let x = lo; x <= hi; x++) {
+      if (x < 0 || x >= png.width) continue;
+      const i = (y * png.width + x) * 4;
+      const warm = png.data[i] - png.data[i + 1];
+      if (warm < 8) continue; // neutral or cool: not the marker
+      ink += Math.min(1, warm / probe.warmth);
+      rows.add(y);
+    }
   }
-  return hits / (scale * scale);
+  return { warmth: probe.warmth, x: probe.x, ink: ink / (scale * scale), rows: rows.size / scale };
 }
 
 test.describe('chart clipping (SRS-TAX-040)', () => {
@@ -149,10 +193,28 @@ test.describe('chart clipping (SRS-TAX-040)', () => {
   test('the today marker crosses the band as a rule, with its pill below', async ({ page }) => {
     await ready(page);
     const axisH = await axisHeight(page);
-    // A 1px rule down a 44-64px band, not a 46x16 pill: present, and thin.
-    const inBand = await todayPixelsInHeader(page, axisH);
-    expect(inBand).toBeGreaterThan(10);
-    expect(inBand).toBeLessThan(200);
+    // Asserted, not assumed: every bound below is a multiple of this, so a
+    // band that measured 0 would quietly make all of them vacuous.
+    expect(axisH).toBeGreaterThan(30);
+
+    const { warmth, x, ink, rows } = await todayInkInHeader(page, axisH);
+    // The rule has to be in the DOM to be measured at all, and the estimator
+    // divides by `warmth`: a token with no red/green split would read every
+    // warm pixel as full coverage.
+    expect(x, 'the today rule is in the axis').not.toBeNull();
+    expect(warmth).toBeGreaterThan(60);
+
+    // A 1px rule lays down one pixel of ink per scanline wherever its centre
+    // falls, so the whole band's worth is about axisH. Measured: 49.5 over a
+    // 48px band. The upper bound is what says "a rule": a 46x16 pill drawn
+    // here would put roughly twice this much ink into the same window.
+    expect(ink).toBeGreaterThan(axisH * 0.6);
+    expect(ink).toBeLessThan(axisH * 1.8);
+    // And it crosses the WHOLE band — this is the clip fact of SRS-TAX-040,
+    // and the one assertion a 16px-tall pill cannot satisfy however it is
+    // coloured. The defect this test exists for left the top of the band
+    // unpainted.
+    expect(rows).toBeGreaterThan(axisH * 0.95);
 
     const below = await page.evaluate((h) => {
       const svg = document.querySelector('.chart-area > svg') as SVGSVGElement;

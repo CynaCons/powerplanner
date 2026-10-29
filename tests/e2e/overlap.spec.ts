@@ -10,6 +10,13 @@ import type { Page } from '@playwright/test';
  * from nowhere a user can click.
  *
  * Observed red on 340ca5a: there was no "Overlapping bars" control to click.
+ *
+ * The control's wording is itself a requirement now — SRS-LAY-025 asks each
+ * choice to be named by what happens to bars that cover the same dates, which
+ * is why "Overlapping bars / Stack / Overlap" became "Bars on the same dates /
+ * Own line / Same line". The strings below have to track `OVERLAP` in
+ * src/app/CommandBar.tsx; renaming the control without this file is what made
+ * both tests here red on d101e0b.
  */
 
 const DESKTOP_ONLY = ({ viewport }: { viewport: { width: number } | null }) =>
@@ -56,7 +63,7 @@ async function sameBand(page: Page, taskId: string, milestoneId: string) {
 }
 
 function overlapGroup(page: Page) {
-  return page.locator('.cmdbar [role="radiogroup"][aria-label="Overlapping bars"]');
+  return page.locator('.cmdbar [role="radiogroup"][aria-label="Bars on the same dates"]');
 }
 
 test.describe('overlapping bars (SRS-LAY-024)', () => {
@@ -68,20 +75,20 @@ test.describe('overlapping bars (SRS-LAY-024)', () => {
 
     const group = overlapGroup(page);
     await expect(group).toBeVisible();
-    await expect(group.getByRole('radio', { name: 'Stack' })).toHaveAttribute('aria-checked', 'true');
+    await expect(group.getByRole('radio', { name: 'Own line' })).toHaveAttribute('aria-checked', 'true');
 
     const stacked = await planDepth(page);
     expect(await sameBand(page, 'task-swarch', 'ms-swfreeze')).toBe(false);
 
-    await group.getByRole('radio', { name: 'Overlap' }).click();
-    await expect(group.getByRole('radio', { name: 'Overlap' })).toHaveAttribute('aria-checked', 'true');
+    await group.getByRole('radio', { name: 'Same line' }).click();
+    await expect(group.getByRole('radio', { name: 'Same line' })).toHaveAttribute('aria-checked', 'true');
     expect(await planDepth(page)).toBe(stacked - 4 * 36);
 
     // And the thing the setting is actually for: the milestone that was
     // pushed into a second lane now sits on its task's own band.
     expect(await sameBand(page, 'task-swarch', 'ms-swfreeze')).toBe(true);
 
-    await group.getByRole('radio', { name: 'Stack' }).click();
+    await group.getByRole('radio', { name: 'Own line' }).click();
     expect(await planDepth(page)).toBe(stacked);
   });
 
@@ -90,7 +97,7 @@ test.describe('overlapping bars (SRS-LAY-024)', () => {
     await page.locator('.cmdbar button[aria-label="Document settings"]').click();
     const stacked = await planDepth(page);
 
-    await overlapGroup(page).getByRole('radio', { name: 'Overlap' }).click();
+    await overlapGroup(page).getByRole('radio', { name: 'Same line' }).click();
     expect(await planDepth(page)).not.toBe(stacked);
 
     await page.locator('.chart-area').click({ position: { x: 400, y: 300 } });

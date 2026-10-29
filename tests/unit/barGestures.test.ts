@@ -3,7 +3,7 @@ import { createElement, useRef, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { TaskBars } from '../../src/renderer/TaskBars';
 import { Milestones } from '../../src/renderer/Milestones';
-import { Dependencies } from '../../src/renderer/Dependencies';
+import { Dependencies, DependencyHits } from '../../src/renderer/Dependencies';
 import { useChartInteractions } from '../../src/app/useChartInteractions';
 import { layoutDocument } from '../../src/layout/engine';
 import type { ChartGeometry } from '../../src/layout/geometry';
@@ -93,10 +93,15 @@ function Harness() {
   return createElement(
     'svg',
     { ref: svgRef, onMouseDown: handleSvgMouseDown },
+    // The same order ChartArea paints, which is now the same order `hitRank`
+    // ranks: the connectors' press targets under the bars, their ink over them
+    // (SRS-EDIT-077). The stack this test hands `elementsFromPoint` still puts
+    // the connector in front regardless, so the ranking is still what is being
+    // exercised — paint order is a second lock on the same door, not a
+    // replacement for it.
+    createElement(DependencyHits, { layout }),
     createElement(TaskBars, { layout, dragPreview }),
     createElement(Milestones, { layout, dragPreview }),
-    // Painted last, exactly as ChartArea paints it, because that is the whole
-    // point of SRS-EDIT-071.
     createElement(Dependencies, { layout }),
   );
 }

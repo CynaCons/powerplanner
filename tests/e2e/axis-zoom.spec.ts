@@ -137,19 +137,28 @@ test.describe('the today marker (SRS-TAX-053)', () => {
 
   test('every calendar label is still legible under the marker', async ({ page }) => {
     await ready(page);
-    // No label's box may be covered by the pill, at any scale.
+    // No label's box may be covered by the pill, at any scale. The scale
+    // control is in the bar's pinned right-hand group, addressed by its own
+    // title — `button:has-text("Day")` matched nothing, and in the gear panel
+    // "Day" is the delimiter setting, a different control entirely.
     for (const scale of ['Day', 'Week', 'Month', 'Quarter']) {
-      await page.locator(`button:has-text("${scale}")`).first().click();
+      await page.getByTitle(`Scale: ${scale}`).click();
       const overlap = await page.evaluate(() => {
         const svg = document.querySelector('.chart-area > svg') as SVGSVGElement;
         const pill = svg.querySelector('.axis-today-pill');
-        if (!pill) return 0;
+        // null, not 0: 0 would mean both "nothing overlaps" and "there is no
+        // pill", so a pill that vanished at one scale would report green.
+        if (!pill) return null;
         const p = pill.getBoundingClientRect();
         return Array.from(svg.querySelectorAll('text')).filter((t) => {
+          // Not the pill's own word, which sits inside the pill by
+          // construction and would make this count 1 at every scale.
+          if (t.classList.contains('axis-today-pill-text')) return false;
           const r = t.getBoundingClientRect();
           return r.width > 0 && r.right > p.left && r.left < p.right && r.bottom > p.top && r.top < p.bottom;
         }).length;
       });
+      expect(overlap, `${scale} scale: no today pill`).not.toBeNull();
       expect(overlap, `${scale} scale`).toEqual(0);
     }
   });
@@ -169,13 +178,48 @@ test.describe('delimiters and weekends (SRS-TAX-054, SRS-TAX-056)', () => {
   test('the granularity is the roadmap setting, not the zoom', async ({ page }) => {
     await ready(page);
     await openDocumentSettings(page);
+    const delim = (name: string) => page.locator(`[aria-label="Grid delimiters"] button:has-text("${name}")`);
 
-    await page.locator('[aria-label="Grid delimiters"] button:has-text("Month")').click();
-    const monthly = await delimiterCount(page);
-    await page.locator('[aria-label="Grid delimiters"] button:has-text("Day")').click();
-    expect(await delimiterCount(page)).toBeGreaterThan(monthly);
-    await page.locator('[aria-label="Grid delimiters"] button:has-text("None")').click();
+    // The sample opens at about 1.9 px/day, where a rule on every day boundary
+    // would be two pixels apart, so SRS-TAX-055 draws none. Assert that
+    // positively, next to a unit that IS drawable: "day is suppressed" and
+    // "delimiters are broken" must not look the same.
+    await delim('Day').click();
     expect(await delimiterCount(page)).toEqual(0);
+    await delim('Week').click();
+    expect(await delimiterCount(page)).toBeGreaterThan(2);
+
+    // Only where a day is wide enough to carry its own rule can Day-vs-Month
+    // be compared at all. Bounded, and asserted, so a zoom that never arrives
+    // fails here rather than quietly weakening what follows.
+    for (let i = 0; i < 10 && (await pxPerDay(page)) < 4; i++) {
+      await page.locator('[aria-label="Zoom in"]').click();
+    }
+    expect(await pxPerDay(page)).toBeGreaterThanOrEqual(4);
+
+    await delim('Month').click();
+    const monthly = await delimiterCount(page);
+    await delim('Day').click();
+    expect(await delimiterCount(page)).toBeGreaterThan(monthly);
+    await delim('None').click();
+    expect(await delimiterCount(page)).toEqual(0);
+  });
+
+  test('the granularity does not follow the time scale', async ({ page }) => {
+    // The literal claim of SRS-TAX-054, and the one the old test never made:
+    // the delimiter is a property of the roadmap, so changing the view must
+    // not change it. This is what would catch a regression to the
+    // zoom-derived granularity the owner rejected.
+    await ready(page);
+    await openDocumentSettings(page);
+    await page.locator('[aria-label="Grid delimiters"] button:has-text("Month")').click();
+    const atOpening = await delimiterCount(page);
+    expect(atOpening).toBeGreaterThan(0);
+
+    await page.getByTitle('Scale: Day').click();
+    expect(await delimiterCount(page)).toEqual(atOpening);
+    await page.getByTitle('Scale: Quarter').click();
+    expect(await delimiterCount(page)).toEqual(atOpening);
   });
 
   test('weekend shading can be turned off and on', async ({ page }) => {
@@ -187,14 +231,36 @@ test.describe('delimiters and weekends (SRS-TAX-054, SRS-TAX-056)', () => {
     expect(await weekendCount(page)).toEqual(0);
   });
 
-  test('both settings survive a reload through the autosave', async ({ page }) => {
+  test('both settings survive a reload through the restore offer', async ({ page }) => {
     await ready(page);
     await openDocumentSettings(page);
     await page.locator('[aria-label="Grid delimiters"] button:has-text("Qtr")').click();
     await page.locator('[aria-label="Weekend display"] button:has-text("Off")').click();
-    await page.waitForTimeout(1500); // the autosave is debounced
+    // The live toggle took, so a failure after the reload is about the round
+    // trip and not about the control.
+    expect(await weekendCount(page)).toEqual(0);
+    await page.waitForTimeout(1500); // the autosave is debounced at 800ms
+
+    // Twice, because once was never the defect. The snapshot is OFFERED on
+    // launch, not applied (SRS-PERS-020) — and the debounced write used to
+    // fire on mount with the sample, so the first reload silently replaced the
+    // backup with the sample and the second had nothing left to offer
+    // (SRS-PERS-030).
     await page.reload();
     await page.locator('.chart-area > svg').first().waitFor({ state: 'visible' });
+    await page.waitForTimeout(1500);
+    await page.reload();
+    await page.locator('.chart-area > svg').first().waitFor({ state: 'visible' });
+
+    // No `if` around this: if the banner is not there, the snapshot did not
+    // survive, and that must fail loudly rather than skip the assertions.
+    await page.getByRole('button', { name: 'Restore' }).click();
+
     expect(await weekendCount(page)).toEqual(0);
+    await openDocumentSettings(page);
+    // The settings themselves, not only their effect: a weekend count of zero
+    // is also what a low zoom produces, so the radio is the honest witness.
+    await expect(page.locator('[aria-label="Grid delimiters"] button[aria-checked="true"]')).toHaveText('Qtr');
+    await expect(page.locator('[aria-label="Weekend display"] button[aria-checked="true"]')).toHaveText('Off');
   });
 });
