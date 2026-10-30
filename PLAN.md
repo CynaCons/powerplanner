@@ -1021,7 +1021,7 @@ Four questions the prototypes must put in front of the owner, because they are v
 - With the selection's name gone from the bottom bar, do its quick actions stay in the bar or move onto the selection itself?
 - Should deadline labels and labels pinned below the last row share one new band at the foot of the chart?
 
-### v2.29.0 — The suite catches up with the release (current) (ACTIVE)
+### v2.29.0 — The suite catches up with the release (COMPLETE)
 **Goal:** The e2e suite runs green against what was shipped as v2.28.0.
 - [x] Run the full e2e suite against the shipped build [agent: claude]
 - [x] Prove the two repaired axis-zoom gates actually fail when they should [agent: claude]
@@ -1048,6 +1048,50 @@ Four questions the prototypes must put in front of the owner, because they are v
 - [x] Write the parity and feedback rows into the SRS [agent: claude]
 - [x] Drive every action through MCP as proof [agent: claude]
 - [ ] Reach snap, the overlays, the tool and the templates from the bridge
+
+### v2.31.0 — The file you save is the file you reopen (current) (ACTIVE)
+**Goal:** A saved roadmap opens again as a working app holding that plan.
+- [x] Build the saved file from cloned nodes, not string patterns [agent: claude]
+- [x] Write an empty chart root so a dead file cannot look alive [agent: claude]
+- [x] Give the page a data tag the save path can always find [agent: claude]
+- [x] Stop the in-app update corrupting the plan it writes [agent: claude]
+- [x] Make Save work from the dev server, not only the build [agent: claude]
+- [x] Remember the bound file across a reload [agent: claude]
+- [x] Ask for write permission before writing, and report a refusal [agent: claude]
+- [x] Show which file the plan is bound to, and its save state [agent: claude]
+- [x] Write the plan back to its own file as it changes [agent: claude]
+- [x] Refuse to overwrite a different file from an opened copy [agent: claude]
+- [x] Let the planner reload the plan from the file on disk [agent: claude]
+- [x] Gate the round trip: save, reopen, assert a live app [agent: claude]
+- [x] Write the persistence requirements into the SRS [agent: claude]
+
+### v2.32.0 — A side panel, and marks you can place
+**Goal:** The controls live in a side panel, and marks sit where you put them.
+- [ ] Move the command bar into a panel on the right
+- [ ] Give the panel sections that open and close
+- [ ] Keep every control inside the panel at any width
+- [ ] Fix the card rounding and the slider that escapes it
+- [ ] Keep the panel usable on a narrow window
+- [ ] Write the side-panel requirements into the SRS
+
+### v2.33.0 — Rows and marks you can place
+**Goal:** Rows move together, and a mark sits where the planner puts it.
+- [ ] Make milestone diamonds smaller
+- [ ] Let a milestone sit at a column's start, middle or end
+- [ ] Let a marker sit at a column's start, middle or end
+- [ ] Select several rows with Ctrl-click and Shift-click
+- [ ] Move or delete every selected row at once
+- [ ] Keep a new row in the section it was made in
+- [ ] Write the placement and row requirements into the SRS
+
+### v2.34.0 — Labels you can edit, and bars you can style
+**Goal:** A label renames where it sits, and a bar can be coloured and outlined.
+- [ ] Rename a task or milestone by double-clicking its own label
+- [ ] Choose the label text colour from the panel
+- [ ] Give a bar no outline, a thin one, or a dashed one
+- [ ] Choose the outline colour from the panel
+- [ ] Carry text colour and outline through save and reopen
+- [ ] Write the label and style requirements into the SRS
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition

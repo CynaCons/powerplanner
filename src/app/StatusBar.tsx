@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { useDocumentStore, useIsDirty } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
 import { useSelectionStore } from '../stores/selectionStore';
-import { getCurrentHandle } from '../persistence/fileIo';
+import { saveStateLabel, useFileStore } from '../stores/fileStore';
 import { computeDocStats } from '../utils/docStats';
 import { APP_VERSION } from '../version';
 import { Notices } from './Notices';
@@ -44,21 +44,6 @@ export function windowTitle(name: string | null, docTitle: string, dirty: boolea
   return `${dirty ? '• ' : ''}${subject} — PowerRoadmap`;
 }
 
-/**
- * The name of the bound file, read at render.
- *
- * `getCurrentHandle` is not reactive, and it does not need to be: every event
- * that changes the binding — an open, a save, a New that detaches it — also
- * writes the document store this component already subscribes to, so the read
- * happens on the render that follows. The handle's `name` is not on the
- * narrow interface `fileIo` declares for it (that interface covers only what
- * the writer calls), so it is read off the real `FileSystemFileHandle`.
- */
-function boundFileName(): string | null {
-  const handle = getCurrentHandle() as { name?: string } | null;
-  return handle?.name ?? null;
-}
-
 export function StatusBar() {
   const doc = useDocumentStore((s) => s.doc);
   const scale = useDocumentStore((s) => s.doc.calendar.scale);
@@ -78,8 +63,14 @@ export function StatusBar() {
   // read-only telemetry belongs in the status bar, not in a 320px column.
   const stats = useMemo(() => computeDocStats(doc), [doc]);
 
-  const fileName = boundFileName();
+  // The binding is a store, not a module read: `restoreBinding` lands an
+  // indeterminate time after mount with the document untouched, so a render
+  // triggered by the document would never come.
+  const fileName = useFileStore((s) => s.name);
+  const saveState = useFileStore((s) => s.state);
+  const saveDetail = useFileStore((s) => s.detail);
   const binding = fileBindingLabel(fileName, dirty);
+  const stateLabel = saveStateLabel(saveState, saveDetail);
 
   // The title is set from here because this is the one component that holds
   // both facts; it is a document-level effect either way, and duplicating the
@@ -114,6 +105,9 @@ export function StatusBar() {
           title={binding.title}
         >
           {binding.text}
+          {/* Which file, without whether the bytes got there, reads
+              reassuringly while a write is being refused (SRS-PERS-038). */}
+          {stateLabel && <span className="app-status-savestate"> · {stateLabel}</span>}
         </span>
         <span>
           scale: {scale} · {pxPerDay.toFixed(2)} px/day · {selectedCount} selected

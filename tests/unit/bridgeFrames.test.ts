@@ -96,7 +96,7 @@ describe('the bridge reassembles a fragmented message (SRS-ABR-034)', () => {
     const reader = new FrameReader();
     reader.push(clientFrame('{"a":', { fin: false, opcode: OPCODE.text }));
     const mid = reader.push(clientFrame('hb', { fin: true, opcode: OPCODE.ping }));
-    expect(mid.map((a) => a.type)).toEqual(['pong']);
+    expect(mid.map((a: { type: string }) => a.type)).toEqual(['pong']);
     expect(messages(reader.push(clientFrame('1}', { fin: true, opcode: OPCODE.continuation })))).toEqual([
       '{"a":1}',
     ]);
@@ -107,7 +107,7 @@ describe('the bridge reassembles a fragmented message (SRS-ABR-034)', () => {
     const actions = reader.push(
       Buffer.concat([clientFrame('', { opcode: OPCODE.close }), clientFrame('{"ignored":1}')]),
     );
-    expect(actions.map((a) => a.type)).toEqual(['close']);
+    expect(actions.map((a: { type: string }) => a.type)).toEqual(['close']);
   });
 
   it('drops a stray continuation instead of corrupting the next message', () => {

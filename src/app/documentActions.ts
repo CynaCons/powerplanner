@@ -1,8 +1,9 @@
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
-import { detachFile, openFile, saveAs, saveToFile, type SaveResult } from '../persistence/fileIo';
+import { detachFile, openFile, reloadFromFile, saveAs, saveToFile, type SaveResult } from '../persistence/fileIo';
 import { notify } from '../stores/noticeStore';
+import { useFileStore } from '../stores/fileStore';
 import type { GanttDocument } from '../types/document';
 
 /**
@@ -52,6 +53,9 @@ function reportSave(result: SaveResult): void {
     case 'downloaded-no-picker':
       notify(`This browser cannot save in place, so ${result.name} went to your downloads. The plan is still unsaved.`, 'warn');
       return;
+    case 'permission-denied':
+      notify(`This browser will not let the app write ${result.name}. Use Save as to choose it again.`, 'fail');
+      return;
     case 'failed':
       notify(`${result.name} could not be saved: ${result.error ?? 'the write failed'}.`, 'fail');
   }
@@ -80,6 +84,32 @@ export async function openIntoApp(): Promise<void> {
   useViewStore.getState().setDetailsOpen(false);
   useDocumentStore.getState().setDocument(result.doc);
   notify(`Opened ${result.name}.`);
+}
+
+/**
+ * Throw away what is in memory and read the bound file again.
+ *
+ * Asks first, because this is the one command whose whole purpose is to lose
+ * work — and it is reachable while an autosave may already have written some
+ * of that work to the file, so "nothing to lose" is never assumed here.
+ */
+export async function revertToFile(): Promise<void> {
+  const { name } = useFileStore.getState();
+  if (!name) {
+    notify('This plan is in no file, so there is nothing to go back to.', 'warn');
+    return;
+  }
+  if (!window.confirm(`Discard the changes on screen and reload ${name} from disk?`)) return;
+  const result = await reloadFromFile();
+  if ('error' in result) {
+    if (result.error === 'cancelled') return;
+    notify(`${name} could not be read: ${result.message ?? 'it holds no plan'}.`, 'fail');
+    return;
+  }
+  useSelectionStore.getState().clear();
+  useViewStore.getState().setDetailsOpen(false);
+  useDocumentStore.getState().setDocument(result.doc);
+  notify(`Reloaded ${result.name}.`);
 }
 
 /**

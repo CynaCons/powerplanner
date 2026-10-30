@@ -1,7 +1,16 @@
 import type { GanttDocument } from '../types/document';
 import { validateDocument } from './schema';
 import { toYaml, fromYaml } from './yaml';
-import { buildEmbeddedHtml } from './embedded';
+import { buildEmbeddedHtml, injectDocumentInto } from './embedded';
+import { bindFile, setSaveState } from '../stores/fileStore';
+import {
+  forgetHandle,
+  isHandleForThisDocument,
+  mayAutosave,
+  recallHandle,
+  rememberHandle,
+  type StoredFileHandle,
+} from './fileHandleStore';
 
 const FILE_PICKER_TYPES = [
   { description: 'PowerRoadmap', accept: { 'text/html': ['.html'] as string[] } },
@@ -18,6 +27,9 @@ interface FileSystemWritableFileStreamLike {
 }
 
 export interface FileSystemFileHandleLike {
+  /** The file's own name. Reporting `suggestedName` instead said "Saved to
+   *  plan.html" when the planner had chosen `roadmap-q3.html`. */
+  name: string;
   createWritable: () => Promise<FileSystemWritableFileStreamLike>;
   getFile: () => Promise<File>;
 }
@@ -42,13 +54,81 @@ let currentHandle: FileSystemFileHandleLike | null = null;
 /**
  * Forget the file this app is bound to (SRS-PERS-022).
  *
- * The binding is module state and outlives the document, so without this a
- * File > New roadmap left the previous plan's handle in place and the very
- * next Ctrl+S wrote the new, empty roadmap over it — no picker, no prompt,
- * and no undo, because replacing the document clears the history.
+ * The binding outlives the document, so without this a File > New roadmap
+ * left the previous plan's handle in place and the very next Ctrl+S wrote the
+ * new, empty roadmap over it — no picker, no prompt, and no undo, because
+ * replacing the document clears the history. It is forgotten on disk too, or
+ * the next reload would hand the binding straight back.
  */
 export function detachFile(): void {
   currentHandle = null;
+  bindFile(null);
+  void forgetHandle();
+}
+
+/** Bind to a file, and remember it for the next session (SRS-PERS-035). */
+function bindTo(handle: FileSystemFileHandleLike): void {
+  currentHandle = handle;
+  bindFile(handle.name);
+  void rememberHandle(handle as unknown as StoredFileHandle);
+}
+
+/**
+ * Take back the binding a previous session left (SRS-PERS-035).
+ *
+ * Returns the file's name, or null when there is nothing to take back. The
+ * write permission does NOT come back with it — that is the browser's rule —
+ * so the state says `needs-permission` until the planner's next save, which
+ * carries the gesture a prompt needs.
+ */
+export async function restoreBinding(): Promise<string | null> {
+  const handle = await recallHandle();
+  if (!handle) return null;
+  // A copy of a saved plan carries the same remembered binding, pointing at
+  // the original (SRS-PERS-036).
+  if (!isHandleForThisDocument(handle)) {
+    await forgetHandle();
+    return null;
+  }
+  currentHandle = handle as unknown as FileSystemFileHandleLike;
+  bindFile(handle.name);
+  const granted = (await handle.queryPermission?.({ mode: 'readwrite' })) === 'granted';
+  setSaveState(granted ? 'saved' : 'needs-permission');
+  return handle.name;
+}
+
+/**
+ * The bytes to write, which are NOT always this page.
+ *
+ * Built as one file, the page is the whole program and a clone of it is a
+ * working app. Under the dev server it is a stub whose only script is
+ * `/src/main.tsx`; saving that produces a file that opens to nothing, which
+ * is what a planner running the dev build would have got every time. There
+ * the built template is fetched instead — and if it is missing, the save
+ * FAILS rather than writing a file that cannot open.
+ */
+type BuiltHtml = { ok: true; html: string } | { ok: false; error: string };
+
+/**
+ * Not `/dist-template/index.html`: Vite owns every .html under its root and
+ * answers that path with its own transform of the file, dev client and all.
+ * The dev server serves the bytes verbatim here instead (vite.config.ts).
+ */
+const DEV_TEMPLATE_URL = '/__built-template';
+
+async function prepareHtml(doc: GanttDocument): Promise<BuiltHtml> {
+  const dev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true;
+  if (!dev || typeof fetch !== 'function') return { ok: true, html: buildEmbeddedHtml(doc) };
+  try {
+    const resp = await fetch(DEV_TEMPLATE_URL);
+    if (!resp.ok) throw new Error(`the template responded ${resp.status}`);
+    return { ok: true, html: injectDocumentInto(await resp.text(), doc) };
+  } catch (e) {
+    return {
+      ok: false,
+      error: `the dev server has no built app to save (${(e as Error).message}) — run npm run build:template`,
+    };
+  }
 }
 
 /**
@@ -61,7 +141,13 @@ export function detachFile(): void {
  * to be one boolean that the caller read only to gate `markSaved`, so all four
  * outcomes, failure included, looked identical on screen.
  */
-export type SaveOutcome = 'written' | 'downloaded-no-picker' | 'downloaded-cancelled' | 'failed';
+export type SaveOutcome =
+  | 'written'
+  | 'downloaded-no-picker'
+  | 'downloaded-cancelled'
+  /** The file is known and the browser refused to let us write it. */
+  | 'permission-denied'
+  | 'failed';
 export interface SaveResult {
   outcome: SaveOutcome;
   name: string;
@@ -71,39 +157,101 @@ export interface SaveResult {
 async function writeThrough(
   handle: FileSystemFileHandleLike,
   html: string,
-  name: string,
 ): Promise<SaveResult> {
+  const name = handle.name;
   try {
+    setSaveState('saving');
     const writable = await handle.createWritable();
     await writable.write(html);
     await writable.close();
-    currentHandle = handle;
+    bindTo(handle);
+    setSaveState('saved');
     return { outcome: 'written', name };
   } catch (e) {
     // Thrown, this became an unhandled rejection at a caller that neither
     // awaited nor caught — a console event and nothing on screen.
+    setSaveState('error', (e as Error).message);
     return { outcome: 'failed', name, error: (e as Error).message };
   }
 }
 
+/**
+ * Save, asking for everything that needs the planner's gesture FIRST.
+ *
+ * A picker or a permission prompt raised after an await of real work is
+ * refused with no dialog, because the transient activation has expired. The
+ * bytes are built after both, which also means Ctrl+S opens its picker on the
+ * keystroke rather than after a template fetch.
+ */
 export async function saveToFile(doc: GanttDocument, suggestedName = 'plan.html'): Promise<SaveResult> {
-  const html = buildEmbeddedHtml(doc);
-  const picked = currentHandle ? { handle: currentHandle, why: null as null | SaveOutcome } : await pickSaveHandle(suggestedName);
-  if (!picked.handle) {
-    downloadFile(suggestedName, html, 'text/html');
-    return { outcome: picked.why ?? 'downloaded-no-picker', name: suggestedName };
+  let handle = currentHandle;
+  let why: SaveOutcome | null = null;
+  if (handle) {
+    if (!(await verifyWritePermission(handle))) {
+      setSaveState('needs-permission');
+      return { outcome: 'permission-denied', name: handle.name };
+    }
+  } else {
+    const picked = await pickSaveHandle(suggestedName);
+    handle = picked.handle;
+    why = picked.why;
   }
-  return writeThrough(picked.handle, html, suggestedName);
+  return finishSave(doc, handle, why, suggestedName);
 }
 
 export async function saveAs(doc: GanttDocument, suggestedName = 'plan.html'): Promise<SaveResult> {
-  const html = buildEmbeddedHtml(doc);
   const picked = await pickSaveHandle(suggestedName);
-  if (!picked.handle) {
-    downloadFile(suggestedName, html, 'text/html');
-    return { outcome: picked.why ?? 'downloaded-no-picker', name: suggestedName };
+  return finishSave(doc, picked.handle, picked.why, suggestedName);
+}
+
+/**
+ * Keep the bound file level with the screen (SRS-PERS-037).
+ *
+ * Only where permission is ALREADY granted. `requestPermission` needs a
+ * gesture a timer cannot produce, so asking here would be refused silently
+ * and the planner would be told nothing; instead the state turns to
+ * `needs-permission` and their next Ctrl+S carries the gesture that asks.
+ */
+export async function autosaveToFile(doc: GanttDocument): Promise<boolean> {
+  const handle = currentHandle;
+  if (!handle) return false;
+  const perm = handle as unknown as { queryPermission?: (d: { mode: string }) => Promise<PermissionState> };
+  let permission: PermissionState | 'unknown' = 'unknown';
+  try {
+    permission = (await perm.queryPermission?.({ mode: 'readwrite' })) ?? 'unknown';
+  } catch {
+    permission = 'unknown';
   }
-  return writeThrough(picked.handle, html, suggestedName);
+  if (!mayAutosave(handle, permission)) {
+    // A handle for another file is not a permission problem, and saying so
+    // would send the planner to a prompt that would not help.
+    if (isHandleForThisDocument(handle)) setSaveState('needs-permission');
+    return false;
+  }
+  const built = await prepareHtml(doc);
+  if (!built.ok) {
+    setSaveState('error', built.error);
+    return false;
+  }
+  return (await writeThrough(handle, built.html)).outcome === 'written';
+}
+
+async function finishSave(
+  doc: GanttDocument,
+  handle: FileSystemFileHandleLike | null,
+  why: SaveOutcome | null,
+  suggestedName: string,
+): Promise<SaveResult> {
+  const built = await prepareHtml(doc);
+  if (!built.ok) {
+    setSaveState('error', built.error);
+    return { outcome: 'failed', name: suggestedName, error: built.error };
+  }
+  if (!handle) {
+    downloadFile(suggestedName, built.html, 'text/html');
+    return { outcome: why ?? 'downloaded-no-picker', name: suggestedName };
+  }
+  return writeThrough(handle, built.html);
 }
 
 /** The handle, and — when there is none — WHY there is none. */
@@ -218,7 +366,7 @@ export async function openFile(): Promise<OpenResult> {
     const result = readInto(file.name, await file.text());
     // Bind ONLY a file that turned out to hold a roadmap: binding one that did
     // not would make the next save overwrite it.
-    if ('doc' in result) currentHandle = handle;
+    if ('doc' in result) bindTo(handle);
     return result;
   }
   return new Promise<OpenResult>((resolve) => {
@@ -228,10 +376,30 @@ export async function openFile(): Promise<OpenResult> {
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return resolve({ error: 'cancelled' });
+      // A file input yields no handle, so there is nothing to write back to.
+      // Leaving the previous binding in place would send the next save to a
+      // file the planner is no longer looking at.
+      detachFile();
       resolve(readInto(file.name, await file.text()));
     };
     input.click();
   });
+}
+
+/**
+ * Read the bound file again, discarding what is in memory (SRS-PERS-039).
+ *
+ * The counterpart to an autosave that writes continuously: once the app can
+ * change the file under you, there has to be a way back to what is on disk.
+ */
+export async function reloadFromFile(): Promise<OpenResult> {
+  if (!currentHandle) return { error: 'cancelled' };
+  try {
+    const file = await currentHandle.getFile();
+    return readInto(file.name, await file.text());
+  } catch (e) {
+    return { error: 'not-a-roadmap', name: currentHandle.name, message: (e as Error).message };
+  }
 }
 
 export function parseFileContents(name: string, text: string): GanttDocument {

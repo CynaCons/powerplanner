@@ -7,6 +7,12 @@
     <meta name="theme-color" content="#fafbfc" />
     <title>PowerRoadmap — Gantt charts you can actually present</title>
     <meta name="description" content="Calendar-true, directly-editable Gantt charts. Single file, offline, no install." />
+    <!--
+      The plan lives here. It ships empty, and the save path addresses this tag
+      by id rather than looking for a place to put one — every textual anchor
+      it used to search for also occurs inside the bundled app's own source.
+    -->
+    <script type="application/json" id="powerplanner-data"></script>
   </head>
   <body>
     <div id="root"></div>

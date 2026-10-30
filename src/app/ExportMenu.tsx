@@ -8,9 +8,9 @@ function reportExport(r: ExportResult): void {
   if (r.ok) notify(`Exported ${r.name} to your downloads.`);
   else notify(`Export failed: ${r.error}.`, 'fail');
 }
-import { openIntoApp, saveCurrent, saveCurrentAs } from './documentActions';
+import { openIntoApp, revertToFile, saveCurrent, saveCurrentAs } from './documentActions';
 import { shortcutFor } from './keymap';
-import { ChevronDown, Download, Save, FolderOpen, FilePlus2 } from 'lucide-react';
+import { ChevronDown, Download, FilePlus2, FolderOpen, RotateCcw, Save } from 'lucide-react';
 import { useViewStore } from '../stores/viewStore';
 
 export function ExportMenu() {
@@ -40,6 +40,11 @@ export function ExportMenu() {
   const onOpen = async () => {
     setOpen(false);
     await openIntoApp();
+  };
+
+  const onRevert = async () => {
+    setOpen(false);
+    await revertToFile();
   };
 
   const onNew = () => {
@@ -73,6 +78,9 @@ export function ExportMenu() {
           <MenuItem icon={<Save size={14} />} label={`Save (${shortcutFor('save')})`} onClick={onSave} />
           <MenuItem icon={<Save size={14} />} label="Save as…" onClick={onSaveAs} />
           <MenuItem icon={<FolderOpen size={14} />} label="Open file…" onClick={onOpen} />
+          {/* The counterpart to a save that now happens on its own
+              (SRS-PERS-039): a way back to what is on disk. */}
+          <MenuItem icon={<RotateCcw size={14} />} label="Reload from file" onClick={onRevert} />
           <Divider />
           <MenuItem icon={<Download size={14} />} label="Export JSON" onClick={() => { reportExport(exportJson(doc)); setOpen(false); }} />
           <MenuItem icon={<Download size={14} />} label="Export YAML" onClick={() => { reportExport(exportYaml(doc)); setOpen(false); }} />

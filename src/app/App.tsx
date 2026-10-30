@@ -12,6 +12,7 @@ import { DetailsDialog } from './DetailsDialog';
 import { useDocumentStore } from '../stores/documentStore';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { readEmbeddedDocument } from '../persistence/embedded';
+import { autosaveToFile, restoreBinding } from '../persistence/fileIo';
 import { loadAutosave, saveAutosave, clearAutosave, shouldAutosave } from '../persistence/autosave';
 import { notify } from '../stores/noticeStore';
 import type { GanttDocument } from '../types/document';
@@ -37,6 +38,10 @@ export function App({ compact = false }: AppProps) {
   useEffect(() => {
     if (didHydrate.current) return;
     didHydrate.current = true;
+    // Take back the file a previous session was bound to. This is async and
+    // lands after mount, which is why the binding is a store rather than a
+    // module variable the footer reads at render (SRS-PERS-035).
+    void restoreBinding();
     const embedded = readEmbeddedDocument();
     if (embedded) {
       setDocument(embedded);
@@ -47,6 +52,23 @@ export function App({ compact = false }: AppProps) {
       setPendingRestore(auto);
     }
   }, [setDocument]);
+
+  // Write the plan back to its own file, where the browser has already said
+  // we may (SRS-PERS-037). Never prompts: a permission dialog needs a gesture
+  // this timer does not have, so an unpermitted file just stays stale and the
+  // footer says so.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const before = useDocumentStore.getState().revision;
+      void autosaveToFile(doc).then((written) => {
+        // Clean only if nothing was edited while the write was in flight.
+        if (written && useDocumentStore.getState().revision === before) {
+          useDocumentStore.getState().markSaved();
+        }
+      });
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [doc]);
 
   // Autosave debounced
   useEffect(() => {
