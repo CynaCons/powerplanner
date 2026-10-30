@@ -1,6 +1,5 @@
-import { useState } from 'react';
 import {
-  MousePointer2, Plus, Diamond, Hand, BoxSelect,
+  MousePointer2, Plus, Diamond, Hand, BoxSelect, ChevronDown,
   ZoomIn, ZoomOut, Maximize2, Settings2, Rows3, Flag, Brackets as BracketIcon,
 } from 'lucide-react';
 import { useToolStore, type Tool } from '../stores/toolStore';
@@ -16,23 +15,29 @@ import { todayISO, addDays } from '../utils/dates';
 import type { TimeScale, ThemeName } from '../types/document';
 import { gridDelimiterOf, weekendDisplayOf, type GridDelimiter, type WeekendDisplay } from '../types/document';
 import type { DocOp } from '../stores/docOps';
+import { usePanelStore, type SectionId } from '../stores/panelStore';
 
 /**
- * The contextual command bar (PLAN.md Phase 16 / v2.13.1).
+ * The side panel (SRS-LAY-030, SRS-LAY-031).
  *
- * Replaces the tool palette. Mirrors the native add-in's R8 anatomy
- * (`docs/onslide-experience-spec.md`): the **left group swaps with the
- * selection**, the **right group is always the global one**. The right group
- * never moving is what makes a contextual bar learnable rather than jumpy.
+ * It was a floating horizontal bar across the bottom of the chart, and it had
+ * run out of room: measured at 1440x900 with one task selected, its content
+ * was 1210px wide inside 986px, so the whole right-hand group — scale, zoom,
+ * fit — sat outside it, and the px/day readout overhung its own rounded edge
+ * by 99px. Owner report 2026-10-30: "I'm clicking on a task and it's like
+ * it's too much. It doesn't fit. The rounding is not good. The sliding bar
+ * escapes from the actual card."
  *
- * Decisions taken from the interactive prototype
- * (`docs/mockup/web-command-bar-mockup.html`, user 2026-08-07):
- *  - floating dock, hovering over the chart
- *  - tools shown only when nothing is selected
- *  - a gear opens a document context, clearing the selection
+ * Horizontal was the constraint: a strip grows only sideways, and the
+ * selection content grows with what is selected. So it is a column on the
+ * right now, in the manner of Excalidraw's panel — sections that open and
+ * close, each as tall as it needs to be, the whole thing scrolling when the
+ * window is short.
  *
- * C1 builds the shell and the document context. Per-selection editing contents
- * land in C2; until then the left group names what is selected.
+ * The sections also end a mode switch. Tools, selection and document settings
+ * used to take turns in one strip, which is why the gear had to clear the
+ * selection to take its place; they coexist now, and what is open is the
+ * planner's choice and persists (`stores/panelStore`).
  */
 
 const TOOLS: Array<{ id: Tool; label: string; icon: typeof MousePointer2; shortcut: string }> = [
@@ -59,8 +64,6 @@ const THEMES: { id: ThemeName; label: string }[] = [
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function CommandBar() {
-  const [docContext, setDocContext] = useState(false);
-
   const activeTool = useToolStore((s) => s.activeTool);
   const setTool = useToolStore((s) => s.setTool);
   const scale = useDocumentStore((s) => s.doc.calendar.scale);
@@ -70,7 +73,6 @@ export function CommandBar() {
   const fit = useViewportStore((s) => s.fit);
   const doc = useDocumentStore((s) => s.doc);
   const selection = useSelectionStore((s) => s.items);
-  const clearSelection = useSelectionStore((s) => s.clear);
 
   const setSelection = useSelectionStore((s) => s.setSelection);
   const reveal = useViewportStore((s) => s.reveal);
@@ -88,18 +90,6 @@ export function CommandBar() {
     const totalWidth = document.querySelector('.chart-area')?.clientWidth ?? 800;
     fit(min, max, Math.max(100, totalWidth - (totalWidth < 600 ? 120 : 200)));
   };
-
-  /** The gear clears the selection: a document context and a selected item
-   *  cannot both own the left side of the bar. */
-  const toggleDocContext = () => {
-    const next = !docContext;
-    setDocContext(next);
-    if (next) clearSelection();
-  };
-
-  // Selecting anything leaves the document context — the bar follows the
-  // user's attention rather than trapping them in a mode.
-  if (docContext && selection.length > 0) setDocContext(false);
 
 
   /**
@@ -122,7 +112,7 @@ export function CommandBar() {
   };
 
   return (
-    <div className="cmdbar" role="toolbar" aria-label="Command bar">
+    <aside className="cmdbar" role="toolbar" aria-label="Command bar">
       {/*
         What is armed, said out loud (SRS-EDIT-027).
 
@@ -136,122 +126,130 @@ export function CommandBar() {
           <span className="cmdbar__armed-esc">Esc</span>
         </span>
       )}
-      {docContext ? (
-        <DocumentGroup />
-      ) : selection.length > 0 ? (
-        <SelectionGroup />
-      ) : (
-          <Group>
-            {TOOLS.map((t) => {
-              const Icon = t.icon;
-              return (
-                <BarButton
-                  key={t.id}
-                  active={activeTool === t.id}
-                  // No explicit stickiness: the store decides, so a marquee
-                  // cannot become a mode while pan still can (SRS-EDIT-026).
-                  onClick={() => setTool(t.id)}
-                  title={`${t.label} (${t.shortcut})`}
-                >
-                  <Icon size={15} strokeWidth={1.75} />
-                </BarButton>
-              );
-            })}
-          </Group>
+
+      <Section id="tools" label="Tools">
+        <div className="cmdbar__group">
+          {TOOLS.map((t) => {
+            const Icon = t.icon;
+            return (
+              <BarButton
+                key={t.id}
+                active={activeTool === t.id}
+                // No explicit stickiness: the store decides, so a marquee
+                // cannot become a mode while pan still can (SRS-EDIT-026).
+                onClick={() => setTool(t.id)}
+                title={`${t.label} (${t.shortcut})`}
+              >
+                <Icon size={15} strokeWidth={1.75} />
+              </BarButton>
+            );
+          })}
+        </div>
+      </Section>
+
+      {/* Only what is selected is contextual now. The section appears with
+          the selection and takes the height its contents need, which is what
+          the horizontal strip could not do. */}
+      {selection.length > 0 && (
+        <Section id="selection" label="Selection">
+          <SelectionGroup />
+        </Section>
       )}
 
       {/* Insert stays reachable with something selected (SRS-EDIT-028): the
           planner inserts next to what they are looking at, and having to
           deselect first is what sent every insert to row zero. */}
-      {!docContext && (
-          <Group label="Insert">
-            <BarButton onClick={() => addRow({ id: newId('row'), label: `Row ${doc.rows.length + 1}`, groupId: null })} title="Add row">
-              <Rows3 size={14} strokeWidth={1.75} /><span>Row</span>
-            </BarButton>
-            <BarButton
-              disabled={doc.rows.length === 0}
-              onClick={() => {
-                const rowId = insertRowId();
-                if (!rowId) return;
-                const today = todayISO();
-                const id = newId('task');
-                addTask({ id, rowId, label: 'New task', start: today, end: addDays(today, 7), percentComplete: 0 });
-                landOn(rowId, { kind: 'task', id });
-              }}
-              title="Add task (T)"
-            >
-              <Plus size={14} strokeWidth={1.75} /><span>Task</span>
-            </BarButton>
-            <BarButton
-              disabled={doc.rows.length === 0}
-              onClick={() => {
-                const rowId = insertRowId();
-                if (!rowId) return;
-                const id = newId('ms');
-                addMilestone({ id, rowId, label: 'New milestone', date: todayISO() });
-                landOn(rowId, { kind: 'milestone', id });
-              }}
-              title="Add milestone (Y)"
-            >
-              <Diamond size={14} strokeWidth={1.75} /><span>Milestone</span>
-            </BarButton>
-            <BarButton
-              onClick={() => addMarker({ id: newId('mk'), type: 'deadline', label: 'Deadline', date: todayISO() })}
-              title="Add deadline marker"
-            >
-              <Flag size={14} strokeWidth={1.75} /><span>Marker</span>
-            </BarButton>
-            <BarButton
-              onClick={() => {
-                const span = bracketSpanFor(doc, selection);
-                addBracket({ id: newId('br'), label: 'Phase', ...span });
-              }}
-              title="Add bracket over the selection"
-            >
-              <BracketIcon size={14} strokeWidth={1.75} /><span>Bracket</span>
-            </BarButton>
-          </Group>
-      )}
-
-      {/* Global group — pinned. Never moves as the selection changes. */}
-      <div className="cmdbar__group cmdbar__group--right">
-        <span className="cmdbar__group-label">Scale</span>
-        <div className="cmdbar__scale">
-          {SCALES.map((s) => (
-            <button
-              key={s}
-              className={scale === s ? 'is-active' : ''}
-              onClick={() => setScale(s)}
-              aria-pressed={scale === s}
-              title={`Scale: ${s[0].toUpperCase() + s.slice(1)}`}
-            >
-              {SCALE_LABEL[s]}
-            </button>
-          ))}
+      <Section id="insert" label="Insert">
+        <div className="cmdbar__group cmdbar__group--wrap">
+          <BarButton onClick={() => addRow({ id: newId('row'), label: `Row ${doc.rows.length + 1}`, groupId: null })} title="Add row">
+            <Rows3 size={14} strokeWidth={1.75} /><span>Row</span>
+          </BarButton>
+          <BarButton
+            disabled={doc.rows.length === 0}
+            onClick={() => {
+              const rowId = insertRowId();
+              if (!rowId) return;
+              const today = todayISO();
+              const id = newId('task');
+              addTask({ id, rowId, label: 'New task', start: today, end: addDays(today, 7), percentComplete: 0 });
+              landOn(rowId, { kind: 'task', id });
+            }}
+            title="Add task (T)"
+          >
+            <Plus size={14} strokeWidth={1.75} /><span>Task</span>
+          </BarButton>
+          <BarButton
+            disabled={doc.rows.length === 0}
+            onClick={() => {
+              const rowId = insertRowId();
+              if (!rowId) return;
+              const id = newId('ms');
+              addMilestone({ id, rowId, label: 'New milestone', date: todayISO() });
+              landOn(rowId, { kind: 'milestone', id });
+            }}
+            title="Add milestone (Y)"
+          >
+            <Diamond size={14} strokeWidth={1.75} /><span>Milestone</span>
+          </BarButton>
+          <BarButton
+            onClick={() => addMarker({ id: newId('mk'), type: 'deadline', label: 'Deadline', date: todayISO() })}
+            title="Add deadline marker"
+          >
+            <Flag size={14} strokeWidth={1.75} /><span>Marker</span>
+          </BarButton>
+          <BarButton
+            onClick={() => {
+              const span = bracketSpanFor(doc, selection);
+              addBracket({ id: newId('br'), label: 'Phase', ...span });
+            }}
+            title="Add bracket over the selection"
+          >
+            <BracketIcon size={14} strokeWidth={1.75} /><span>Bracket</span>
+          </BarButton>
         </div>
-        <BarButton onClick={() => zoom(0.8)} title="Zoom out (−)" ariaLabel="Zoom out">
-          <ZoomOut size={15} strokeWidth={1.75} />
-        </BarButton>
-        <span className="cmdbar__zoom" title="Pixels per day">
-          {pxPerDay >= 1 ? `${pxPerDay.toFixed(1)}px/d` : `${(1 / pxPerDay).toFixed(0)}d/px`}
-        </span>
-        <BarButton onClick={() => zoom(1.25)} title="Zoom in (+)" ariaLabel="Zoom in">
-          <ZoomIn size={15} strokeWidth={1.75} />
-        </BarButton>
-        <BarButton onClick={onFit} title="Fit to data (Home)" ariaLabel="Fit">
-          <Maximize2 size={15} strokeWidth={1.75} />
-        </BarButton>
-        <BarButton
-          active={docContext}
-          onClick={toggleDocContext}
-          title={docContext ? 'Close document settings' : 'Document settings — clears the selection'}
-          ariaLabel="Document settings"
-        >
-          <Settings2 size={15} strokeWidth={1.75} />
-        </BarButton>
-      </div>
+      </Section>
 
-    </div>
+      <Section id="view" label="View">
+        <div className="cmdbar__field">
+          <span className="cmdbar__field-label">Scale</span>
+          <div className="cmdbar__scale">
+            {SCALES.map((s) => (
+              <button
+                key={s}
+                className={scale === s ? 'is-active' : ''}
+                onClick={() => setScale(s)}
+                aria-pressed={scale === s}
+                title={`Scale: ${s[0].toUpperCase() + s.slice(1)}`}
+              >
+                {SCALE_LABEL[s]}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="cmdbar__group">
+          <BarButton onClick={() => zoom(0.8)} title="Zoom out (−)" ariaLabel="Zoom out">
+            <ZoomOut size={15} strokeWidth={1.75} />
+          </BarButton>
+          {/* Inside the panel, not overhanging it: this readout used to sit
+              99px past the bar's own right edge. */}
+          <span className="cmdbar__zoom" title="Pixels per day">
+            {pxPerDay >= 1 ? `${pxPerDay.toFixed(1)}px/d` : `${(1 / pxPerDay).toFixed(0)}d/px`}
+          </span>
+          <BarButton onClick={() => zoom(1.25)} title="Zoom in (+)" ariaLabel="Zoom in">
+            <ZoomIn size={15} strokeWidth={1.75} />
+          </BarButton>
+          <BarButton onClick={onFit} title="Fit to data (Home)" ariaLabel="Fit">
+            <Maximize2 size={15} strokeWidth={1.75} />
+          </BarButton>
+        </div>
+      </Section>
+
+      {/* The gear is this section's own header now. It no longer clears the
+          selection, because it no longer takes anything's place. */}
+      <Section id="document" label="Document" ariaLabel="Document settings" icon={Settings2}>
+        <DocumentGroup />
+      </Section>
+    </aside>
   );
 }
 
@@ -462,6 +460,47 @@ const FULL_DOW: Record<number, string> = {
   5: 'Friday',
   6: 'Saturday',
 };
+
+/**
+ * One section of the panel: a header that opens and closes it, and its body.
+ *
+ * The header is a real button with `aria-expanded`, so the state is readable
+ * rather than implied by a chevron. The body is unmounted when closed, not
+ * hidden — a closed section must not hold focusable controls.
+ */
+function Section({
+  id,
+  label,
+  ariaLabel,
+  icon: Icon,
+  children,
+}: {
+  id: SectionId;
+  label: string;
+  ariaLabel?: string;
+  icon?: typeof Settings2;
+  children: React.ReactNode;
+}) {
+  const open = usePanelStore((s) => s.open[id]);
+  const toggle = usePanelStore((s) => s.toggle);
+  return (
+    <section className={`cmdbar__section ${open ? 'is-open' : ''}`} data-pp-section={id}>
+      <button
+        type="button"
+        className="cmdbar__section-head"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        title={ariaLabel ?? `${open ? 'Hide' : 'Show'} ${label.toLowerCase()}`}
+        onClick={() => toggle(id)}
+      >
+        <ChevronDown size={12} strokeWidth={2.25} className="cmdbar__chev" aria-hidden="true" />
+        <span className="cmdbar__section-name">{label}</span>
+        {Icon && <Icon size={13} strokeWidth={1.75} className="cmdbar__section-icon" aria-hidden="true" />}
+      </button>
+      {open && <div className="cmdbar__section-body">{children}</div>}
+    </section>
+  );
+}
 
 function Group({ label, children }: { label?: string; children: React.ReactNode }) {
   return (

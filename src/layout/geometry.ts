@@ -119,8 +119,28 @@ export function carriedY(
  * Higher wins. The order is by how small and how deliberate the target is, not
  * by where it sits in the tree.
  */
-export function hitRank(kind: string | undefined, sub: string | undefined): number {
+export function hitRank(
+  kind: string | undefined,
+  sub: string | undefined,
+  /**
+   * Whether this grip is actually drawn (SRS-EDIT-079). A bar's resize grips and progress
+   * handle are hit-testable at every zoom, but only *visible* on a selected
+   * or hovered bar — so an invisible 10px rect straddling each bar end was
+   * taking presses aimed at whatever crossed it, and showing an `ew-resize`
+   * cursor over a connector it would not resize. Measured 2026-10-30: a
+   * press on a visible connector at 1.44 px/day resolved to
+   * `task-sysarch sub=end`, rank 60 against the connector's 10, with nothing
+   * but the connector in `elementsFromPoint` before the press.
+   *
+   * Undrawn, a grip still wins when it is the only thing under the pointer —
+   * approaching a bar's end from outside still begins a resize — but it no
+   * longer outranks ink the planner can see.
+   */
+  live?: string | undefined,
+): number {
   if (!kind) return 0;
+  const grip = kind === 'task' && (sub === 'start' || sub === 'end' || sub === 'progress');
+  if (grip && live !== '1') return 8;
   if (kind === 'task' && (sub === 'start' || sub === 'end')) return 60;
   if (kind === 'task' && sub === 'progress') return 50;
   if (kind === 'connector') return 40;
@@ -148,7 +168,7 @@ export function resolveHit(stack: Element[], fallback: Element | null): HTMLElem
   for (const el of stack) {
     const owner = el.closest('[data-pp-kind]') as HTMLElement | null;
     if (!owner) continue;
-    const rank = hitRank(owner.dataset.ppKind, owner.dataset.ppSub);
+    const rank = hitRank(owner.dataset.ppKind, owner.dataset.ppSub, owner.dataset.ppLive);
     // Strictly greater, so a tie keeps the topmost — the stack is ordered front
     // to back, and between two equals the one on top is the one being pointed at.
     if (rank > bestRank) {

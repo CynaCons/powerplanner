@@ -35,6 +35,7 @@
   /* Geometry */
   --header-h: 48px;
   --status-h: 26px;
+  --panel-w: 288px;
   --tool-palette-h: 56px;
   /* The width before the chart has measured its own names; ChartArea
      overwrites this with the real number on every layout pass (SRS-LAY-050). */
@@ -275,22 +276,40 @@ kbd {
 .app-shell {
   display: grid;
   grid-template-rows: var(--header-h) 1fr var(--status-h);
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr var(--panel-w);
   grid-template-areas:
-    'header'
-    'chart'
-    'status';
+    'header header'
+    'chart  panel'
+    'status status';
   height: 100vh;
   width: 100vw;
   background: var(--color-bg);
   position: relative;
 }
 
+/* A narrow window has no 288px to spare sideways, so the panel takes the
+   bottom instead — still sectioned, still scrolling, never overlapping the
+   chart the way the floating bar did (SRS-LAY-032). */
+@media (max-width: 1000px) {
+  .app-shell {
+    grid-template-rows: var(--header-h) 1fr auto var(--status-h);
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'header'
+      'chart'
+      'panel'
+      'status';
+  }
+}
+
+/* The Office task pane is narrower than any browser window; it stacks. */
 .app-shell--compact {
+  grid-template-rows: var(--header-h) 1fr auto var(--status-h);
   grid-template-columns: 1fr;
   grid-template-areas:
     'header'
     'chart'
+    'panel'
     'status';
   height: 100%;
   width: 100%;
@@ -415,51 +434,119 @@ kbd {
 }
 
 /* ------------------------------------------------------------------
-   Command bar (PLAN.md Phase 16 / v2.13.1)
+   The side panel (SRS-LAY-030..032)
 
-   Replaces the tool palette. FLOATING dock, chosen from the prototype:
-   the bar hovers over the chart rather than taking a grid row, so the
-   chart keeps the full height. The known cost is that it covers the
-   bottom of the chart — mitigated by .chart-area scroll padding below,
-   so the last row can always be scrolled clear of it.
+   Was a floating pill across the bottom of the chart. Measured at
+   1440x900 with one task selected, its contents were 1210px wide inside
+   986px: the whole right-hand group hung outside it and the px/day
+   readout overhung the rounded edge by 99px. A strip only grows
+   sideways, and selection content grows with the selection, so the
+   direction was the defect. It is a column on the right now, and
+   nothing in it may leave it — hence `min-width: 0` on every track that
+   holds a row of controls, and no horizontal scroll anywhere.
    ------------------------------------------------------------------ */
 .cmdbar {
-  position: absolute;
-  /* Centred on the chart, which is now the whole shell. */
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(var(--status-h) + 10px);
-  z-index: 20;
+  grid-area: panel;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px;
+  background: var(--color-bg-panel);
+  border-left: 1px solid var(--color-border);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+@media (max-width: 1000px) {
+  .cmdbar {
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
+    max-height: 34vh;
+  }
+}
+.app-shell--compact .cmdbar {
+  border-left: 0;
+  border-top: 1px solid var(--color-border);
+  max-height: 46vh;
+}
+
+.cmdbar__section {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius);
+  min-width: 0;
+  /* The rounding was being cut by content that overflowed it. Nothing
+     escapes a card that clips. */
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.cmdbar__section-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  max-width: calc(100% - 24px);
-  height: 42px;
-  padding: 0 8px;
-  background: var(--color-bg-panel);
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  box-shadow: var(--shadow-3);
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  background: transparent;
+  border: 0;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.cmdbar__section-head:hover { background: var(--color-bg-subtle); color: var(--color-text-soft); }
+.cmdbar__section-head:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.cmdbar__section-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cmdbar__section-icon { flex-shrink: 0; color: var(--color-text-dim); }
+.cmdbar__chev {
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+.cmdbar__section.is-open > .cmdbar__section-head .cmdbar__chev { transform: none; }
+
+.cmdbar__section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 9px 9px;
 }
 
 .cmdbar__group {
   display: flex;
   align-items: center;
   gap: 3px;
-  flex-shrink: 0;
-  padding-right: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
-.cmdbar__group + .cmdbar__group,
-.cmdbar__group--right {
-  border-left: 1px solid var(--color-border-hairline);
-  padding-left: 8px;
+/* Inside a section the separator is a rule between stacked rows, not a
+   divider between side-by-side groups. */
+.cmdbar__section-body > .cmdbar__group + .cmdbar__group,
+.cmdbar__section-body > .cmdbar__group + .cmdbar__field,
+.cmdbar__section-body > .cmdbar__field + .cmdbar__group {
+  border-top: 1px solid var(--color-border-hairline);
+  padding-top: 6px;
 }
-/* The global group is pinned right and never wraps — it must not move as
-   the selection changes, or the bar becomes unlearnable. */
-.cmdbar__group--right { margin-left: auto; flex-shrink: 0; }
+.cmdbar__group--right { margin-left: 0; }
+
+/* A label and its control on one line, the label giving way first. */
+.cmdbar__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
 
 .cmdbar__group-label {
   font-size: 8.5px;
@@ -501,6 +588,8 @@ kbd {
   padding: 2px;
   background: var(--color-bg-subtle);
   border-radius: var(--radius);
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .cmdbar__scale button {
   padding: 3px 7px;
@@ -527,7 +616,8 @@ kbd {
   font-size: 10.5px;
   color: var(--color-text-soft);
   font-variant-numeric: tabular-nums;
-  min-width: 46px;
+  flex: 1;
+  min-width: 0;
   text-align: center;
   white-space: nowrap;
 }
@@ -536,7 +626,8 @@ kbd {
   font-size: 11.5px;
   font-weight: 600;
   white-space: nowrap;
-  max-width: 180px;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }

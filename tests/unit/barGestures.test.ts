@@ -172,8 +172,13 @@ describe('resizing a selected bar (SRS-EDIT-070, SRS-EDIT-071)', () => {
   });
 
   it('a dependency painted over the grip does not steal the press', () => {
+    // Select it, which this describe always claimed and never did. A grip is
+    // only DRAWN on a selected or hovered bar, and since SRS-EDIT-079 an
+    // undrawn one no longer outranks ink the planner can see — so without
+    // this the test was asserting the grip wins while rendering none.
+    act(() => useSelectionStore.getState().setSelection([{ kind: 'task', id: 't1' }]));
     const bar = layoutNow().tasks[0];
-    const grip = q('[data-pp-kind="task"][data-pp-sub="end"]');
+    const grip = q('[data-pp-kind="task"][data-pp-sub="end"][data-pp-live="1"]');
     const depHit = q('path[data-pp-kind="dependency"]');
 
     // What the browser hands the gesture when a connector crosses a bar end:
@@ -188,6 +193,31 @@ describe('resizing a selected bar (SRS-EDIT-070, SRS-EDIT-071)', () => {
     expect(task('t1').end).toBe('2026-06-19');
     // And the gesture did not select the connector on the way past.
     expect(useSelectionStore.getState().items.some((i) => i.kind === 'dependency')).toBe(false);
+  });
+
+  /**
+   * SRS-EDIT-079 — the other half, which is what the owner actually hit.
+   *
+   * Nothing is selected and the pointer is not on the bar, so no grip is
+   * drawn; the connector is the only thing visible at that point. It must be
+   * what the press lands on, or a connector crossing any bar end cannot be
+   * picked at all — measured at 1.44 px/day, where the chart is narrow enough
+   * for the crossing to fall on the connector's clear stretch.
+   */
+  it('an undrawn grip leaves the press to the connector it crosses', () => {
+    const bar = layoutNow().tasks[0];
+    const grip = q('[data-pp-kind="task"][data-pp-sub="end"]');
+    expect(grip.getAttribute('data-pp-live'), 'nothing is selected, so nothing is drawn').toBeNull();
+    const depHit = q('path[data-pp-kind="dependency"]');
+    (document as unknown as { elementsFromPoint: (x: number, y: number) => Element[] }).elementsFromPoint =
+      () => [depHit, grip];
+
+    const endBefore = task('t1').end;
+    press(depHit, bar.x + bar.width, bar.y + bar.height / 2);
+    release(bar.x + bar.width, bar.y + bar.height / 2);
+
+    expect(useSelectionStore.getState().items.some((i) => i.kind === 'dependency')).toBe(true);
+    expect(task('t1').end, 'the bar was not resized by a grip nobody can see').toBe(endBefore);
   });
 });
 

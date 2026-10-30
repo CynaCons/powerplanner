@@ -1049,7 +1049,7 @@ Four questions the prototypes must put in front of the owner, because they are v
 - [x] Drive every action through MCP as proof [agent: claude]
 - [ ] Reach snap, the overlays, the tool and the templates from the bridge
 
-### v2.31.0 — The file you save is the file you reopen (current) (ACTIVE)
+### v2.31.0 — The file you save is the file you reopen (COMPLETE)
 **Goal:** A saved roadmap opens again as a working app holding that plan.
 - [x] Build the saved file from cloned nodes, not string patterns [agent: claude]
 - [x] Write an empty chart root so a dead file cannot look alive [agent: claude]
@@ -1065,14 +1065,14 @@ Four questions the prototypes must put in front of the owner, because they are v
 - [x] Gate the round trip: save, reopen, assert a live app [agent: claude]
 - [x] Write the persistence requirements into the SRS [agent: claude]
 
-### v2.32.0 — A side panel, and marks you can place
+### v2.32.0 — A side panel, and marks you can place (current) (ACTIVE)
 **Goal:** The controls live in a side panel, and marks sit where you put them.
-- [ ] Move the command bar into a panel on the right
-- [ ] Give the panel sections that open and close
-- [ ] Keep every control inside the panel at any width
-- [ ] Fix the card rounding and the slider that escapes it
-- [ ] Keep the panel usable on a narrow window
-- [ ] Write the side-panel requirements into the SRS
+- [x] Move the command bar into a panel on the right [agent: claude]
+- [x] Give the panel sections that open and close [agent: claude]
+- [x] Keep every control inside the panel at any width [agent: claude]
+- [x] Fix the card rounding and the slider that escapes it [agent: claude]
+- [x] Keep the panel usable on a narrow window [agent: claude]
+- [x] Write the side-panel requirements into the SRS [agent: claude]
 
 ### v2.33.0 — Rows and marks you can place
 **Goal:** Rows move together, and a mark sits where the planner puts it.

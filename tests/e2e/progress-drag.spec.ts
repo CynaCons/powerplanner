@@ -106,10 +106,29 @@ test.describe('progress by dragging the fill edge', () => {
     // construction — green while checking nothing.
     const fillBefore = (await page.locator(`.bar-progress-fill[data-pp-fill="${id}"]`).boundingBox())!;
 
-    // Press the body well away from the handle and move it.
-    await page.mouse.move(box.x + 4, box.y + box.height / 2);
+    // Press the body, established rather than assumed. `box.x + 4` was
+    // "well away from the handle" but four pixels inside the START GRIP,
+    // which straddles the end cap — so this drag resized the bar from its
+    // left edge and only passed because the fill happened to move less than
+    // the tolerance. Narrowing the chart by the width of the side panel was
+    // enough to turn it red (observed: width 239.6 -> 199.2, fill off by 14px).
+    const press = await page.evaluate(([id, y]) => {
+      const el = document.querySelector(`.task-bar-body[data-pp-id="${id}"]`)!;
+      const r = el.getBoundingClientRect();
+      for (let x = Math.ceil(r.x) + 1; x < r.right - 1; x++) {
+        const subs = document
+          .elementsFromPoint(x, y as number)
+          .map((e) => (e as HTMLElement).dataset?.ppSub)
+          .filter(Boolean);
+        if (subs.length === 0) return x;
+      }
+      return null;
+    }, [id, box.y + box.height / 2] as [string, number]);
+    expect(press, 'a point on the bar that is body and nothing else').not.toBeNull();
+
+    await page.mouse.move(press!, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(box.x + 44, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.move(press! + 40, box.y + box.height / 2, { steps: 6 });
     await page.mouse.up();
 
     const fillAfter = (await page.locator(`.bar-progress-fill[data-pp-fill="${id}"]`).boundingBox())!;

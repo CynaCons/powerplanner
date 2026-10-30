@@ -257,6 +257,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
                   data-pp-kind="task"
                   data-pp-id={t.id}
                   data-pp-sub="progress"
+                  data-pp-live="1"
                   x={handleX - progW / 2}
                   y={y}
                   width={progW}
@@ -305,6 +306,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
                   data-pp-kind="task"
                   data-pp-id={t.id}
                   data-pp-sub="start"
+                  data-pp-live={active ? '1' : undefined}
                   x={x - gripW / 2}
                   y={y}
                   width={gripW}
@@ -317,6 +319,7 @@ export function TaskBars({ layout, dragPreview }: Props) {
                   data-pp-kind="task"
                   data-pp-id={t.id}
                   data-pp-sub="end"
+                  data-pp-live={active ? '1' : undefined}
                   x={x + width - gripW / 2}
                   y={y}
                   width={gripW}

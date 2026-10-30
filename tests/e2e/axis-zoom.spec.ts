@@ -24,9 +24,36 @@ async function ready(page: Page) {
   if (await dismiss.isVisible().catch(() => false)) await dismiss.click();
 }
 
-/** Open the gear panel, where the document settings live. */
+/**
+ * Open the Document section, whichever state it is in.
+ *
+ * It is a section header now, not a mode switch, and whether it is open
+ * persists per browser (SRS-LAY-030) — so a reload inside one test brings it
+ * back already open, and clicking regardless would close it. The failure read
+ * as "the setting did not survive the reload" when the radio was simply not
+ * on screen.
+ */
 async function openDocumentSettings(page: Page) {
-  await page.locator('button[aria-label="Document settings"], button[title*="Document"]').first().click();
+  const head = page
+    .locator('button[aria-label="Document settings"], button[title*="Document"]')
+    .first();
+  if ((await head.getAttribute('aria-expanded')) === 'false') await head.click();
+  await page.locator('[aria-label="Weekend display"]').waitFor();
+}
+
+/**
+ * Zoom until a weekend is wide enough to be drawn at all.
+ *
+ * `nonWorkingBands` returns nothing below WEEKEND_MIN_PX_PER_DAY (1.5), and
+ * the view now opens at 1.44 px/day because the side panel took 288px off the
+ * chart. Asserting weekend shading at the opening zoom is arithmetic that
+ * cannot come out — in either direction: "shading appears" could never pass,
+ * and "shading is off" passed without the setting doing anything.
+ */
+async function zoomUntilWeekendsDraw(page: Page) {
+  for (let i = 0; i < 4; i++) {
+    await page.getByTitle('Zoom in (+)').click();
+  }
 }
 
 /**
@@ -224,6 +251,7 @@ test.describe('delimiters and weekends (SRS-TAX-054, SRS-TAX-056)', () => {
 
   test('weekend shading can be turned off and on', async ({ page }) => {
     await ready(page);
+    await zoomUntilWeekendsDraw(page);
     await openDocumentSettings(page);
     await page.locator('[aria-label="Weekend display"] button:has-text("Shaded")').click();
     expect(await weekendCount(page)).toBeGreaterThan(0);
@@ -235,9 +263,13 @@ test.describe('delimiters and weekends (SRS-TAX-054, SRS-TAX-056)', () => {
     await ready(page);
     await openDocumentSettings(page);
     await page.locator('[aria-label="Grid delimiters"] button:has-text("Qtr")').click();
+    // Shaded first, at a zoom where a weekend can be drawn, so that turning
+    // it off is observed rather than assumed: zero bands is also what the
+    // opening zoom produces on its own.
+    await zoomUntilWeekendsDraw(page);
+    await page.locator('[aria-label="Weekend display"] button:has-text("Shaded")').click();
+    expect(await weekendCount(page)).toBeGreaterThan(0);
     await page.locator('[aria-label="Weekend display"] button:has-text("Off")').click();
-    // The live toggle took, so a failure after the reload is about the round
-    // trip and not about the control.
     expect(await weekendCount(page)).toEqual(0);
     await page.waitForTimeout(1500); // the autosave is debounced at 800ms
 

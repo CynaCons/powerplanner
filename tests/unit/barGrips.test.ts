@@ -161,22 +161,42 @@ describe('a selected bar keeps its ends (SRS-EDIT-070)', () => {
 });
 
 describe('what a press belongs to (SRS-EDIT-071)', () => {
-  it('ranks a resize grip above a dependency hit band', () => {
-    expect(hitRank('task', 'start')).toBeGreaterThan(hitRank('dependency', undefined));
-    expect(hitRank('task', 'end')).toBeGreaterThan(hitRank('dependency', undefined));
+  it('ranks a DRAWN resize grip above a dependency hit band', () => {
+    expect(hitRank('task', 'start', '1')).toBeGreaterThan(hitRank('dependency', undefined));
+    expect(hitRank('task', 'end', '1')).toBeGreaterThan(hitRank('dependency', undefined));
     // And above the bar body, which the grip sits on top of.
-    expect(hitRank('task', 'start')).toBeGreaterThan(hitRank('task', undefined));
+    expect(hitRank('task', 'start', '1')).toBeGreaterThan(hitRank('task', undefined));
     // The progress handle is more specific than the body and less than a grip,
     // so the two extremes of the fill belong to resizing.
-    expect(hitRank('task', 'progress')).toBeLessThan(hitRank('task', 'start'));
-    expect(hitRank('task', 'progress')).toBeGreaterThan(hitRank('task', undefined));
+    expect(hitRank('task', 'progress', '1')).toBeLessThan(hitRank('task', 'start', '1'));
+    expect(hitRank('task', 'progress', '1')).toBeGreaterThan(hitRank('task', undefined));
   });
 
-  it('picks the grip out of a stack that a dependency is painted on top of', () => {
+  /**
+   * SRS-EDIT-079 — a grip you cannot see does not take the press.
+   *
+   * The grips are hit-testable at every zoom; they are only DRAWN on a
+   * selected or hovered bar. So an invisible 10px rect straddled each end cap
+   * and took presses aimed at whatever crossed it, while showing an
+   * `ew-resize` cursor it would not honour. Observed on 2026-10-30: a press
+   * on a visible connector resolved to `task-sysarch sub=end`, rank 60
+   * against the connector's 10, with nothing but the connector in
+   * `elementsFromPoint` before the press.
+   */
+  it('ranks an UNDRAWN grip below the connector you can see', () => {
+    expect(hitRank('task', 'start', undefined)).toBeLessThan(hitRank('dependency', undefined));
+    expect(hitRank('task', 'end', undefined)).toBeLessThan(hitRank('dependency', undefined));
+    // Still above nothing, so approaching a bar end from outside — where the
+    // grip is the only thing under the pointer — still begins a resize.
+    expect(hitRank('task', 'start', undefined)).toBeGreaterThan(hitRank('row', undefined));
+    expect(hitRank('task', 'start', undefined)).toBeGreaterThan(0);
+  });
+
+  it('picks the drawn grip out of a stack a dependency is painted on top of', () => {
     const svg = document.createElement('div');
     svg.innerHTML =
       '<span data-pp-kind="dependency" data-pp-id="d1"></span>' +
-      '<span data-pp-kind="task" data-pp-id="t1" data-pp-sub="start"></span>' +
+      '<span data-pp-kind="task" data-pp-id="t1" data-pp-sub="start" data-pp-live="1"></span>' +
       '<span data-pp-kind="task" data-pp-id="t1"></span>';
     const [dep, grip] = Array.from(svg.children);
 
@@ -185,6 +205,17 @@ describe('what a press belongs to (SRS-EDIT-071)', () => {
     const picked = resolveHit([dep, grip], dep);
     expect(picked?.dataset.ppKind).toBe('task');
     expect(picked?.dataset.ppSub).toBe('start');
+  });
+
+  it('leaves the connector selectable where the grip is not drawn', () => {
+    const svg = document.createElement('div');
+    svg.innerHTML =
+      '<span data-pp-kind="dependency" data-pp-id="d1"></span>' +
+      '<span data-pp-kind="task" data-pp-id="t1" data-pp-sub="start"></span>';
+    const [dep, grip] = Array.from(svg.children);
+    expect(resolveHit([dep, grip], dep)?.dataset.ppKind).toBe('dependency');
+    // Alone, it is still the grip: nothing visible is competing for the press.
+    expect(resolveHit([grip], grip)?.dataset.ppSub).toBe('start');
   });
 
   it('falls back to the event target where the stack is unavailable', () => {

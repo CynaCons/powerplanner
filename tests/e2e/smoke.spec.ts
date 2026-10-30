@@ -51,20 +51,62 @@ test.describe('PowerRoadmap smoke', () => {
     await expect(select).toHaveValue('4');
   });
 
-  test('the gear clears the selection, since both cannot own the left group', async ({ page }) => {
+  // Both of these asserted the horizontal bar's mode switch: one strip, and
+  // tools, selection and document settings taking turns in it. The panel's
+  // sections coexist (SRS-LAY-030), so the gear has nothing to take the place
+  // of and no longer clears the selection to make room.
+  test('opening document settings keeps the selection', async ({ page }) => {
     await page.goto('/');
     await page.locator('.chart-area svg .task-bar-body').first().click();
     await expect(page.locator('.app-status')).toContainText('1 selected');
     await page.locator('.cmdbar button[aria-label="Document settings"]').click();
-    await expect(page.locator('.app-status')).toContainText('0 selected');
     await expect(page.locator('.cmdbar [role="radiogroup"][aria-label="Theme"]')).toBeVisible();
+    await expect(page.locator('.app-status')).toContainText('1 selected');
   });
 
-  test('tools appear only when nothing is selected', async ({ page }) => {
+  test('a section opens and closes, and the tools stay reachable throughout', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('.cmdbar button[title^="Pan"]')).toBeVisible();
+    const tools = page.locator('.cmdbar button[title^="Pan"]');
+    await expect(tools).toBeVisible();
+    // Selecting something adds a section rather than replacing one.
     await page.locator('.chart-area svg .task-bar-body').first().click();
-    await expect(page.locator('.cmdbar button[title^="Pan"]')).toHaveCount(0);
+    await expect(page.locator('[data-pp-section="selection"]')).toBeVisible();
+    await expect(tools).toBeVisible();
+
+    const head = page.locator('[data-pp-section="tools"] .cmdbar__section-head');
+    await expect(head).toHaveAttribute('aria-expanded', 'true');
+    await head.click();
+    await expect(head).toHaveAttribute('aria-expanded', 'false');
+    // Closed means unmounted: a collapsed section must hold no focusable
+    // control, or Tab walks through things nobody can see.
+    await expect(tools).toHaveCount(0);
+    await head.click();
+    await expect(tools).toBeVisible();
+  });
+
+  test('nothing in the panel escapes it (SRS-LAY-031)', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('.chart-area svg .task-bar-body').first().click();
+    await page.locator('.cmdbar button[aria-label="Document settings"]').click();
+    await expect(page.locator('.cmdbar [role="radiogroup"][aria-label="Theme"]')).toBeVisible();
+    // The bar this replaced measured 1210px of content inside 986px, and the
+    // px/day readout sat 99px past its own rounded edge.
+    const escaping = await page.evaluate(() => {
+      const root = document.querySelector('.cmdbar');
+      if (!root) return ['no panel'];
+      const box = root.getBoundingClientRect();
+      const out: string[] = [];
+      for (const el of root.querySelectorAll('*')) {
+        const r = el.getBoundingClientRect();
+        if (!r.width && !r.height) continue;
+        if (r.right > box.right + 0.5 || r.left < box.left - 0.5) {
+          out.push(`${el.tagName.toLowerCase()}.${String(el.className).slice(0, 30)}`);
+        }
+      }
+      if (root.scrollWidth > root.clientWidth + 1) out.push('panel scrolls sideways');
+      return out;
+    });
+    expect(escaping).toEqual([]);
   });
 
   test('no control is rendered in two places at once (v2.13.0 / C0)', async ({ page }) => {
