@@ -1,0 +1,567 @@
+<title>PowerRoadmap v2.34.1</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  /* Layout: one narrow column of records. Each states a defect, then shows the
+     evidence. The measurements are the page's recurring motif — this is an
+     engineering record, so the numbers carry it rather than ornament.
+     Colour and type come from the app's own tokens (src/styles/global.css). */
+  :root {
+    --ground: #FBFBFA;
+    --surface: #FFFFFF;
+    --rule: #D4D4CE;
+    --hair: rgba(0, 0, 0, 0.07);
+    --ink: #1C2430;
+    --ink-soft: #5A6472;
+    --ink-dim: #8A93A0;
+    --accent: #2F4369;
+    --accent-soft: rgba(47, 67, 105, 0.09);
+    --defect: #B3382C;
+    --defect-soft: rgba(179, 56, 44, 0.08);
+    --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #15181F;
+      --surface: #1C212B;
+      --rule: #333A47;
+      --hair: rgba(255, 255, 255, 0.08);
+      --ink: #E8EBF0;
+      --ink-soft: #A7AEBC;
+      --ink-dim: #767E8D;
+      --accent: #8FA6D4;
+      --accent-soft: rgba(143, 166, 212, 0.13);
+      --defect: #E2796C;
+      --defect-soft: rgba(226, 121, 108, 0.12);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #15181F;
+    --surface: #1C212B;
+    --rule: #333A47;
+    --hair: rgba(255, 255, 255, 0.08);
+    --ink: #E8EBF0;
+    --ink-soft: #A7AEBC;
+    --ink-dim: #767E8D;
+    --accent: #8FA6D4;
+    --accent-soft: rgba(143, 166, 212, 0.13);
+    --defect: #E2796C;
+    --defect-soft: rgba(226, 121, 108, 0.12);
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 50rem;
+    margin: 0 auto;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 3.5rem 5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+
+  h1 {
+    font-size: clamp(2rem, 6vw, 2.9rem);
+    line-height: 1.08;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h2 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    line-height: 1.25;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0;
+  }
+  p { margin: 0; max-width: 62ch; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+
+  header .lede {
+    color: var(--ink-soft);
+    font-size: 1.05rem;
+    max-width: 58ch;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.4rem;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--ink-dim);
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--rule);
+  }
+  .meta b { color: var(--ink-soft); font-weight: 500; }
+
+  header { display: flex; flex-direction: column; gap: 1rem; }
+
+  .record {
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+    min-width: 0;
+  }
+  .record > .eyebrow { margin-bottom: -0.65rem; }
+
+  .defect {
+    border-left: 3px solid var(--defect);
+    background: var(--defect-soft);
+    padding: 0.85rem 1.1rem;
+    border-radius: 0 6px 6px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+  .defect h3 { color: var(--defect); font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; font-family: var(--mono); font-weight: 600; }
+  .defect p { font-size: 0.95rem; color: var(--ink); }
+
+  figure {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    min-width: 0;
+  }
+  figure img {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    background: var(--surface);
+  }
+  figcaption {
+    font-size: 0.82rem;
+    color: var(--ink-dim);
+    font-family: var(--mono);
+    line-height: 1.5;
+  }
+  .pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+  .trio {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+  @media (max-width: 640px) {
+    .pair, .trio { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .measure {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-radius: 7px;
+    padding: 0.9rem 1.1rem;
+    color: var(--ink-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    min-width: 0;
+    overflow-x: auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .measure b { color: var(--ink); font-weight: 600; }
+  .measure .arrow { color: var(--accent); }
+
+  .veto {
+    border: 1px dashed var(--rule);
+    border-radius: 7px;
+    padding: 0.9rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    background: var(--accent-soft);
+    min-width: 0;
+  }
+  .veto h3 { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+  .veto p { font-size: 0.92rem; }
+
+  .srs {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--ink-dim);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+    font-variant-numeric: tabular-nums;
+  }
+  th, td { text-align: left; padding: 0.5rem 0.7rem 0.5rem 0; border-bottom: 1px solid var(--hair); }
+  th { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-dim); font-weight: 500; }
+  td.num { font-family: var(--mono); text-align: right; padding-right: 0; white-space: nowrap; }
+  .scroller { overflow-x: auto; min-width: 0; }
+
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 0; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">PowerRoadmap · release showcase</div>
+    <h1>v2.34.1</h1>
+    <p class="lede">
+      Four iterations, from one owner session on 30 October 2026. The save path
+      was rebuilt because it had never worked; the editing controls moved from a
+      strip across the chart to a panel beside it; and the marks, rows and
+      labels gained the placing and styling the owner asked for.
+    </p>
+    <div class="meta">
+      <span><b>Iterations</b> v2.31.0 – v2.34.1</span>
+      <span><b>Commits</b> 6</span>
+      <span><b>Captured from</b> dist-template/PowerRoadmap.html</span>
+    </div>
+  </header>
+
+  <hr>
+
+  <!-- 1 ------------------------------------------------------------------ -->
+  <section class="record">
+    <div class="eyebrow">Persistence</div>
+    <h2>A saved roadmap reopens as a working app holding the plan that was saved</h2>
+
+    <div class="defect">
+      <h3>The defect</h3>
+      <p>
+        Every save produced a corrupt file, first try, on every build that
+        shipped. The save located its insertion point by matching the
+        document’s text, and a built PowerRoadmap inlines its own source — so
+        the first <code>&lt;/body&gt;</code> in the file is inside the minified
+        source of the very function doing the injecting, 137&nbsp;KB before the
+        real one. The plan’s JSON landed in the middle of the script, which then
+        failed to parse. The reopened file looked almost right, because
+        <code>outerHTML</code> had captured the rendered chart: a picture of the
+        chart, holding the document from <em>before</em> the save, with nothing
+        running behind it.
+      </p>
+    </div>
+
+    <div class="measure">
+      <span>first <b>&lt;/body&gt;</b> in the v2.28.0 build <span class="arrow">→</span> byte <b>268,929</b>, inside the bundle</span>
+      <span>the real one <span class="arrow">→</span> byte <b>405,971</b></span>
+      <span>saved file, broken path <span class="arrow">→</span> <b>505,639</b> bytes, script dead, chart is a snapshot</span>
+      <span>saved file, fixed path <span class="arrow">→</span> <b>406,700</b> bytes against a <b>405,987</b>-byte template</span>
+    </div>
+
+    <p>
+      No textual marker is safe in a file that contains its own source, so the
+      save addresses the page by element identity instead — clone,
+      <code>querySelector</code>, <code>textContent</code> — and never pattern-matches
+      it. Two more wounds sat on the same path: the in-app update ran that same
+      injector over a freshly downloaded build and wrote the result to the
+      owner’s file, and saving from the dev server could never work at all,
+      because it serialised a stub whose only script is
+      <code>/src/main.tsx</code>.
+    </p>
+
+    <p class="srs">
+      Stated, not shown: the broken reopened file was observed in a browser and
+      measured, but no screenshot of it was kept before the fix landed.
+    </p>
+
+    <p>
+      It is now gated end to end — the test saves through the app’s own Ctrl+S,
+      opens the result as a local file, edits it, saves again from <em>that</em>
+      file, and opens it once more. It also refuses a stale
+      <code>dist-template</code>: a template built before the fix reopened
+      cleanly and would have reported the save as working.
+    </p>
+    <p class="srs">SRS-PERS-031 … SRS-PERS-039</p>
+  </section>
+
+  <hr>
+
+  <!-- 2 ------------------------------------------------------------------ -->
+  <section class="record">
+    <div class="eyebrow">Command bar → Side panel</div>
+    <h2>The controls live in a column beside the chart, in sections that open and close</h2>
+
+    <div class="defect">
+      <h3>The defect</h3>
+      <p>
+        “I’m clicking on a task and it’s like it’s too much. It doesn’t fit. The
+        rounding is not good. The sliding bar escapes from the actual card.”
+        Measured at 1440×900 with one task selected, the bar’s contents were
+        1210px wide inside 986px: the whole right-hand group sat outside it and
+        the px/day readout overhung its own rounded edge by 99px. A strip grows
+        only sideways, while the selection’s controls grow with what is
+        selected.
+      </p>
+    </div>
+
+    <div class="pair">
+      <figure>
+        <img src="panel-selected-light.png" alt="The side panel with a task selected, light theme: Tools, Selection with colour swatches, Outline, Label colour, Insert, View and Document sections.">
+        <figcaption>Light · a task selected</figcaption>
+      </figure>
+      <figure>
+        <img src="panel-selected-dark.png" alt="The same side panel in the dark theme.">
+        <figcaption>Dark · the same state</figcaption>
+      </figure>
+    </div>
+
+    <div class="measure">
+      <span>before <span class="arrow">→</span> content <b>1210px</b> inside <b>986px</b>; px/day readout <b>99px</b> outside the card</span>
+      <span>after <span class="arrow">→</span> <b>0</b> elements outside the panel, <code>scrollWidth === clientWidth</code>, Document open and a task selected</span>
+    </div>
+
+    <div class="pair">
+      <figure>
+        <img src="app-light.png" alt="The whole application, light theme, with the side panel docked right.">
+        <figcaption>The whole window, light</figcaption>
+      </figure>
+      <figure>
+        <img src="app-dark.png" alt="The whole application, dark theme.">
+        <figcaption>The whole window, dark</figcaption>
+      </figure>
+    </div>
+
+    <figure>
+      <img src="narrow.png" alt="At 820px wide the panel docks to the foot of the window, below the chart, with its sections laid out horizontally.">
+      <figcaption>
+        At 820px there is no room for a 288px column, so the panel takes the
+        foot instead — at a fixed height, never overlapping the chart
+      </figcaption>
+    </figure>
+
+    <div class="veto">
+      <h3>Decisions you may want to veto</h3>
+      <p>
+        <b>The gear no longer clears the selection.</b> Sections coexist, so
+        opening Document settings has nothing to take the place of. Two smoke
+        tests that asserted the old behaviour now state the new one.
+      </p>
+      <p>
+        <b>The foot-docked panel has a fixed height (34vh), not a maximum.</b>
+        It therefore occupies that space even when nearly empty. The
+        alternative — sizing to contents — made the chart jump 74px every time
+        you selected something.
+      </p>
+    </div>
+    <p class="srs">SRS-LAY-030 … SRS-LAY-033</p>
+  </section>
+
+  <hr>
+
+  <!-- 3 ------------------------------------------------------------------ -->
+  <section class="record">
+    <div class="eyebrow">Chart · rows and marks</div>
+    <h2>Rows move together, and a mark sits where you put it in its column</h2>
+
+    <div class="defect">
+      <h3>The defect</h3>
+      <p>
+        Reordering or clearing a section meant one row at a time, and deleting
+        rows was impossible: Delete filtered rows out of the selection
+        altogether, because clicking a bar also selects the row under it and
+        acting on that companion would take the row and everything on it. A new
+        row landed outside every section, at the foot of the plan. And a date is
+        a point while the column it falls in is a week, a month or a quarter
+        wide, so a release at the end of March read as a diamond straddling the
+        line into April.
+      </p>
+    </div>
+
+    <div class="pair">
+      <figure>
+        <img src="rows-multi-light.png" alt="Four consecutive rows selected together in the row gutter, with their bars highlighted.">
+        <figcaption>Shift-click takes the run; Ctrl adds and removes one</figcaption>
+      </figure>
+      <figure>
+        <img src="rows-multi-dark.png" alt="The same multi-row selection in the dark theme.">
+        <figcaption>Dark · the same selection</figcaption>
+      </figure>
+    </div>
+
+    <div class="trio">
+      <figure>
+        <img src="anchor-start.png" alt="A milestone diamond drawn at its own date.">
+        <figcaption>Start</figcaption>
+      </figure>
+      <figure>
+        <img src="anchor-middle.png" alt="The same milestone drawn at the middle of the week its date falls in.">
+        <figcaption>Middle</figcaption>
+      </figure>
+      <figure>
+        <img src="anchor-end.png" alt="The same milestone drawn at the end of the week its date falls in.">
+        <figcaption>End</figcaption>
+      </figure>
+    </div>
+    <p class="srs">Captured at 5.27 px/day, where a week column is wide enough for the move to read.</p>
+
+    <div class="veto">
+      <h3>Decisions you may want to veto</h3>
+      <p>
+        <b><code>start</code> means the date’s own point, not the column’s
+        start.</b> That is what every plan written before this field meant, so
+        no existing roadmap moves by a pixel. If you would rather “Start” snapped
+        a mid-month date to the 1st, that is a different rule and a one-line
+        change.
+      </p>
+      <p>
+        <b>Rows are the subject of Delete only when a row is what you picked.</b>
+        The first item in the selection decides, which is the convention the
+        panel already used for which fields to show.
+      </p>
+      <p>
+        <b>The milestone diamond is 8px half-width, down from 11.</b> It was
+        22px across on a 26px row band.
+      </p>
+    </div>
+    <p class="srs">SRS-EDIT-080 … SRS-EDIT-082 · SRS-ELEM-070 · SRS-ELEM-071</p>
+  </section>
+
+  <hr>
+
+  <!-- 4 ------------------------------------------------------------------ -->
+  <section class="record">
+    <div class="eyebrow">Chart · labels and bars</div>
+    <h2>A label renames where it sits, and a bar can be outlined</h2>
+
+    <div class="defect">
+      <h3>The defect</h3>
+      <p>
+        “I double-clicked on the label, and it did not enter edit mode. I had to
+        double-click on the task where the label was not.” A task’s label was
+        rendered with <code>pointer-events: none</code> and carried no handler at
+        all, so it was not clickable in any way — the rename gesture existed only
+        on the bar itself. A milestone’s label had the gesture all along, which
+        is why it worked there and not here.
+      </p>
+    </div>
+
+    <div class="pair">
+      <figure>
+        <img src="outline-dashed-light.png" alt="A task bar with a dashed rust-coloured outline around it.">
+        <figcaption>Dashed outline, in a colour of its own</figcaption>
+      </figure>
+      <figure>
+        <img src="outline-dashed-dark.png" alt="The same dashed outline in the dark theme.">
+        <figcaption>Dark · the same bar</figcaption>
+      </figure>
+    </div>
+
+    <div class="veto">
+      <h3>Decisions you may want to veto</h3>
+      <p>
+        <b>A label drawn ON the bar stays inert.</b> A label outranks a bar body
+        in the hit stack, so making it clickable would send the press that drags
+        a bar to its own name. Only labels beside the bar take the rename.
+      </p>
+      <p>
+        <b>A resize grip that is not drawn no longer outranks visible ink.</b>
+        Found while measuring the narrower chart: a press on a visible connector
+        resolved to a bar’s end grip — rank 60 against the connector’s 10 — with
+        nothing but the connector under the pointer, and the cursor said
+        <code>ew-resize</code> over a line it would not resize. Approaching a bar
+        end from outside still begins a resize.
+      </p>
+    </div>
+    <p class="srs">SRS-EDIT-079 · SRS-EDIT-083 · SRS-ELEM-072 · SRS-ELEM-073</p>
+  </section>
+
+  <hr>
+
+  <!-- verification -------------------------------------------------------- -->
+  <section class="record">
+    <div class="eyebrow">Verification</div>
+    <h2>What was run, and what it said</h2>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Gate</th><th>Result</th><th class="num">Count</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>tsc -b</code></td><td>clean</td><td class="num">0 errors</td></tr>
+          <tr><td><code>eslint .</code></td><td>clean</td><td class="num">0 errors, 17 warnings</td></tr>
+          <tr><td><code>vitest run</code></td><td>all passed</td><td class="num">435</td></tr>
+          <tr><td>Playwright · desktop</td><td>all passed</td><td class="num">148</td></tr>
+          <tr><td>Playwright · tablet</td><td>all passed</td><td class="num">55</td></tr>
+          <tr><td>Playwright · mobile</td><td>all passed</td><td class="num">49</td></tr>
+          <tr><td>Playwright · all three, final run</td><td>0 failed</td><td class="num">444 reported, 192 skipped</td></tr>
+          <tr><td>Smoke · dev server and built file</td><td>no console or page errors</td><td class="num">2 / 2</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      It took three full runs to get there, and the two red ones are the
+      interesting part. The first reported 441 tests with 2 failures, both
+      tablet marker tests — not flakes. Selecting a marker added the Selection
+      section to a foot-docked panel that sized itself to its contents, which
+      took 74px out of the chart; everything in the plot moved up, and the
+      second click of the double-click landed where its target no longer was.
+      The panel has a fixed height now, the chart holds at 520px through a
+      selection, and a gate was added for it and red-checked: with the old CSS
+      it fails with 713 against 638.8.
+    </p>
+
+    <div class="measure">
+      <span>chart height, foot-docked, before selecting <span class="arrow">→</span> <b>713px</b></span>
+      <span>after selecting, old CSS <span class="arrow">→</span> <b>638.8px</b> (a 74px jump)</span>
+      <span>after selecting, fixed <span class="arrow">→</span> <b>520px</b> and <b>520px</b></span>
+    </div>
+
+    <p>
+      That gate then caught the same defect on the other axis, on the phone
+      project: selecting something widened the chart from 660px to 702px. A
+      <code>1fr</code> grid track keeps <code>min-width: auto</code>, so the
+      panel’s own content was pushing the shell wider — which the floating bar
+      could never do, being absolutely positioned. Both the chart column and
+      the stacked layouts are <code>minmax(0, 1fr)</code> now, and the third
+      run was clean: 444 reported, 252 passed, 192 skipped by project, none
+      failed.
+    </p>
+
+    <p>
+      Known and not fixed: the Playwright run hangs in teardown after the last
+      test reports — <code>worker process did not exit within 300000ms after
+      stop, force-killed it</code>. Every test reports first, so no result is
+      lost, but a CI job would spend five minutes per worker unwinding. It is
+      not in the files this release touched and has not been diagnosed.
+    </p>
+    <p class="srs">
+      Three regression tests were rewritten rather than repaired: each was
+      passing on geometry rather than on behaviour, and the narrower chart
+      exposed it. A “body drag” pressed 4px inside the start grip and resized;
+      a weekend-shading assertion ran at a zoom below the suppression threshold,
+      where zero bands is also what no setting produces; and the
+      document-settings helper became a toggle whose state persists, so calling
+      it after a reload closed the section it meant to open.
+    </p>
+  </section>
+</div>

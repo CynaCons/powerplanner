@@ -1084,7 +1084,7 @@ Four questions the prototypes must put in front of the owner, because they are v
 - [x] Keep a new row in the section it was made in [agent: claude]
 - [x] Write the placement and row requirements into the SRS [agent: claude]
 
-### v2.34.0 — Labels you can edit, and bars you can style
+### v2.34.0 — Labels you can edit, and bars you can style (COMPLETE)
 **Goal:** A label renames where it sits, and a bar can be coloured and outlined.
 - [x] Rename a task or milestone by double-clicking its own label [agent: claude]
 - [x] Choose the label text colour from the panel [agent: claude]
@@ -1092,6 +1092,13 @@ Four questions the prototypes must put in front of the owner, because they are v
 - [x] Choose the outline colour from the panel [agent: claude]
 - [x] Carry text colour and outline through save and reopen [agent: claude]
 - [x] Write the label and style requirements into the SRS [agent: claude]
+
+### v2.34.1 — The panel holds its size (COMPLETE)
+**Goal:** Selecting something never changes the size of the chart.
+- [x] Give the foot-docked panel a fixed height, not a maximum [agent: claude]
+- [x] Stop the panel widening the shell on a phone [agent: claude]
+- [x] Gate the chart against resizing when the selection changes [agent: claude]
+- [x] Cover the open path for every format it reads [agent: claude]
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition

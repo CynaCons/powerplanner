@@ -84,6 +84,30 @@ test.describe('PowerRoadmap smoke', () => {
     await expect(tools).toBeVisible();
   });
 
+  /**
+   * SRS-LAY-033 — the chart does not move when the selection changes.
+   *
+   * Docked at the foot of a narrow window the panel sized itself to its
+   * contents, so selecting anything added the Selection section and took that
+   * height out of the plot: measured at 810px wide, one click shrank the chart
+   * from 713px to 639px and moved everything in it 74px up. The second click
+   * of every double-click then landed where its target no longer was, which is
+   * how a marker stopped being renameable on a tablet.
+   */
+  test('selecting something does not resize the chart', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('.chart-area svg').first().waitFor({ state: 'visible' });
+    const area = page.locator('.chart-area');
+    const before = (await area.boundingBox())!;
+
+    await page.locator('.chart-area svg .task-bar-body').first().click();
+    await expect(page.locator('[data-pp-section="selection"]')).toBeVisible();
+    const after = (await area.boundingBox())!;
+
+    expect(after.height, 'the plot kept its height').toBeCloseTo(before.height, 0);
+    expect(after.width, 'and its width').toBeCloseTo(before.width, 0);
+  });
+
   test('nothing in the panel escapes it (SRS-LAY-031)', async ({ page }) => {
     await page.goto('/');
     await page.locator('.chart-area svg .task-bar-body').first().click();

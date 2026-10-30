@@ -276,7 +276,12 @@ kbd {
 .app-shell {
   display: grid;
   grid-template-rows: var(--header-h) 1fr var(--status-h);
-  grid-template-columns: 1fr var(--panel-w);
+  /* `minmax(0, …)`, not `1fr`: a `1fr` track keeps `min-width: auto`, so a
+     child wider than its content box pushes the track — and with the panel a
+     grid row rather than a floating pill, selecting something widened the
+     whole shell. Measured on a 390px phone: the chart went from 660px to
+     702px the moment a bar was picked (SRS-LAY-033). */
+  grid-template-columns: minmax(0, 1fr) var(--panel-w);
   grid-template-areas:
     'header header'
     'chart  panel'
@@ -293,7 +298,7 @@ kbd {
 @media (max-width: 1000px) {
   .app-shell {
     grid-template-rows: var(--header-h) 1fr auto var(--status-h);
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       'header'
       'chart'
@@ -305,7 +310,7 @@ kbd {
 /* The Office task pane is narrower than any browser window; it stacks. */
 .app-shell--compact {
   grid-template-rows: var(--header-h) 1fr auto var(--status-h);
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     'header'
     'chart'
@@ -461,17 +466,28 @@ kbd {
   scrollbar-width: thin;
 }
 
+/*
+ * Docked at the foot, the panel's height is FIXED, not a maximum.
+ *
+ * With `max-height` the row sized itself to its contents, so selecting
+ * anything added the Selection section and took that height out of the chart:
+ * measured at 810px wide, one click shrank the plot from 713px to 639px and
+ * moved everything in it 74px up. A chart that jumps whenever you touch it is
+ * unusable — and it broke the second click of every double-click, because the
+ * target had moved out from under the pointer. Sideways there is no such
+ * problem: the column is a fixed width and the full height either way.
+ */
 @media (max-width: 1000px) {
   .cmdbar {
     border-left: 0;
     border-top: 1px solid var(--color-border);
-    max-height: 34vh;
+    height: 34vh;
   }
 }
 .app-shell--compact .cmdbar {
   border-left: 0;
   border-top: 1px solid var(--color-border);
-  max-height: 46vh;
+  height: 46vh;
 }
 
 .cmdbar__section {
