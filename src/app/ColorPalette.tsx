@@ -4,6 +4,15 @@ import { Plus } from 'lucide-react';
 interface ColorPaletteProps {
   value: string;
   onChange: (color: string) => void;
+  /**
+   * What this palette colours, when the panel shows more than one.
+   *
+   * A task now carries three: its fill, its outline and its label. Eight
+   * swatches named "Prussian" three times over is ambiguous to a screen
+   * reader and to anything else addressing them by name, so the two that are
+   * not the fill say which they are.
+   */
+  what?: string;
 }
 
 // The stream palette, one hue per discipline (DECISIONS.md D6). These used to
@@ -24,7 +33,7 @@ function eqHex(a: string, b: string): boolean {
   return (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
 }
 
-export function ColorPalette({ value, onChange }: ColorPaletteProps) {
+export function ColorPalette({ value, onChange, what }: ColorPaletteProps) {
   const customRef = useRef<HTMLInputElement | null>(null);
   const isPreset = PRESETS.some((p) => eqHex(p.hex, value));
 
@@ -36,8 +45,8 @@ export function ColorPalette({ value, onChange }: ColorPaletteProps) {
           <button
             key={p.hex}
             type="button"
-            title={p.name}
-            aria-label={p.name}
+            title={what ? `${p.name} — ${what}` : p.name}
+            aria-label={what ? `${p.name} ${what}` : p.name}
             onClick={() => onChange(p.hex)}
             style={{
               width: 22, height: 22, padding: 0, borderRadius: '50%',
@@ -55,7 +64,7 @@ export function ColorPalette({ value, onChange }: ColorPaletteProps) {
       <button
         type="button"
         title="Custom color"
-        aria-label="Custom color"
+        aria-label={what ? `Custom ${what} color` : 'Custom color'}
         onClick={() => customRef.current?.click()}
         style={{
           width: 22, height: 22, padding: 0, borderRadius: '50%',

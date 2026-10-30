@@ -6,7 +6,7 @@ import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 import { ColorPalette } from './ColorPalette';
 import { deleteSelection } from './documentActions';
-import type { Task, Milestone, Marker, Bracket, Dependency, DependencyType, DateAnchor } from '../types/document';
+import type { Task, Milestone, Marker, Bracket, Dependency, DependencyType, DateAnchor, BarOutline } from '../types/document';
 
 /**
  * Quick actions for what is selected (PLAN.md v2.20.0).
@@ -140,16 +140,63 @@ function TaskFields({ task }: { task: Task }) {
   const updateTask = useDocumentStore((s) => s.updateTask);
   const deleteTask = useDocumentStore((s) => s.deleteTask);
   const clear = useSelectionStore((s) => s.clear);
+  const outline = task.outline ?? 'none';
 
   return (
-    <Group label="Task">
-      <ColorPalette value={task.color ?? '#1F4E79'} onChange={(color) => updateTask(task.id, { color })} />
-      <WrapInBracket taskIds={[task.id]} />
-      <DetailsButton what="Task" target={{ kind: 'task', id: task.id }} />
-      <DeleteButton what="task" onClick={() => { deleteTask(task.id); clear(); }} />
-    </Group>
+    <>
+      <Group label="Task">
+        <ColorPalette value={task.color ?? '#1F4E79'} onChange={(color) => updateTask(task.id, { color })} />
+        <WrapInBracket taskIds={[task.id]} />
+        <DetailsButton what="Task" target={{ kind: 'task', id: task.id }} />
+        <DeleteButton what="task" onClick={() => { deleteTask(task.id); clear(); }} />
+      </Group>
+
+      {/* The line around the bar (SRS-ELEM-072). Three named states, not a
+          width to type, so it stays a single press like everything else the
+          panel keeps. */}
+      <div className="cmdbar__field">
+        <span className="cmdbar__field-label">Outline</span>
+        <div className="cmdbar__scale" role="radiogroup" aria-label="Outline">
+          {OUTLINE_CHOICES.map((c) => (
+            <button
+              key={c.value}
+              role="radio"
+              aria-checked={outline === c.value}
+              aria-label={c.label}
+              className={outline === c.value ? 'is-active' : ''}
+              title={c.title}
+              onClick={() => updateTask(task.id, { outline: c.value })}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {outline !== 'none' && (
+        <Group label="Outline colour">
+          <ColorPalette
+            value={task.outlineColor ?? task.color ?? '#1F4E79'}
+            onChange={(outlineColor) => updateTask(task.id, { outlineColor })}
+            what="outline"
+          />
+        </Group>
+      )}
+      <Group label="Label colour">
+        <ColorPalette
+          value={task.textColor ?? '#3D4551'}
+          onChange={(textColor) => updateTask(task.id, { textColor })}
+          what="label"
+        />
+      </Group>
+    </>
   );
 }
+
+const OUTLINE_CHOICES: Array<{ value: BarOutline; label: string; title: string }> = [
+  { value: 'none', label: 'None', title: 'No line around the bar' },
+  { value: 'thin', label: 'Thin', title: 'A hairline in the bar’s own ink, or the colour below' },
+  { value: 'dashed', label: 'Dashed', title: 'The same line, broken — for work that is not settled' },
+];
 
 /**
  * Where in its column a dated mark sits (SRS-ELEM-070).
@@ -206,6 +253,13 @@ function MilestoneFields({ milestone }: { milestone: Milestone }) {
         <DeleteButton what="milestone" onClick={() => { remove(milestone.id); clear(); }} />
       </Group>
       <AnchorChoice anchor={milestone.anchor} onChange={(anchor) => update(milestone.id, { anchor })} />
+      <Group label="Label colour">
+        <ColorPalette
+          value={milestone.textColor ?? '#3D4551'}
+          onChange={(textColor) => update(milestone.id, { textColor })}
+          what="label"
+        />
+      </Group>
     </>
   );
 }

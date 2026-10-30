@@ -222,6 +222,24 @@ export function TaskBars({ layout, dragPreview }: Props) {
                 pointerEvents="none"
               />
             )}
+            {/* The bar's own outline (SRS-ELEM-072). Over the fill so it
+                frames the whole span rather than only the remaining part,
+                and `pointer-events: none` so it adds no hit target — an
+                invisible one is exactly what SRS-EDIT-079 is about. */}
+            {t.outline && t.outline !== 'none' && (
+              <rect
+                className="bar-outline"
+                x={x + 0.5}
+                y={barTop + 0.5}
+                width={Math.max(0, width - 1)}
+                height={BAR_DRAWN_H - 1}
+                fill="none"
+                stroke={t.outlineColor || color}
+                strokeWidth={1}
+                strokeDasharray={t.outline === 'dashed' ? '3 2' : undefined}
+                pointerEvents="none"
+              />
+            )}
             {/* Selection outline. Before the grips and the anchors, so neither
                 is cut in half by the frame that surrounds them. */}
             {selected && (
@@ -416,6 +434,9 @@ export function TaskBars({ layout, dragPreview }: Props) {
               // is on the bar itself, on F2, and on the right-click menu.
               <LabelText
                 text={t.label}
+                taskId={t.id}
+                color={t.textColor}
+                onBeginEdit={() => beginEdit(t.id)}
                 x={x}
                 y={y}
                 barWidth={width}
@@ -433,6 +454,9 @@ export function TaskBars({ layout, dragPreview }: Props) {
 
 interface LabelProps {
   text: string;
+  taskId: string;
+  color?: string;
+  onBeginEdit: () => void;
   x: number;
   y: number;
   barWidth: number;
@@ -442,14 +466,38 @@ interface LabelProps {
   spaceRight: number;
 }
 
-function LabelText({ text, x, y, barWidth, barHeight, placement, spaceRight }: LabelProps) {
+function LabelText({ text, taskId, color, onBeginEdit, x, y, barWidth, barHeight, placement, spaceRight }: LabelProps) {
   const fit = fitLabel({ text, requested: placement, barWidth, spaceRight });
   if (fit.placement === 'hidden') return null;
 
+  /**
+   * A label beside the bar is a thing you can double-click (SRS-EDIT-083).
+   *
+   * It carried `pointer-events: none` and no handler at all, so the rename
+   * gesture existed only on the bar itself. Owner report 2026-10-30: "the
+   * label for a task ... was on the side. And I double-clicked on the label,
+   * and it did not enter edit mode. I had to double-click on the task where
+   * the label was not."
+   *
+   * An ON-BAR label keeps `pointer-events: none`, and must: it sits over the
+   * body, `hitRank` puts a label above a bar, and the press that drags a bar
+   * would start landing on its own name instead.
+   */
+  const onBar = fit.placement === 'on-bar';
+  const interactive = onBar
+    ? { pointerEvents: 'none' as const }
+    : {
+        'data-pp-kind': 'label',
+        'data-pp-id': taskId,
+        'data-pp-owner': 'task',
+        style: { cursor: 'text' as const },
+        onDoubleClick: onBeginEdit,
+      };
+
   const baseProps = {
     fontSize: 11,
-    fill: 'var(--color-text)',
-    pointerEvents: 'none' as const,
+    fill: color || 'var(--color-text)',
+    ...interactive,
   };
   // A shortened label must stay discoverable — hover reveals the full text.
   const title = fit.truncated ? <title>{text}</title> : null;

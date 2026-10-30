@@ -63,7 +63,11 @@ test.describe('pointer affordance (SRS-EDIT-030)', () => {
     expect(await cursorOf('.task-bar-body')).toBe('move');
     expect(await cursorOf('[data-pp-sub="start"]')).toBe('ew-resize');
     expect(await cursorOf('[data-pp-kind="milestone"]')).toBe('move');
-    expect(await cursorOf('[data-pp-kind="label"]')).toBe('move');
+    // Two labels, two gestures (SRS-EDIT-083): a milestone's label is dragged
+    // to where the planner wants it, a task's label is double-clicked to
+    // rename and cannot be dragged at all.
+    expect(await cursorOf('[data-pp-kind="label"][data-pp-owner="milestone"]')).toBe('move');
+    expect(await cursorOf('[data-pp-kind="label"][data-pp-owner="task"]')).toBe('text');
     // The row selects on a click and renames on a double-click, so the default
     // arrow would be telling the user there is nothing there.
     expect(await cursorOf('[data-pp-kind="row"]')).toBe('pointer');

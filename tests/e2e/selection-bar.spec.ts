@@ -23,8 +23,12 @@ test.describe('selection editing: quick actions in the bar, fields in the dialog
     // back in its place — and the field to watch for is labelled 'Name', as
     // DetailsDialog calls it, not 'Label', so the original locator would have
     // missed the very thing it was written to catch.
-    await expect(page.locator('.cmdbar').getByLabel('Label')).toHaveCount(0);
-    await expect(page.locator('.cmdbar').getByLabel('Name')).toHaveCount(0);
+    // A FIELD, specifically: `getByLabel` matches any accessible name that
+    // contains the word, and the panel now carries eight swatches named
+    // "<colour> label" for the label's own ink (SRS-ELEM-073). Those are
+    // buttons, and a button is not somewhere a name gets typed.
+    await expect(page.locator('.cmdbar').getByRole('textbox', { name: /label|name/i })).toHaveCount(0);
+    await expect(page.locator('.cmdbar textarea')).toHaveCount(0);
   });
 
   test('a row is renamed by double-clicking its name in the row list', async ({ page }) => {
@@ -146,7 +150,11 @@ test.describe('selection editing: quick actions in the bar, fields in the dialog
   });
 
   test('colour is pickable, and offers the stream palette', async ({ page }) => {
-    await expect(page.locator('.cmdbar').getByRole('button', { name: 'Prussian' })).toBeVisible();
+    // Exact: the outline and the label have palettes of their own now, and
+    // their swatches are named "Prussian outline" and "Prussian label".
+    await expect(
+      page.locator('.cmdbar').getByRole('button', { name: 'Prussian', exact: true }),
+    ).toBeVisible();
   });
 
   test('a task can be deleted from the bar', async ({ page }) => {

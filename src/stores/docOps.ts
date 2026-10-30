@@ -30,8 +30,9 @@ import type {
   GridDelimiter,
   WeekendDisplay,
   DateAnchor,
+  BarOutline,
 } from '../types/document';
-import { DATE_ANCHORS, GRID_DELIMITERS, WEEKEND_DISPLAYS } from '../types/document';
+import { BAR_OUTLINES, DATE_ANCHORS, GRID_DELIMITERS, WEEKEND_DISPLAYS } from '../types/document';
 
 /**
  * A caution for whoever adds the next operation: it must dirty the document.
@@ -139,6 +140,13 @@ function assertUniqueId(items: Array<{ id: string }>, id: string, what: string):
  * from an agent would move the mark to a place nobody asked for and autosave
  * it there (SRS-ELEM-070).
  */
+function requireOutline(outline: unknown): void {
+  if (outline === undefined) return;
+  if (!BAR_OUTLINES.includes(outline as BarOutline)) {
+    throw new Error(`outline must be one of ${BAR_OUTLINES.join(', ')}`);
+  }
+}
+
 function requireAnchor(anchor: unknown): void {
   if (anchor === undefined) return;
   if (!DATE_ANCHORS.includes(anchor as DateAnchor)) {
@@ -254,6 +262,7 @@ export function applyOp(doc: GanttDocument, op: DocOp): GanttDocument {
 
     case 'update_task': {
       if (op.patch.rowId !== undefined) requireIndex(doc.rows, op.patch.rowId, 'row');
+      requireOutline(op.patch.outline);
       return { ...doc, tasks: patched(doc.tasks, op.id, op.patch, 'task') };
     }
 

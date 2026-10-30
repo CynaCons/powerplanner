@@ -121,6 +121,7 @@ export function Milestones({ layout, dragPreview }: Props) {
               y={y}
               placement={alloc?.placement}
               text={m.label}
+              textColor={m.textColor}
               offset={dragPreview?.labels.get(m.id) ?? m.labelOffset ?? null}
               editing={editingId === m.id}
               onBeginEdit={() => setEditingId(m.id)}
@@ -154,6 +155,8 @@ interface MlProps {
   onPin: (offset: { dx: number; dy: number }) => void;
   onCommit: (text: string) => void;
   onCancel: () => void;
+  /** The planner's chosen ink for this label (SRS-ELEM-073). */
+  textColor?: string;
 }
 
 /** Where a label's anchor sits for each automatic placement, in px from the
@@ -198,6 +201,7 @@ function MilestoneLabel({
   x,
   y,
   text,
+  textColor,
   placement,
   offset,
   editing,
@@ -313,7 +317,7 @@ function MilestoneLabel({
         y={ty}
         textAnchor={anchorAttr}
         fontSize={11}
-        fill="var(--color-text)"
+        fill={textColor || 'var(--color-text)'}
         style={{ cursor: 'move' }}
         onMouseDown={beginGesture}
         onDoubleClick={onBeginEdit}

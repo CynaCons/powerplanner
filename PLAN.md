@@ -1074,7 +1074,7 @@ Four questions the prototypes must put in front of the owner, because they are v
 - [x] Keep the panel usable on a narrow window [agent: claude]
 - [x] Write the side-panel requirements into the SRS [agent: claude]
 
-### v2.33.0 — Rows and marks you can place (current) (ACTIVE)
+### v2.33.0 — Rows and marks you can place (COMPLETE)
 **Goal:** Rows move together, and a mark sits where the planner puts it.
 - [x] Make milestone diamonds smaller [agent: claude]
 - [x] Let a milestone sit at a column's start, middle or end [agent: claude]
@@ -1086,12 +1086,12 @@ Four questions the prototypes must put in front of the owner, because they are v
 
 ### v2.34.0 — Labels you can edit, and bars you can style
 **Goal:** A label renames where it sits, and a bar can be coloured and outlined.
-- [ ] Rename a task or milestone by double-clicking its own label
-- [ ] Choose the label text colour from the panel
-- [ ] Give a bar no outline, a thin one, or a dashed one
-- [ ] Choose the outline colour from the panel
-- [ ] Carry text colour and outline through save and reopen
-- [ ] Write the label and style requirements into the SRS
+- [x] Rename a task or milestone by double-clicking its own label [agent: claude]
+- [x] Choose the label text colour from the panel [agent: claude]
+- [x] Give a bar no outline, a thin one, or a dashed one [agent: claude]
+- [x] Choose the outline colour from the panel [agent: claude]
+- [x] Carry text colour and outline through save and reopen [agent: claude]
+- [x] Write the label and style requirements into the SRS [agent: claude]
 
 # Backlog (High-level, unscheduled — product & long-horizon only)
 - Cloud / sharing edition

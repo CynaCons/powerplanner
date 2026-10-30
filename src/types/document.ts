@@ -79,6 +79,10 @@ export interface Task {
   labelPlacement?: LabelPlacement;
   labelOffset?: LabelOffset | null;
   notes?: string;
+  /** The colour of this bar's own label (SRS-ELEM-073). */
+  textColor?: string;
+  outline?: BarOutline;
+  outlineColor?: string;
 }
 
 /**
@@ -94,12 +98,24 @@ export interface Task {
 export type DateAnchor = 'start' | 'middle' | 'end';
 export const DATE_ANCHORS: readonly DateAnchor[] = ['start', 'middle', 'end'];
 
+/**
+ * The line around a task bar (SRS-ELEM-072).
+ *
+ * `none` is the default and what every bar looked like before the setting
+ * existed. `thin` is a hairline in the bar's own ink unless an outline colour
+ * says otherwise; `dashed` is the same line, broken — enough to mark a bar as
+ * provisional without taking it out of the chart's colour language.
+ */
+export type BarOutline = 'none' | 'thin' | 'dashed';
+export const BAR_OUTLINES: readonly BarOutline[] = ['none', 'thin', 'dashed'];
+
 export interface Milestone {
   id: string;
   rowId: string;
   label: string;
   date: ISODate;
   anchor?: DateAnchor;
+  textColor?: string;
   labelPlacement?: LabelPlacement;
   labelOffset?: LabelOffset | null;
   color?: string;
