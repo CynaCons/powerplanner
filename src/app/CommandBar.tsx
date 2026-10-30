@@ -79,6 +79,7 @@ export function CommandBar() {
   const addTask = useDocumentStore((s) => s.addTask);
   const addMilestone = useDocumentStore((s) => s.addMilestone);
   const addRow = useDocumentStore((s) => s.addRow);
+  const moveRow = useDocumentStore((s) => s.moveRow);
   const addMarker = useDocumentStore((s) => s.addMarker);
   const addBracket = useDocumentStore((s) => s.addBracket);
 
@@ -103,6 +104,24 @@ export function CommandBar() {
     const id = newId('row');
     addRow({ id, label: 'New row', groupId: target.parentId }, target.index);
     return id;
+  };
+
+  /**
+   * A new row joins the section the planner is working in (SRS-EDIT-082).
+   *
+   * It used to be `groupId: null` unconditionally, so a row added while a row
+   * inside "Platform — BSW and MCAL" was selected landed outside every
+   * section, at the end of the plan. Owner report 2026-10-30: "when I am in a
+   * row, which is inside a section, and I do like create new row, or row
+   * below, it should automatically include that row in the section."
+   */
+  const addRowHere = () => {
+    const anchorId = selection.find((i) => i.kind === 'row')?.id;
+    const anchor = anchorId ? doc.rows.find((r) => r.id === anchorId) : undefined;
+    const id = newId('row');
+    addRow({ id, label: `Row ${doc.rows.length + 1}`, groupId: anchor?.groupId ?? null });
+    if (anchor) moveRow(id, doc.rows.findIndex((r) => r.id === anchor.id) + 1);
+    setSelection([{ kind: 'row', id }]);
   };
 
   /** Insert, select it, and make sure the planner can see it. */
@@ -161,7 +180,7 @@ export function CommandBar() {
           deselect first is what sent every insert to row zero. */}
       <Section id="insert" label="Insert">
         <div className="cmdbar__group cmdbar__group--wrap">
-          <BarButton onClick={() => addRow({ id: newId('row'), label: `Row ${doc.rows.length + 1}`, groupId: null })} title="Add row">
+          <BarButton onClick={addRowHere} title="Add row">
             <Rows3 size={14} strokeWidth={1.75} /><span>Row</span>
           </BarButton>
           <BarButton

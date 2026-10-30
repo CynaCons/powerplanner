@@ -29,8 +29,9 @@ import type {
   ISODate,
   GridDelimiter,
   WeekendDisplay,
+  DateAnchor,
 } from '../types/document';
-import { GRID_DELIMITERS, WEEKEND_DISPLAYS } from '../types/document';
+import { DATE_ANCHORS, GRID_DELIMITERS, WEEKEND_DISPLAYS } from '../types/document';
 
 /**
  * A caution for whoever adds the next operation: it must dirty the document.
@@ -132,6 +133,19 @@ function assertUniqueId(items: Array<{ id: string }>, id: string, what: string):
  * silently producing a document with dangling references — an agent is an
  * untrusted input source in exactly the way a loaded file is (SRS-ABR-011).
  */
+/**
+ * An anchor the reader does not know is not a no-op: `anchorOffsetDays` falls
+ * through to the column's end for anything it does not recognise, so a typo
+ * from an agent would move the mark to a place nobody asked for and autosave
+ * it there (SRS-ELEM-070).
+ */
+function requireAnchor(anchor: unknown): void {
+  if (anchor === undefined) return;
+  if (!DATE_ANCHORS.includes(anchor as DateAnchor)) {
+    throw new Error(`anchor must be one of ${DATE_ANCHORS.join(', ')}`);
+  }
+}
+
 export function applyOp(doc: GanttDocument, op: DocOp): GanttDocument {
   switch (op.op) {
     case 'set_title':
@@ -258,6 +272,7 @@ export function applyOp(doc: GanttDocument, op: DocOp): GanttDocument {
 
     case 'update_milestone': {
       if (op.patch.rowId !== undefined) requireIndex(doc.rows, op.patch.rowId, 'row');
+      requireAnchor(op.patch.anchor);
       return { ...doc, milestones: patched(doc.milestones, op.id, op.patch, 'milestone') };
     }
 
@@ -303,6 +318,7 @@ export function applyOp(doc: GanttDocument, op: DocOp): GanttDocument {
       return { ...doc, markers: [...doc.markers, op.marker] };
 
     case 'update_marker':
+      requireAnchor(op.patch.anchor);
       return { ...doc, markers: patched(doc.markers, op.id, op.patch, 'marker') };
 
     case 'delete_marker':

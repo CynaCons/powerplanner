@@ -4,7 +4,7 @@ import { useViewportStore } from '../stores/viewportStore';
 import { useIsSelected } from '../stores/selectionStore';
 import { useEditStore } from '../stores/editStore';
 import { useViewStore } from '../stores/viewStore';
-import { ROW_HEIGHT, type LayoutResult } from '../layout/engine';
+import { MILESTONE_HALF, ROW_HEIGHT, type LayoutResult } from '../layout/engine';
 import { carriedY } from '../layout/geometry';
 import { dateToX } from '../layout/timeAxis';
 import type { DragPreviewMap } from '../app/useChartInteractions';
@@ -33,8 +33,7 @@ const ANCHOR_R = 5;
 const PROGRESS_HANDLE_W = 8;
 /** Drawn height of a task bar. Smaller than the row band it is hit-tested in. */
 const BAR_DRAWN_H = 11;
-/** Half-width of a milestone diamond — must match SIZE in Milestones.tsx. */
-const MILESTONE_HALF = 11;
+
 /** How far an 11px glyph's descender reaches under its baseline. */
 const DESCENDER_PX = 3;
 

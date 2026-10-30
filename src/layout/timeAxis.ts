@@ -1,4 +1,4 @@
-import type { ISODate, TimeScale } from '../types/document';
+import type { DateAnchor, GridDelimiter, ISODate, TimeScale } from '../types/document';
 import {
   addDays,
   addMonths,
@@ -34,6 +34,61 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 
 export function dateToX(iso: ISODate, viewStart: ISODate, pxPerDay: number): number {
   return diffDays(viewStart, iso) * pxPerDay;
+}
+
+/**
+ * The grid column a date falls in: where it starts, and how many days it runs.
+ *
+ * The column is whatever the roadmap's delimiter is drawing, so "the middle of
+ * the column" means the middle of the week on a week grid and the middle of
+ * the month on a month grid. With no delimiter the column is the day, which
+ * is the finest thing the axis addresses.
+ */
+export function columnSpan(iso: ISODate, delimiter: GridDelimiter): { start: ISODate; days: number } {
+  switch (delimiter) {
+    case 'week': {
+      const start = startOfWeek(iso);
+      return { start, days: 7 };
+    }
+    case 'month': {
+      const start = startOfMonth(iso);
+      return { start, days: diffDays(start, addMonths(start, 1)) };
+    }
+    case 'quarter': {
+      const start = startOfQuarter(iso);
+      return { start, days: diffDays(start, addMonths(start, 3)) };
+    }
+    default:
+      return { start: iso, days: 1 };
+  }
+}
+
+/**
+ * How far past its date a mark is drawn, in days (SRS-ELEM-070).
+ *
+ * Zero for `start` and for a mark that has never been given an anchor, so
+ * every document written before the field renders exactly where it did.
+ */
+export function anchorOffsetDays(
+  iso: ISODate,
+  delimiter: GridDelimiter,
+  anchor: DateAnchor | undefined,
+): number {
+  if (!anchor || anchor === 'start') return 0;
+  const { start, days } = columnSpan(iso, delimiter);
+  const fromColumnStart = anchor === 'middle' ? days / 2 : days;
+  return diffDays(iso, start) + fromColumnStart;
+}
+
+/** `dateToX`, with the mark's place in its column taken into account. */
+export function anchoredX(
+  iso: ISODate,
+  viewStart: ISODate,
+  pxPerDay: number,
+  delimiter: GridDelimiter,
+  anchor: DateAnchor | undefined,
+): number {
+  return dateToX(iso, viewStart, pxPerDay) + anchorOffsetDays(iso, delimiter, anchor) * pxPerDay;
 }
 
 export function xToDate(x: number, viewStart: ISODate, pxPerDay: number): ISODate {

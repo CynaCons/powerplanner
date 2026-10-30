@@ -1,4 +1,4 @@
-import { Trash2, SlidersHorizontal, Brackets as BracketIcon, Plus, Rows3 } from 'lucide-react';
+import { Trash2, SlidersHorizontal, Brackets as BracketIcon, Plus, Rows3, ChevronUp, ChevronDown } from 'lucide-react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useSelectionStore, type Selectable } from '../stores/selectionStore';
 import { useViewStore } from '../stores/viewStore';
@@ -6,7 +6,7 @@ import { addDays, todayISO } from '../utils/dates';
 import { newId } from '../utils/ids';
 import { ColorPalette } from './ColorPalette';
 import { deleteSelection } from './documentActions';
-import type { Task, Milestone, Bracket, Dependency, DependencyType } from '../types/document';
+import type { Task, Milestone, Marker, Bracket, Dependency, DependencyType, DateAnchor } from '../types/document';
 
 /**
  * Quick actions for what is selected (PLAN.md v2.20.0).
@@ -36,7 +36,10 @@ export function SelectionGroup() {
   // instead would mean clicking a bar showed the ROW's actions, and colour,
   // dates, percent and notes would have no home at all.
   const sel = items[0];
-  if (sel.kind === 'row') return <RowFields rowId={sel.id} />;
+  if (sel.kind === 'row') {
+    const rowIds = items.filter((i) => i.kind === 'row').map((i) => i.id);
+    return rowIds.length > 1 ? <RowsFields rowIds={rowIds} /> : <RowFields rowId={sel.id} />;
+  }
 
   // A bar plus its row is two items by design, so it is not a multi-select.
   const isBarWithItsRow = items.length === 2 && items[1]?.kind === 'row';
@@ -50,6 +53,10 @@ export function SelectionGroup() {
   if (sel.kind === 'milestone') {
     const m = doc.milestones.find((x) => x.id === sel.id);
     return m ? <MilestoneFields milestone={m} /> : null;
+  }
+  if (sel.kind === 'marker') {
+    const mk = doc.markers.find((x) => x.id === sel.id);
+    return mk ? <MarkerFields marker={mk} /> : null;
   }
   if (sel.kind === 'bracket') {
     const b = doc.brackets.find((x) => x.id === sel.id);
@@ -144,15 +151,83 @@ function TaskFields({ task }: { task: Task }) {
   );
 }
 
+/**
+ * Where in its column a dated mark sits (SRS-ELEM-070).
+ *
+ * Three discrete places, not a continuous value, so a three-way is the right
+ * control here and SR-IXC-01 has nothing to say about it: this is the same
+ * shape as the scale and theme choosers the panel already carries.
+ */
+function AnchorChoice({
+  anchor,
+  onChange,
+}: {
+  anchor: DateAnchor | undefined;
+  onChange: (a: DateAnchor) => void;
+}) {
+  const current: DateAnchor = anchor ?? 'start';
+  return (
+    <div className="cmdbar__field">
+      <span className="cmdbar__field-label">In its column</span>
+      <div className="cmdbar__scale" role="radiogroup" aria-label="Place in column">
+        {ANCHOR_CHOICES.map((c) => (
+          <button
+            key={c.value}
+            role="radio"
+            aria-checked={current === c.value}
+            aria-label={c.label}
+            className={current === c.value ? 'is-active' : ''}
+            title={c.title}
+            onClick={() => onChange(c.value)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const ANCHOR_CHOICES: Array<{ value: DateAnchor; label: string; title: string }> = [
+  { value: 'start', label: 'Start', title: "On its own date, at the column's left edge" },
+  { value: 'middle', label: 'Middle', title: 'Centred in the week, month or quarter it falls in' },
+  { value: 'end', label: 'End', title: "At the end of the column it falls in" },
+];
+
 function MilestoneFields({ milestone }: { milestone: Milestone }) {
   const remove = useDocumentStore((s) => s.deleteMilestone);
+  const update = useDocumentStore((s) => s.updateMilestone);
   const clear = useSelectionStore((s) => s.clear);
 
   return (
-    <Group label="Milestone">
-      <DetailsButton what="Milestone" target={{ kind: 'milestone', id: milestone.id }} />
-      <DeleteButton what="milestone" onClick={() => { remove(milestone.id); clear(); }} />
-    </Group>
+    <>
+      <Group label="Milestone">
+        <DetailsButton what="Milestone" target={{ kind: 'milestone', id: milestone.id }} />
+        <DeleteButton what="milestone" onClick={() => { remove(milestone.id); clear(); }} />
+      </Group>
+      <AnchorChoice anchor={milestone.anchor} onChange={(anchor) => update(milestone.id, { anchor })} />
+    </>
+  );
+}
+
+/**
+ * A marker had no fields at all: selecting one showed an empty panel, so its
+ * colour and its place in the column were reachable only from the right-click
+ * menu, and its place not at all.
+ */
+function MarkerFields({ marker }: { marker: Marker }) {
+  const remove = useDocumentStore((s) => s.deleteMarker);
+  const update = useDocumentStore((s) => s.updateMarker);
+  const clear = useSelectionStore((s) => s.clear);
+
+  return (
+    <>
+      <Group label="Marker">
+        <DetailsButton what="Marker" target={{ kind: 'marker', id: marker.id }} />
+        <DeleteButton what="marker" onClick={() => { remove(marker.id); clear(); }} />
+      </Group>
+      <AnchorChoice anchor={marker.anchor} onChange={(anchor) => update(marker.id, { anchor })} />
+    </>
   );
 }
 
@@ -260,6 +335,51 @@ function RowFields({ rowId }: { rowId: string }) {
       <WrapInBracket taskIds={onRow.map((t) => t.id)} />
       <DetailsButton what="Row" target={{ kind: 'row', id: rowId }} />
       <DeleteButton what="row" onClick={() => { deleteRow(rowId); clear(); }} />
+    </Group>
+  );
+}
+
+/**
+ * Several rows at once (SRS-EDIT-080, SRS-EDIT-081).
+ *
+ * Ctrl and Shift build the selection; this is what can then be done to it.
+ * Moving runs one row at a time in the direction of travel — topmost first
+ * going up, bottom first going down — so a contiguous run keeps its order
+ * instead of folding over itself, and the whole move is one undo frame.
+ */
+function RowsFields({ rowIds }: { rowIds: string[] }) {
+  const doc = useDocumentStore((s) => s.doc);
+  const moveRow = useDocumentStore((s) => s.moveRow);
+  const transact = useDocumentStore((s) => s.transact);
+
+  const indexed = rowIds
+    .map((id) => ({ id, index: doc.rows.findIndex((r) => r.id === id) }))
+    .filter((r) => r.index >= 0)
+    .sort((a, b) => a.index - b.index);
+
+  const move = (delta: -1 | 1) => {
+    const order = delta === -1 ? indexed : [...indexed].reverse();
+    transact(() => {
+      for (const { id } of order) {
+        const at = useDocumentStore.getState().doc.rows.findIndex((r) => r.id === id);
+        if (at < 0) continue;
+        const to = at + delta;
+        if (to < 0 || to >= useDocumentStore.getState().doc.rows.length) continue;
+        moveRow(id, to);
+      }
+    });
+  };
+
+  return (
+    <Group label="Rows">
+      <span className="cmdbar__selname">{indexed.length} rows selected</span>
+      <button className="cmdbar__btn" title="Move these rows up" aria-label="Move rows up" onClick={() => move(-1)}>
+        <ChevronUp size={14} strokeWidth={1.75} />
+      </button>
+      <button className="cmdbar__btn" title="Move these rows down" aria-label="Move rows down" onClick={() => move(1)}>
+        <ChevronDown size={14} strokeWidth={1.75} />
+      </button>
+      <DeleteButton what="rows" onClick={() => { deleteSelection(); }} />
     </Group>
   );
 }

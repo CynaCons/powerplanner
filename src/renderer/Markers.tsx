@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { GanttDocument, ISODate, TimeScale } from '../types/document';
-import { dateToX } from '../layout/timeAxis';
+import { gridDelimiterOf } from '../types/document';
+import { anchoredX } from '../layout/timeAxis';
 import { formatForScale } from './TimeAxis';
 import { addDays } from '../utils/dates';
 import { snapDelta } from '../utils/snap';
@@ -212,7 +213,8 @@ export function Markers({ doc, viewStart, pxPerDay, chartHeight, bodyHeight, scr
         const shown = dragging
           ? markerDragDate(m.date, dragging.dx, pxPerDay, scale, snapEnabled)
           : m.date;
-        const x = dateToX(shown, viewStart, pxPerDay);
+        // The same column rule the diamonds follow (SRS-ELEM-070).
+        const x = anchoredX(shown, viewStart, pxPerDay, gridDelimiterOf(doc.calendar), m.anchor);
         const color = m.color || (m.type === 'deadline' ? 'var(--color-deadline)' : 'var(--color-text-soft)');
         const selected = isSelected(m.id);
         const w = chipWidth(m.label);

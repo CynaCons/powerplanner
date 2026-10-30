@@ -81,11 +81,25 @@ export interface Task {
   notes?: string;
 }
 
+/**
+ * Where in its grid column a dated mark sits (SRS-ELEM-070).
+ *
+ * `start` is the date's own point on the axis, which is what every document
+ * written before this field meant and what a day-delimited grid calls the
+ * column's left edge. `middle` and `end` place the mark inside the column the
+ * date falls in — the week, month or quarter the grid is drawing — so a
+ * release at the end of March reads as the end of March rather than as a
+ * glyph straddling the boundary into April.
+ */
+export type DateAnchor = 'start' | 'middle' | 'end';
+export const DATE_ANCHORS: readonly DateAnchor[] = ['start', 'middle', 'end'];
+
 export interface Milestone {
   id: string;
   rowId: string;
   label: string;
   date: ISODate;
+  anchor?: DateAnchor;
   labelPlacement?: LabelPlacement;
   labelOffset?: LabelOffset | null;
   color?: string;
@@ -114,6 +128,7 @@ export interface Marker {
   type: MarkerType;
   label: string;
   date: ISODate;
+  anchor?: DateAnchor;
   color?: string;
 }
 

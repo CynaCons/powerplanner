@@ -1,10 +1,21 @@
 import type { GanttDocument, Task, Milestone, Bracket, Dependency, Row } from '../types/document';
+import { gridDelimiterOf } from '../types/document';
 import { addDays, diffDays } from '../utils/dates';
-import { dateToX, xToDate } from './timeAxis';
+import { anchoredX, dateToX, xToDate } from './timeAxis';
 
 export const ROW_HEIGHT = 36;
 export const BAR_HEIGHT = 22;
 export const MILESTONE_SIZE = 14;
+/**
+ * Half the width of a milestone diamond, and the one place it is stated.
+ *
+ * It was 11 here and 11 again in `TaskBars`, held together by a comment
+ * saying they must match — so the glyph was 22px across on a 26px row band,
+ * which is what "let us make the milestones a bit less big" (owner,
+ * 2026-10-30) was about. 8 leaves the diamond legible at the opening zoom
+ * and stops it crowding the bars it shares a lane with.
+ */
+export const MILESTONE_HALF = 8;
 
 /**
  * Horizontal clearance a connector keeps at each end before it turns
@@ -215,7 +226,8 @@ export function layoutDocument({ doc, viewStart, pxPerDay, allowOverlap }: Layou
     .map((m) => {
       const rIdx = rowIndex.get(m.rowId)!;
       const subRow = milestoneSubRow.get(m.id) ?? 0;
-      const x = dateToX(m.date, viewStart, pxPerDay);
+      // Where in its grid column the diamond sits (SRS-ELEM-070).
+      const x = anchoredX(m.date, viewStart, pxPerDay, gridDelimiterOf(doc.calendar), m.anchor);
       const y = rowOffsets[rIdx] + subRow * ROW_HEIGHT + ROW_HEIGHT / 2;
       return { milestone: m, x, y, rowIndex: rIdx, subRow };
     });

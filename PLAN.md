@@ -1065,7 +1065,7 @@ Four questions the prototypes must put in front of the owner, because they are v
 - [x] Gate the round trip: save, reopen, assert a live app [agent: claude]
 - [x] Write the persistence requirements into the SRS [agent: claude]
 
-### v2.32.0 — A side panel, and marks you can place (current) (ACTIVE)
+### v2.32.0 — A side panel, and marks you can place (COMPLETE)
 **Goal:** The controls live in a side panel, and marks sit where you put them.
 - [x] Move the command bar into a panel on the right [agent: claude]
 - [x] Give the panel sections that open and close [agent: claude]
@@ -1074,15 +1074,15 @@ Four questions the prototypes must put in front of the owner, because they are v
 - [x] Keep the panel usable on a narrow window [agent: claude]
 - [x] Write the side-panel requirements into the SRS [agent: claude]
 
-### v2.33.0 — Rows and marks you can place
+### v2.33.0 — Rows and marks you can place (current) (ACTIVE)
 **Goal:** Rows move together, and a mark sits where the planner puts it.
-- [ ] Make milestone diamonds smaller
-- [ ] Let a milestone sit at a column's start, middle or end
-- [ ] Let a marker sit at a column's start, middle or end
-- [ ] Select several rows with Ctrl-click and Shift-click
-- [ ] Move or delete every selected row at once
-- [ ] Keep a new row in the section it was made in
-- [ ] Write the placement and row requirements into the SRS
+- [x] Make milestone diamonds smaller [agent: claude]
+- [x] Let a milestone sit at a column's start, middle or end [agent: claude]
+- [x] Let a marker sit at a column's start, middle or end [agent: claude]
+- [x] Select several rows with Ctrl-click and Shift-click [agent: claude]
+- [x] Move or delete every selected row at once [agent: claude]
+- [x] Keep a new row in the section it was made in [agent: claude]
+- [x] Write the placement and row requirements into the SRS [agent: claude]
 
 ### v2.34.0 — Labels you can edit, and bars you can style
 **Goal:** A label renames where it sits, and a bar can be coloured and outlined.

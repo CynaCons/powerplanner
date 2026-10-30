@@ -3,9 +3,10 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useViewportStore } from '../stores/viewportStore';
 import { useIsSelected, useSelectionStore } from '../stores/selectionStore';
 import { useDocumentStore } from '../stores/documentStore';
-import { ROW_HEIGHT, type LayoutResult } from '../layout/engine';
+import { MILESTONE_HALF, ROW_HEIGHT, type LayoutResult } from '../layout/engine';
 import { carriedY } from '../layout/geometry';
-import { dateToX } from '../layout/timeAxis';
+import { gridDelimiterOf } from '../types/document';
+import { anchoredX, dateToX } from '../layout/timeAxis';
 import { allocateLabels, textWidth, type Placement } from './labelFit';
 import type { DragPreviewMap } from '../app/useChartInteractions';
 import { InlineLabel } from '../app/InlineLabel';
@@ -15,7 +16,7 @@ interface Props {
   dragPreview?: DragPreviewMap | null;
 }
 
-const SIZE = 11;
+const SIZE = MILESTONE_HALF;
 /** How far an 11px glyph's descender reaches under its baseline. */
 const DESCENDER_PX = 3;
 /** A press must travel this far before it is a drag and not a click. */
@@ -26,6 +27,7 @@ export function Milestones({ layout, dragPreview }: Props) {
   const pxPerDay = useViewportStore((s) => s.pxPerDay);
   const isSelected = useIsSelected();
   const updateMilestone = useDocumentStore((s) => s.updateMilestone);
+  const delimiter = useDocumentStore((s) => gridDelimiterOf(s.doc.calendar));
 
   // One editor at a time, held here. `editStore` keys its open editor on
   // `editingTaskId`, and a milestone is not a task; the row gutter keeps its
@@ -72,7 +74,18 @@ export function Milestones({ layout, dragPreview }: Props) {
          * along, which is why the readout moved and the marker did not.
          */
         const preview = dragPreview?.milestones.get(m.id);
-        const x = dateToX(preview?.date ?? m.date, viewStart, pxPerDay) + pxPerDay / 2;
+        /*
+         * The diamond has always been centred in its own day. That stays the
+         * meaning of `start` and of a mark with no anchor at all, so nothing
+         * already drawn moves; `middle` and `end` place it in the column the
+         * grid is drawing instead, and the half-day would be a half-day past
+         * the column's edge (SRS-ELEM-070).
+         */
+        const shownDate = preview?.date ?? m.date;
+        const placed = !m.anchor || m.anchor === 'start';
+        const x = placed
+          ? dateToX(shownDate, viewStart, pxPerDay) + pxPerDay / 2
+          : anchoredX(shownDate, viewStart, pxPerDay, delimiter, m.anchor);
         const y = preview?.rowId ? carriedY(layout, m.rowId, preview.rowId, lm.y, SIZE, SIZE) : lm.y;
         const selected = isSelected(m.id);
         const color = m.color || 'var(--color-milestone)';

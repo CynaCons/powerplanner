@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type { RefObject, MouseEvent as ReactMouseEvent } from 'react';
 import { useDocumentStore } from '../stores/documentStore';
 import { useViewportStore } from '../stores/viewportStore';
-import { useSelectionStore } from '../stores/selectionStore';
+import { useSelectionStore, type Selectable } from '../stores/selectionStore';
 import { useEditStore } from '../stores/editStore';
 import { useToolStore } from '../stores/toolStore';
 import { useContextMenuStore } from '../stores/contextMenuStore';
@@ -157,6 +157,8 @@ function emptyPreview(): DragPreviewMap {
 
 export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
   const dragRef = useRef<DragState | null>(null);
+  /** The row a Shift-click extends from (SRS-EDIT-080). */
+  const rowAnchor = useRef<string | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreviewMap | null>(null);
   const [dragPill, setDragPill] = useState<DragPill | null>(null);
   const [dragCursor, setDragCursor] = useState<string | null>(null);
@@ -377,11 +379,39 @@ export function useChartInteractions({ svgRef, geomRef }: InteractionOptions) {
       // directive 2026-10-26).
       if (kind === 'row') {
         const docNow = useDocumentStore.getState().doc;
-        const onRow: Array<{ kind: 'task' | 'milestone'; id: string }> = [
-          ...docNow.tasks.filter((t) => t.rowId === id).map((t) => ({ kind: 'task' as const, id: t.id })),
-          ...docNow.milestones.filter((m) => m.rowId === id).map((m) => ({ kind: 'milestone' as const, id: m.id })),
+        const withContents = (rowId: string): Selectable[] => [
+          { kind: 'row', id: rowId },
+          ...docNow.tasks.filter((t) => t.rowId === rowId).map((t) => ({ kind: 'task' as const, id: t.id })),
+          ...docNow.milestones.filter((m) => m.rowId === rowId).map((m) => ({ kind: 'milestone' as const, id: m.id })),
         ];
-        selStore.setSelection([{ kind: 'row', id }, ...onRow]);
+
+        // Shift extends from the row last picked, the way a list does, so a
+        // run of rows can be moved or deleted in one go (SRS-EDIT-080).
+        const order = geomRef.current.layout.visibleRows.map((r) => r.id);
+        if (e.shiftKey && rowAnchor.current) {
+          const from = order.indexOf(rowAnchor.current);
+          const to = order.indexOf(id);
+          if (from >= 0 && to >= 0) {
+            const [lo, hi] = from <= to ? [from, to] : [to, from];
+            selStore.setSelection(order.slice(lo, hi + 1).flatMap(withContents));
+            return;
+          }
+        }
+
+        rowAnchor.current = id;
+        // Ctrl or Cmd toggles this row, and its contents with it: the gutter
+        // and the canvas stay two views of one selection.
+        if (e.metaKey || e.ctrlKey) {
+          const mine = new Set(withContents(id).map((i) => i.id));
+          const current = selStore.items;
+          selStore.setSelection(
+            selStore.isSelected(id)
+              ? current.filter((i) => !mine.has(i.id))
+              : [...current, ...withContents(id)],
+          );
+          return;
+        }
+        selStore.setSelection(withContents(id));
         return;
       }
       if (kind === 'task' || kind === 'milestone' || kind === 'bracket' || kind === 'dependency' || kind === 'marker') {

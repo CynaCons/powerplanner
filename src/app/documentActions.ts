@@ -138,6 +138,28 @@ export function startDocument(doc: GanttDocument, what = doc.title): void {
  */
 export function deleteSelection(): number {
   const sel = useSelectionStore.getState();
+  if (sel.items.length === 0) return 0;
+
+  /**
+   * Rows are the subject only when a row is what was picked (SRS-EDIT-081).
+   *
+   * Selecting a bar also selects the row under it so the gutter highlights
+   * with it, and that companion must never be what Delete acts on — it would
+   * take the row and everything else standing on it. The convention the whole
+   * panel already uses is that the first item is the subject.
+   */
+  if (sel.items[0].kind === 'row') {
+    const rowIds = sel.items.filter((i) => i.kind === 'row').map((i) => i.id);
+    const store = useDocumentStore.getState();
+    store.transact(() => {
+      for (const id of rowIds) store.deleteRow(id);
+    });
+    sel.clear();
+    const noun = rowIds.length === 1 ? 'row' : 'rows';
+    notify(`Deleted ${rowIds.length} ${noun}, with everything on ${rowIds.length === 1 ? 'it' : 'them'}. Undo brings ${rowIds.length === 1 ? 'it' : 'them'} back.`, 'warn');
+    return rowIds.length;
+  }
+
   const items = sel.items.filter((i) => i.kind !== 'row');
   if (items.length === 0) return 0;
   const s = useDocumentStore.getState();
